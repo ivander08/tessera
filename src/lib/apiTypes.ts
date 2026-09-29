@@ -30,6 +30,9 @@ export interface MessageRow {
   cached_tokens: number | null;
   cost_usd: number | null;
   created_at: number;
+  /** Alternative ids at this position, in order. Length 1 when never regenerated. */
+  swipes?: string[];
+  swipeIndex?: number;
 }
 
 export interface ChatDetail {

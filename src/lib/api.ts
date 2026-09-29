@@ -104,16 +104,19 @@ export interface NormalizedUsage {
  * Streams a turn. Frames are the Worker's normalized protocol; the client never
  * sees a provider quirk.
  */
+/** The four ways a turn can be produced. See `worker/src/turn.ts`. */
+export type TurnMode = 'send' | 'regenerate' | 'impersonate' | 'continue';
+
 export async function streamChat(
   chatId: string,
   content: string,
   onFrame: (frame: ChatFrame) => void,
-  signal?: AbortSignal,
+  options: { mode?: TurnMode; signal?: AbortSignal } = {},
 ): Promise<void> {
   const res = await apiFetch('/api/chat', {
     method: 'POST',
-    body: JSON.stringify({ chatId, content }),
-    signal,
+    body: JSON.stringify({ chatId, content, mode: options.mode ?? 'send' }),
+    signal: options.signal,
   });
 
   if (!res.ok || !res.body) {

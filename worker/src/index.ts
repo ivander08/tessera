@@ -245,10 +245,22 @@ async function listMessages(env: Env, chatId: string): Promise<Response> {
   // Every row, active or not: the reader sees only the active one per position, but the
   // client needs the alternatives to render swipe arrows and to swipe back without a
   // round trip per direction.
+  //
+  // Ordering is by the group's FIRST seq, not the row's own. An alternative appended to
+  // an early position gets a late seq — that is what append-only means — so ordering by
+  // `seq` directly would move the opening greeting to the end of the transcript the
+  // first time it was edited. The group's minimum seq is where that position lives in
+  // the conversation, and it never changes.
   const { results } = await env.DB.prepare(
     `SELECT seq, id, role, content, content_tokens, prompt_tokens, completion_tokens,
-            cached_tokens, cost_usd, active, swipe_group, created_at
-       FROM messages WHERE chat_id = ? ORDER BY seq`,
+            cached_tokens, cost_usd, active, swipe_group, created_at,
+            COALESCE(
+              (SELECT MIN(m2.seq) FROM messages m2
+                WHERE m2.chat_id = messages.chat_id
+                  AND COALESCE(m2.swipe_group, m2.id) = COALESCE(messages.swipe_group, messages.id)),
+              messages.seq
+            ) AS position
+       FROM messages WHERE chat_id = ? ORDER BY position, seq`,
   )
     .bind(chatId)
     .all<{
@@ -258,6 +270,7 @@ async function listMessages(env: Env, chatId: string): Promise<Response> {
       content: string;
       active: number;
       swipe_group: string | null;
+      position: number;
     }>();
 
   // Group the alternatives so the client does not have to reconstruct the grouping, and

@@ -61,23 +61,43 @@ export async function buildPrompt(
   // Only ACTIVE rows are sent. A swiped-away alternative is still in the table — that is
   // what makes swiping back free — but it is not part of the conversation the model sees.
   //
+  // Ordered by the group's FIRST seq, not the row's own: an alternative appended to an
+  // early position carries a late seq, so ordering by `seq` would feed the model an
+  // edited opening greeting at the end of the history. The group minimum is where the
+  // position sits in the conversation and never changes.
+  //
   // For `send`, the just-persisted user message is excluded from history and passed in
   // as the tail instead. Inferring it from the last row would turn any orphan user row
   // (from a turn that failed before the provider answered) into two consecutive user
   // turns, which providers reject.
-  const { results } = options.userSeq === null
-    ? await env.DB.prepare(
-        `SELECT seq, role, content, content_tokens FROM messages
-          WHERE chat_id = ? AND active = 1 ORDER BY seq`,
-      )
-        .bind(chat.id)
-        .all<HistoryRow>()
-    : await env.DB.prepare(
-        `SELECT seq, role, content, content_tokens FROM messages
-          WHERE chat_id = ? AND active = 1 AND seq < ? ORDER BY seq`,
-      )
-        .bind(chat.id, options.userSeq)
-        .all<HistoryRow>();
+  const positionExpr = `COALESCE(
+    (SELECT MIN(m2.seq) FROM messages m2
+      WHERE m2.chat_id = messages.chat_id
+        AND COALESCE(m2.swipe_group, m2.id) = COALESCE(messages.swipe_group, messages.id)),
+    messages.seq
+  )`;
+
+  // The cut is by POSITION, not by the row's own seq. An edited message carries a late
+  // seq, so filtering `seq < userSeq` would drop it from history entirely — the model
+  // would lose a message the reader can see.
+  const { results } =
+    options.userSeq === null
+      ? await env.DB.prepare(
+          `SELECT seq, role, content, content_tokens FROM messages
+            WHERE chat_id = ? AND active = 1 ORDER BY ${positionExpr}`,
+        )
+          .bind(chat.id)
+          .all<HistoryRow>()
+      : await env.DB.prepare(
+          `SELECT seq, role, content, content_tokens FROM messages
+            WHERE chat_id = ? AND active = 1
+              AND ${positionExpr} < (
+                SELECT ${positionExpr} FROM messages WHERE chat_id = ? AND seq = ?
+              )
+            ORDER BY ${positionExpr}`,
+        )
+          .bind(chat.id, chat.id, options.userSeq)
+          .all<HistoryRow>();
 
   // The budget is expressed in real prompt tokens, but `content_tokens` is a local
   // estimate with a per-model bias. Applying the stored factor keeps the budget honest

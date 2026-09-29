@@ -1,27 +1,58 @@
-import { StrictMode } from 'react';
+import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router';
 import './index.css';
 import App from './App';
-import { apiOrigin } from './lib/api';
+import { apiJson, apiOrigin } from './lib/api';
+import { applyTheme, parseTheme, DEFAULT_THEME, type Theme } from './lib/theme';
 import { assertNativeStreaming, isNativeShell } from './lib/native/sse';
 
 // The native shells wrap this same bundle. Check once, at startup, that replies will
-// actually stream — a buffered response body does not throw, it just makes the chat
-// look slow, so without this the failure is invisible until someone notices.
+// actually stream — a buffered response body does not throw, it just makes the chat look
+// slow, so without this the failure is invisible until someone notices.
 if (isNativeShell()) {
   const { ok, reason } = assertNativeStreaming();
-  if (ok) {
-    console.info(`[tessera] native shell: streaming OK, api at ${apiOrigin()}`);
-  } else {
-    console.error(`[tessera] SSE will not stream — ${reason}`);
-  }
+  if (ok) console.info(`[tessera] native shell: streaming OK, api at ${apiOrigin()}`);
+  else console.error(`[tessera] SSE will not stream — ${reason}`);
+}
+
+function Root() {
+  const [theme, setTheme] = useState<Theme>(DEFAULT_THEME);
+
+  // The theme lives in the settings table with everything else, so it follows the user
+  // across devices. It is fetched rather than inlined to avoid a second source of truth;
+  // the CSS defaults mean the first paint is already dark and correct rather than white.
+  useEffect(() => {
+    let alive = true;
+    apiJson<Record<string, string>>('/api/settings')
+      .then((settings) => {
+        if (alive) setTheme(parseTheme(settings.theme));
+      })
+      .catch(() => {
+        // Unauthenticated or offline: the defaults are already applied, so there is
+        // nothing to recover from and nothing worth telling the user about yet.
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const apply = () => applyTheme(theme, media.matches);
+    apply();
+    // `auto` has to follow the OS while the app is open, not only at load.
+    media.addEventListener('change', apply);
+    return () => media.removeEventListener('change', apply);
+  }, [theme]);
+
+  return <App />;
 }
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
-      <App />
+      <Root />
     </BrowserRouter>
   </StrictMode>,
 );
