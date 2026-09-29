@@ -1,4 +1,5 @@
 import { badRequest, json, notFound, readJson } from './http';
+import { getPersona as loadPersona } from './db';
 import type { PersonaRow } from './db';
 
 /**
@@ -23,6 +24,17 @@ export async function listPersonas(env: Env): Promise<Response> {
        FROM personas p ORDER BY p.created_at DESC`,
   ).all();
   return json(results);
+}
+
+/**
+ * One persona by id. Used by the picker and the edit form to re-read a row after a
+ * change; the list route is fine for rendering, but a mutation that returns only the
+ * id would leave the client guessing at the name it just wrote.
+ */
+export async function getPersona(env: Env, id: string): Promise<Response> {
+  const row = await loadPersona(env, id);
+  if (!row) return notFound('persona not found');
+  return json(row);
 }
 
 export async function createPersona(env: Env, req: Request): Promise<Response> {

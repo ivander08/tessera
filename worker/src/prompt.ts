@@ -1,5 +1,6 @@
 import { getCharacter, getPersona } from './db';
-import type { ChatRow, ChatSettings } from './db';
+import type { ChatRow } from './db';
+import type { EffectiveSettings } from './effective';
 import { assemble } from '../../src/lib/prompt/assemble';
 import type { AssembledPrompt } from '../../src/lib/prompt/types';
 import type { AssembleInput } from '../../src/lib/prompt/input';
@@ -51,7 +52,7 @@ export interface PromptOptions {
 export async function buildPrompt(
   env: Env,
   chat: ChatRow,
-  settings: ChatSettings,
+  settings: EffectiveSettings,
   options: PromptOptions,
 ): Promise<AssembledPrompt> {
   const character = chat.character_id ? await getCharacter(env, chat.character_id) : null;
@@ -183,7 +184,12 @@ export async function buildPrompt(
   }
 
   const input: AssembleInput = {
-    systemPrompt: substituteHead(card.systemPrompt || settings.systemPrompt, macroContext),
+    // Order: the card's own system prompt, then the preset's, then the global default.
+    // The card is the most specific statement of how this character should be played.
+    systemPrompt: substituteHead(
+      card.systemPrompt || settings.presetSystemPrompt || settings.systemPrompt,
+      macroContext,
+    ),
     character: {
       name: card.name,
       description: substituteHead(card.description, macroContext),
@@ -209,12 +215,31 @@ export async function buildPrompt(
       stateBlock: substituteTail(stateBlock, macroContext),
       loreBlock: substituteTail(loreBlock, macroContext),
       authorsNote: substituteTail(settings.authorsNote, macroContext),
-      postHistoryInstructions: substituteTail(card.postHistoryInstructions, macroContext),
+      // A preset's post-history instructions replace the card's, matching how the
+      // field behaves elsewhere: it is a directive, and two competing directives are
+      // worse than the more deliberate one.
+      postHistoryInstructions: substituteTail(
+        settings.presetPostHistory || card.postHistoryInstructions,
+        macroContext,
+      ),
       userMessage: substituteTail(options.userContent, macroContext),
     },
   };
 
-  return assemble(input, estimateChatTokens);
+  // Assistant prefill: the reply must start with this text. It is appended as a trailing
+  // assistant message rather than a tail system instruction, because that is the only
+  // form providers actually honour — a system message saying "start with X" is a request,
+  // a trailing assistant turn is a fact the model continues from.
+  const assembled = assemble(input, estimateChatTokens);
+
+  if (settings.assistantPrefill.length > 0) {
+    const prefill = substituteTail(settings.assistantPrefill, macroContext);
+    assembled.messages.push({ role: 'assistant', content: prefill });
+    // `tailStart` is unchanged, so the prefill sits AFTER the cacheable prefix — it is
+    // per-turn state and must never enter the head.
+  }
+
+  return assembled;
 }
 
 /** Tokens reserved for the memory block, taken out of the history budget. */

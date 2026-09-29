@@ -1,4 +1,5 @@
-import { getChat, loadChatSettings } from './db';
+import { getChat } from './db';
+import { loadEffectiveSettings } from './effective';
 import { loadProviderKey, keyErrorMessage } from './keys';
 import { getProvider } from './providers';
 import type { NormalizedUsage, Provider } from './providers/types';
@@ -86,7 +87,9 @@ async function runTurn(
   mode: TurnMode,
   content: string,
 ): Promise<void> {
-  const settings = await loadChatSettings(env);
+  // Preset layered over global settings: a preset exists to override the defaults, so
+  // it wins for anything it defines.
+  const settings = await loadEffectiveSettings(env, chat.preset_id);
   const provider = settings.provider ? getProvider(settings.provider) : null;
   if (!settings.provider || !settings.model || !provider) {
     return fail(controller, 'No provider or model configured. Open /settings.', 'unconfigured');
@@ -127,7 +130,11 @@ async function runTurn(
       messages: prompt.messages,
       stream: true,
       maxTokens: settings.maxTokens,
-      knobs: settings.knobs,
+      // Stop strings come from the preset; without them the model runs past where the
+      // preset author intended the reply to end.
+      knobs: settings.stopStrings.length > 0
+        ? { ...settings.knobs, stop: settings.stopStrings }
+        : settings.knobs,
       sessionId: chat.session_id,
     },
     apiKey.key,
