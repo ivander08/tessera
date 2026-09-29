@@ -12,6 +12,12 @@ import {
   listCharacters,
 } from './characters';
 import { createFact, listMemory, mutateMemory } from './memory/api';
+import {
+  addAlternative,
+  deleteMessage,
+  editMessage,
+  swipeMessage,
+} from './messages';
 import { deletePreset, getPreset, importPreset, listPresets } from './presets';
 import { onWorkerWake } from './jobs';
 
@@ -128,6 +134,11 @@ async function route(req: Request, env: Env, url: URL, ctx: ExecutionContext): P
     return listMessages(env, decodeURIComponent(messagesMatch[1]));
   }
 
+  if (path === '/api/message/swipe' && method === 'POST') return swipeMessage(env, req);
+  if (path === '/api/message/edit' && method === 'POST') return editMessage(env, req);
+  if (path === '/api/message/delete' && method === 'POST') return deleteMessage(env, req);
+  if (path === '/api/message/alternative' && method === 'POST') return addAlternative(env, req);
+
   const memoryMatch = /^\/api\/chats\/([^/]+)\/memory$/.exec(path);
   if (memoryMatch && method === 'GET') {
     return listMemory(env, decodeURIComponent(memoryMatch[1]));
@@ -230,14 +241,48 @@ async function createChat(env: Env, req: Request): Promise<Response> {
 async function listMessages(env: Env, chatId: string): Promise<Response> {
   const chat = await getChat(env, chatId);
   if (!chat) return notFound('chat not found');
+
+  // Every row, active or not: the reader sees only the active one per position, but the
+  // client needs the alternatives to render swipe arrows and to swipe back without a
+  // round trip per direction.
   const { results } = await env.DB.prepare(
     `SELECT seq, id, role, content, content_tokens, prompt_tokens, completion_tokens,
-            cached_tokens, cost_usd, created_at
+            cached_tokens, cost_usd, active, swipe_group, created_at
        FROM messages WHERE chat_id = ? ORDER BY seq`,
   )
     .bind(chatId)
-    .all();
-  return json({ chat, messages: results });
+    .all<{
+      seq: number;
+      id: string;
+      role: string;
+      content: string;
+      active: number;
+      swipe_group: string | null;
+    }>();
+
+  // Group the alternatives so the client does not have to reconstruct the grouping, and
+  // so "3 of 5" is answerable without a second pass over the array.
+  const groups = new Map<string, Array<{ id: string; content: string; seq: number }>>();
+  for (const row of results) {
+    const key = row.swipe_group ?? row.id;
+    const list = groups.get(key) ?? [];
+    list.push({ id: row.id, content: row.content, seq: row.seq });
+    groups.set(key, list);
+  }
+
+  const messages = results
+    .filter((row) => row.active === 1)
+    .map((row) => {
+      const key = row.swipe_group ?? row.id;
+      const alternatives = groups.get(key) ?? [];
+      return {
+        ...row,
+        swipes: alternatives.map((entry) => entry.id),
+        swipeIndex: alternatives.findIndex((entry) => entry.id === row.id),
+      };
+    });
+
+  return json({ chat, messages });
 }
 
 async function listModels(env: Env, providerId: string): Promise<Response> {

@@ -3,9 +3,9 @@ import { loadProviderKey, keyErrorMessage } from './keys';
 import { getProvider } from './providers';
 import type { NormalizedUsage, Provider } from './providers/types';
 import { badRequest, notFound, readJson } from './http';
-import { buildPrompt, send, type Frame } from './turn';
+import { buildPrompt, send } from './prompt';
 import { persistAssistant, persistUserMessage } from './persist';
-import { addAlternative, lastActiveMessage } from './messages';
+import { addAlternativeRow, lastActiveMessage } from './messages';
 import { parseSse } from '../../src/lib/sse';
 import { estimateChatTokens } from '../../src/lib/tokenEstimate';
 import { updateState } from './state/update';
@@ -150,14 +150,14 @@ async function runTurn(
     return fail(controller, error ?? 'The provider returned no content.', 'stream');
   }
 
-  const costUsd = await resolveCost(env, settings, usage);
+  const costUsd = resolveCost(usage);
 
   // Where the text lands depends on the mode. `regenerate` and `continue` extend an
   // existing message's swipe group, so the conversation keeps exactly one active row per
   // position and swiping back recovers the previous attempt.
   const messageId =
     mode === 'regenerate' || mode === 'continue'
-      ? await addAlternative(env, chat.id, target!.id, assistantText)
+      ? await addAlternativeRow(env, chat.id, target!.id, assistantText)
       : await persistAssistant(env, chat.id, assistantText, usage, costUsd, {
           role: mode === 'impersonate' ? 'user' : 'assistant',
         });
@@ -234,14 +234,13 @@ async function pipeStream(
   return { text, usage, error: null };
 }
 
-async function resolveCost(
-  env: Env,
-  settings: Awaited<ReturnType<typeof loadChatSettings>>,
-  usage: NormalizedUsage | null,
-): Promise<number | null> {
-  if (!usage) return null;
-  if (usage.costUsd !== null) return usage.costUsd;
-  return null;
+/**
+ * Cost is whatever the provider reported. Kenari reports none, and converting its
+ * micro-IDR rate card needs a configured exchange rate — inventing a number would be
+ * worse than showing none, so the UI renders "unpriced" rather than a guess.
+ */
+function resolveCost(usage: NormalizedUsage | null): number | null {
+  return usage?.costUsd ?? null;
 }
 
 async function calibrate(
@@ -277,4 +276,3 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export type { Frame };

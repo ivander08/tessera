@@ -35,6 +35,22 @@ async function loadMessage(env: Env, chatId: string, id: string): Promise<Messag
     .first<MessageRow>();
 }
 
+/**
+ * Returns the swipe group a message belongs to, creating one if it has none.
+ *
+ * The anchor row MUST be given the group id, not just the new sibling. Getting this
+ * wrong is silent and specific: the original keeps `swipe_group = NULL`, so a query for
+ * the group returns only the new row, the swipe handler sees a group of one, and swiping
+ * back does nothing at all — exactly the case that happens on the first regenerate.
+ */
+async function ensureGroup(env: Env, message: MessageRow): Promise<string> {
+  if (message.swipe_group) return message.swipe_group;
+  await env.DB.prepare('UPDATE messages SET swipe_group = ? WHERE id = ?')
+    .bind(message.id, message.id)
+    .run();
+  return message.id;
+}
+
 /** The newest row in a swipe group, which is the one the reader sees. */
 async function newestInGroup(env: Env, chatId: string, group: string): Promise<MessageRow | null> {
   return await env.DB.prepare(
@@ -90,13 +106,7 @@ export async function swipeMessage(env: Env, req: Request): Promise<Response> {
   const current = await loadMessage(env, body.chatId, body.id);
   if (!current) return notFound('message not found');
 
-  // A message with no group yet is its own group of one.
-  const group = current.swipe_group ?? current.id;
-  if (!current.swipe_group) {
-    await env.DB.prepare('UPDATE messages SET swipe_group = ? WHERE id = ?')
-      .bind(group, current.id)
-      .run();
-  }
+  const group = await ensureGroup(env, current);
 
   const { results } = await env.DB.prepare(
     'SELECT id FROM messages WHERE chat_id = ? AND swipe_group = ? ORDER BY seq',
@@ -153,7 +163,7 @@ export async function editMessage(env: Env, req: Request): Promise<Response> {
 
   // An edit is a new alternative, not a rewrite. The old text stays swipable, which is
   // what makes an accidental edit recoverable.
-  const group = message.swipe_group ?? message.id;
+  const group = await ensureGroup(env, message);
   const id = await addSwipe(env, body.chatId, group, message.role, body.content.trim());
   return json({ ok: true, id, group });
 }
@@ -178,7 +188,7 @@ export async function deleteMessage(env: Env, req: Request): Promise<Response> {
   const message = await loadMessage(env, body.chatId, body.id);
   if (!message) return notFound('message not found');
 
-  const group = message.swipe_group ?? message.id;
+  const group = await ensureGroup(env, message);
   await env.DB.prepare('UPDATE messages SET active = 0 WHERE chat_id = ? AND swipe_group = ?')
     .bind(body.chatId, group)
     .run();
@@ -200,6 +210,27 @@ interface AddSwipeBody {
   content?: string;
 }
 
+/**
+ * Adds an alternative to a message's swipe group and makes it active, returning the new
+ * row's id.
+ *
+ * Split from the HTTP handler of the same name because the chat pipeline needs the
+ * operation, not a Response. Returning JSON from the middle of a streaming turn would be
+ * a category error.
+ */
+export async function addAlternativeRow(
+  env: Env,
+  chatId: string,
+  targetId: string,
+  content: string,
+): Promise<string> {
+  const message = await loadMessage(env, chatId, targetId);
+  if (!message) throw new Error('message not found');
+
+  const group = await ensureGroup(env, message);
+  return await addSwipe(env, chatId, group, message.role, content);
+}
+
 /** Appends an alternative to a group without changing which one is active. */
 export async function addAlternative(env: Env, req: Request): Promise<Response> {
   const body = await readJson<AddSwipeBody>(req);
@@ -210,12 +241,7 @@ export async function addAlternative(env: Env, req: Request): Promise<Response> 
   const message = await loadMessage(env, body.chatId, body.id);
   if (!message) return notFound('message not found');
 
-  const group = message.swipe_group ?? message.id;
-  if (!message.swipe_group) {
-    await env.DB.prepare('UPDATE messages SET swipe_group = ? WHERE id = ?')
-      .bind(group, message.id)
-      .run();
-  }
+  const group = await ensureGroup(env, message);
 
   const id = crypto.randomUUID();
   const now = Date.now();
