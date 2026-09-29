@@ -1,7 +1,7 @@
 import { isAuthorized, unauthorized } from './auth';
 import { preflight, withCors } from './cors';
 import { badRequest, json, notFound, readJson } from './http';
-import { getChat, getCharacter, getSettings, putSetting } from './db';
+import { getChat, getCharacter, getPersona as loadPersonaRow, getSettings, putSetting } from './db';
 import { loadProviderKey, storeProviderKey } from './keys';
 import { getProvider } from './providers';
 import { handleChat } from './chat';
@@ -33,6 +33,7 @@ import {
   updatePreset,
 } from './presets';
 import { clearState, getState, patchState } from './state/api';
+import { substituteHead } from '../../src/lib/prompt/macros';
 import {
   forgeCards,
   forgeCritique,
@@ -317,12 +318,25 @@ async function createChat(env: Env, req: Request): Promise<Response> {
     .run();
 
   // The card's first greeting becomes the chat's first assistant message.
+  //
+  // Macros are substituted HERE, at the point the text is stored, because the stored
+  // value is what the reader sees. Substituting only on the way to the model left the
+  // reader looking at a literal `{{user}}` in the opening line — the one message that is
+  // guaranteed to be read. The persona is fixed for the chat's life, so baking it in
+  // here cannot go stale.
   if (card.firstMes) {
+    const persona = body.personaId ? await loadPersonaRow(env, body.personaId) : null;
+    const greeting = substituteHead(card.firstMes, {
+      char: character.name,
+      user: persona?.name ?? null,
+      persona: persona?.name ?? null,
+    });
+
     await env.DB.prepare(
       `INSERT INTO messages (id, chat_id, parent_id, role, content, created_at)
        VALUES (?, ?, NULL, 'assistant', ?, ?)`,
     )
-      .bind(crypto.randomUUID(), id, card.firstMes, now)
+      .bind(crypto.randomUUID(), id, greeting, now)
       .run();
   }
 

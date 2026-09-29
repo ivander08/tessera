@@ -265,9 +265,16 @@ function Frame({ children }: { children: React.ReactNode }) {
     <main className="mx-auto max-w-2xl space-y-6 p-4">
       <header className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Settings</h1>
-        <Link to="/" className="text-sm text-ink-dim hover:text-ink">
-          ← Chats
-        </Link>
+        <nav className="flex items-center gap-3">
+          {/* Presets are the other half of the sampler and prompt settings on this
+              screen, so this is where you go looking for them. */}
+          <Link to="/presets" className="text-sm text-ink-dim hover:text-ink">
+            Presets
+          </Link>
+          <Link to="/" className="text-sm text-ink-dim hover:text-ink">
+            ← Chats
+          </Link>
+        </nav>
       </header>
       {children}
     </main>
