@@ -1,5 +1,6 @@
 import { Link } from 'react-router';
 import { apiJson } from '../lib/api';
+import { resolveAssetUrl } from '../lib/assets';
 import type { ChatSummary } from '../lib/apiTypes';
 import { useAsync } from '../lib/hooks';
 
@@ -40,7 +41,11 @@ export default function ChatList() {
               className="flex items-center gap-3 py-3 hover:bg-white/5"
             >
               {chat.character_avatar ? (
-                <img src={chat.character_avatar} alt="" className="h-10 w-10 rounded-full object-cover" />
+                <img
+                  src={resolveAssetUrl(chat.character_avatar) ?? undefined}
+                  alt=""
+                  className="h-10 w-10 rounded-full object-cover"
+                />
               ) : (
                 <div className="h-10 w-10 rounded-full bg-white/10" />
               )}

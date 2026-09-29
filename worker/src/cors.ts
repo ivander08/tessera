@@ -17,9 +17,14 @@
 const ALLOWED_ORIGINS: Record<string, true> = {
   // Capacitor Android serves the bundled app from here.
   'https://localhost': true,
-  // Tauri v2 desktop serves from a custom scheme on Windows and Linux.
+  // Tauri v2 on Windows. This is the DEFAULT scheme, and it is http, not https:
+  // `tauri-utils` documents `access-control-allow-origin: http://tauri.localhost`,
+  // and `https://` is only used when `app.windows[].useHttpsScheme` is set, which it
+  // is not. Omitting this entry makes every desktop API call fail CORS.
+  'http://tauri.localhost': true,
+  // Tauri v2 on macOS and Linux.
   'tauri://localhost': true,
-  // Tauri v2 on macOS uses the https variant.
+  // Tauri v2 when `useHttpsScheme` is enabled.
   'https://tauri.localhost': true,
   // `wrangler dev` serving the SPA to a second dev port (e.g. `vite` on 5173).
   'http://localhost:5173': true,
