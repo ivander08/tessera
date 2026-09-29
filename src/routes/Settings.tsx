@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { apiJson } from '../lib/api';
 import type { ModelInfo, ProviderKeyRow } from '../lib/apiTypes';
 import { messageOf, useAsync } from '../lib/hooks';
 import { KnobEditor } from '../components/KnobEditor';
+import { ThemeEditor, useLiveTheme } from '../components/ThemeEditor';
+import { parseTheme, type Theme } from '../lib/theme';
 
 const PROVIDERS = ['openrouter', 'kenari'] as const;
 
@@ -16,6 +18,9 @@ interface SettingsShape {
   contextBudget?: string;
   knobs?: string;
   idrPerUsd?: string;
+  cheapProvider?: string;
+  cheapModel?: string;
+  theme?: string;
 }
 
 export default function Settings() {
@@ -26,6 +31,7 @@ export default function Settings() {
   const keys = useAsync(() => apiJson<ProviderKeyRow[]>('/api/keys'), []);
 
   const [edits, setEdits] = useState<SettingsShape>({});
+  const [theme, setTheme] = useState<Theme>(() => parseTheme(null));
   const [status, setStatus] = useState<string | null>(null);
   const [keyDraft, setKeyDraft] = useState<Record<string, string>>({});
 
@@ -34,6 +40,16 @@ export default function Settings() {
   // cascading render and a stale-clone class of bug where an edit made before the
   // fetch resolved would be silently discarded.
   const form: SettingsShape = { ...data, ...edits };
+
+  // Seed the theme editor from storage once, then let it own the value. Re-seeding on
+  // every render would fight the user's drag.
+  useEffect(() => {
+    if (data?.theme) setTheme(parseTheme(data.theme));
+  }, [data?.theme]);
+
+  // Apply while editing, so a slider shows its effect as it moves rather than after a
+  // save round trip.
+  useLiveTheme(theme);
   const setForm = (next: SettingsShape) => setEdits(next);
 
   const provider = form.provider ?? '';
@@ -59,6 +75,9 @@ export default function Settings() {
       ['contextBudget', form.contextBudget ?? ''],
       ['knobs', form.knobs ?? '{}'],
       ['idrPerUsd', form.idrPerUsd ?? ''],
+      ['cheapProvider', form.cheapProvider ?? ''],
+      ['cheapModel', form.cheapModel ?? ''],
+      ['theme', JSON.stringify(theme)],
     ];
     try {
       for (const [key, value] of entries) {
@@ -199,6 +218,22 @@ export default function Settings() {
             />
           </Field>
         </div>
+        <Field label="Cheap model provider (used for summaries, state updates and drafting)">
+          <input
+            value={form.cheapProvider ?? ''}
+            onChange={(event) => setForm({ ...form, cheapProvider: event.target.value })}
+            placeholder={form.provider ?? 'same as above'}
+            className="w-48 rounded border border-white/15 bg-black/30 px-3 py-2 text-sm outline-none focus:border-accent"
+          />
+        </Field>
+        <Field label="Cheap model id">
+          <input
+            value={form.cheapModel ?? ''}
+            onChange={(event) => setForm({ ...form, cheapModel: event.target.value })}
+            placeholder={form.model ?? 'same as above'}
+            className="w-64 rounded border border-white/15 bg-black/30 px-3 py-2 text-sm outline-none focus:border-accent"
+          />
+        </Field>
         <Field label="IDR per USD (Kenari bills in Rupiah; blank leaves costs unreported)">
           <input
             value={form.idrPerUsd ?? ''}
@@ -208,6 +243,8 @@ export default function Settings() {
           />
         </Field>
       </section>
+
+      <ThemeEditor value={theme} onChange={setTheme} />
 
       <div className="flex items-center gap-3">
         <button
