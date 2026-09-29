@@ -9,6 +9,7 @@ import { addAlternativeRow, lastActiveMessage } from './messages';
 import { parseSse } from '../../src/lib/sse';
 import { estimateChatTokens } from '../../src/lib/tokenEstimate';
 import { updateState } from './state/update';
+import { scheduleMemory } from './memory/schedule';
 import type { ChatRow } from './db';
 
 /**
@@ -185,6 +186,10 @@ async function runTurn(
         console.warn(`[state] update failed for chat=${chat.id}: ${messageOf(err)}`);
       }),
     );
+    // Memory runs on the same trigger and for the same reason: the turn is already
+    // delivered and persisted, so bookkeeping must not delay it. `scheduleMemory`
+    // decides whether enough has accumulated; most turns it does nothing.
+    ctx.waitUntil(scheduleMemory(env, chat.id));
   }
 }
 

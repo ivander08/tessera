@@ -28,6 +28,7 @@ import {
   updatePersona,
 } from './personas';
 import { onWorkerWake } from './jobs';
+import { runPendingMemoryJob } from './memory/schedule';
 
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -48,6 +49,9 @@ export default {
     // `waitUntil` because the sweep must not delay the user's request, and must not
     // be cancelled the moment the response is returned.
     ctx.waitUntil(onWorkerWake(env));
+    // One memory job per cold start, if any is queued. Bounded deliberately: draining a
+    // backlog here would compete with the request that triggered the wake.
+    ctx.waitUntil(runPendingMemoryJob(env));
 
     // The sole unauthenticated route, so a probe cannot leak whether a token exists.
     if (path === '/api/health') {
