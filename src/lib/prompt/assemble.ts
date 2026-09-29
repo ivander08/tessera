@@ -25,6 +25,7 @@ export type TokenCounter = (messages: WireMessage[]) => number;
  *   ---- tailStart ----
  *   7. system      — memoryBlock, if present      (M4)
  *   8. system      — stateBlock, if present       (M5)
+ *   9. system      — loreBlock, if present        (keyword lorebook)
  *   9. system      — authorsNote, if present
  *  10. user        — userMessage
  *
@@ -52,6 +53,7 @@ export function assemble(input: AssembleInput, countChatTokens: TokenCounter): A
   const tail: WireMessage[] = [];
   pushIfNonEmpty(tail, 'system', input.tail.memoryBlock);
   pushIfNonEmpty(tail, 'system', input.tail.stateBlock);
+  pushIfNonEmpty(tail, 'system', input.tail.loreBlock);
   pushIfNonEmpty(tail, 'system', input.tail.authorsNote);
   pushIfNonEmpty(tail, 'system', input.tail.postHistoryInstructions);
   tail.push({ role: 'user', content: input.tail.userMessage });

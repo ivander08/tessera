@@ -5,7 +5,7 @@ import type { AssembledPrompt } from '../../src/lib/prompt/types';
 import type { AssembleInput } from '../../src/lib/prompt/input';
 import { computeWindowStart } from '../../src/lib/prompt/window';
 import { estimateChatTokens, estimateTokens, applyCalibration } from '../../src/lib/tokenEstimate';
-import { alwaysOnLore, parseLorebook } from '../../src/lib/cards/lorebook';
+import { alwaysOnLore, matchLore, parseLorebook } from '../../src/lib/cards/lorebook';
 import type { CharacterCardJson } from '../../src/lib/cards/types';
 import { renderMemoryBlock } from '../../src/lib/prompt/memoryBlock';
 import { dynamicMacrosIn, substituteHead, substituteTail } from '../../src/lib/prompt/macros';
@@ -135,6 +135,22 @@ export async function buildPrompt(
     buildStateBlock(env, chat.id, calibration),
   ]);
 
+  // Keyword-triggered lorebook entries. Matched against the last `scanDepth` messages
+  // and rendered into the TAIL — an entry firing on turn 12 must not rewrite the prefix
+  // turns 1-11 already cached. Before this existed, the only way to use a card's world
+  // knowledge was to mark every entry constant, which pays for all of it every turn.
+  const loreEntries = parseLorebook(card.characterBook);
+  const scanned = [...history.map((row) => row.content), options.userContent].filter(Boolean);
+  const matched = matchLore(loreEntries, scanned, {
+    scanDepth: settings.loreScanDepth,
+    tokenBudget: Math.round(settings.loreTokenBudget * calibration),
+    recursive: settings.loreRecursive,
+    count: estimateTokens,
+  });
+  const loreBlock = matched.length > 0
+    ? matched.map((hit) => hit.content).join('\n\n')
+    : '';
+
   // `{{char}}` and `{{user}}` resolve to values fixed for the chat's life, so applying
   // them to the head leaves the cached prefix byte-identical between turns. The dynamic
   // tier is deliberately NOT applied here — a card with `{{time}}` in its description
@@ -191,6 +207,7 @@ export async function buildPrompt(
       // cached prefix however much it changes.
       memoryBlock: substituteTail(memoryBlock, macroContext),
       stateBlock: substituteTail(stateBlock, macroContext),
+      loreBlock: substituteTail(loreBlock, macroContext),
       authorsNote: substituteTail(settings.authorsNote, macroContext),
       postHistoryInstructions: substituteTail(card.postHistoryInstructions, macroContext),
       userMessage: substituteTail(options.userContent, macroContext),

@@ -18,6 +18,8 @@ export interface AssembleInput {
   tail: {
     memoryBlock?: string;
     stateBlock?: string;
+    /** Keyword-triggered lorebook entries that fired this turn. */
+    loreBlock?: string;
     authorsNote?: string;
     /** Card `post_history_instructions`. Tail-only: cannot perturb the cached prefix. */
     postHistoryInstructions?: string;

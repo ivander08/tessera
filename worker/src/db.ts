@@ -86,6 +86,12 @@ export interface ChatSettings {
   knobs: Record<string, number | string | string[]>;
   /** Configured IDR-per-USD rate; when absent Kenari costs stay in micro-IDR. */
   idrPerUsd: number | null;
+  /** How many messages back keyword lorebook entries are matched against. */
+  loreScanDepth: number;
+  /** Token ceiling for matched lorebook content in the tail. */
+  loreTokenBudget: number;
+  /** Let a matched entry's own text trigger further entries. */
+  loreRecursive: boolean;
 }
 
 export const DEFAULT_SYSTEM_PROMPT =
@@ -103,5 +109,8 @@ export async function loadChatSettings(env: Env): Promise<ChatSettings> {
     contextBudget: Number(raw.contextBudget ?? 16384) || 16384,
     knobs: raw.knobs ? (JSON.parse(raw.knobs) as Record<string, number | string | string[]>) : {},
     idrPerUsd: raw.idrPerUsd ? Number(raw.idrPerUsd) : null,
+    loreScanDepth: Number(raw.loreScanDepth ?? 4) || 4,
+    loreTokenBudget: Number(raw.loreTokenBudget ?? 1024) || 1024,
+    loreRecursive: raw.loreRecursive === 'true',
   };
 }
