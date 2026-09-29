@@ -1,6 +1,6 @@
 import { getSettings, loadChatSettings } from './db';
 import type { ChatSettings } from './db';
-import { loadProviderKey } from './keys';
+import { keyErrorMessage, loadProviderKey } from './keys';
 import { getProvider } from './providers';
 import { parseSse } from '../../src/lib/sse';
 
@@ -54,7 +54,7 @@ export async function complete(
   if (!provider) throw new Error(`Unknown provider: ${cheap.provider}`);
 
   const apiKey = await loadProviderKey(env, cheap.provider);
-  if (!apiKey) throw new Error(`No API key stored for ${cheap.provider}.`);
+  if (!apiKey.ok) throw new Error(keyErrorMessage(cheap.provider, apiKey.reason));
 
   const messages: Array<{ role: 'system' | 'user'; content: string }> = [];
   if (opts.system) messages.push({ role: 'system', content: opts.system });
@@ -70,7 +70,7 @@ export async function complete(
       knobs: settings.knobs,
       sessionId: 'side-channel',
     },
-    apiKey,
+    apiKey.key,
   );
 
   // `buildRequest` always sets `stream: true` for the chat path. This call wants the

@@ -250,7 +250,11 @@ async function listModels(env: Env, providerId: string): Promise<Response> {
       ? 'https://openrouter.ai/api/v1/models'
       : 'https://kenari.id/v1/models';
 
-  const res = await fetch(url, { headers: key ? { Authorization: `Bearer ${key}` } : {} });
+  // The model list is public on both providers, so a missing or undecryptable key
+  // still returns the list — the settings screen needs it to offer a model at all.
+  const res = await fetch(url, {
+    headers: key.ok ? { Authorization: `Bearer ${key.key}` } : {},
+  });
   if (!res.ok) return json({ error: provider.readError(res.status, await res.text()) }, 502);
 
   // OpenRouter passes through `supported_parameters`; Kenari passes through

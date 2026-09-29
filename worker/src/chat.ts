@@ -1,6 +1,6 @@
 import { getChat, getCharacter, getPersona, loadChatSettings } from './db';
 import type { ChatRow, ChatSettings } from './db';
-import { loadProviderKey } from './keys';
+import { keyErrorMessage, loadProviderKey } from './keys';
 import { getProvider } from './providers';
 import type { NormalizedUsage, Provider } from './providers/types';
 import { badRequest, notFound, readJson } from './http';
@@ -92,8 +92,8 @@ async function runTurn(
   }
 
   const apiKey = await loadProviderKey(env, settings.provider);
-  if (!apiKey) {
-    return fail(controller, `No API key stored for ${settings.provider}. Open /settings.`, 'no_key');
+  if (!apiKey.ok) {
+    return fail(controller, keyErrorMessage(settings.provider, apiKey.reason), 'no_key');
   }
 
   // Persist the user message BEFORE calling the provider. A crash after this point
@@ -113,7 +113,7 @@ async function runTurn(
       knobs: settings.knobs,
       sessionId: chat.session_id,
     },
-    apiKey,
+    apiKey.key,
   );
 
   let response: Response;
