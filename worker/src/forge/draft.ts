@@ -99,6 +99,9 @@ function toParsedCard(value: unknown): ParsedCard {
     tags: asStringArray(record.tags),
     characterBook: null,
     sourceFormat: 'ccv2',
+    // Drafted cards carry no image; the field is required so a constructor cannot
+    // silently omit it.
+    avatarHint: null,
     raw: value,
   };
 }

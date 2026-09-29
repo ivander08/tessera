@@ -30,6 +30,7 @@ function card(overrides: Partial<ParsedCard> = {}): ParsedCard {
     tags: [],
     characterBook: null,
     sourceFormat: 'ccv2',
+    avatarHint: null,
     raw: null,
     ...overrides,
   };

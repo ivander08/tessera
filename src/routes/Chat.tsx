@@ -7,6 +7,7 @@ import { messageOf, useAsync } from '../lib/hooks';
 import { CacheMeter } from '../components/CacheMeter';
 import { Message, type MessageView } from '../components/Message';
 import { MessageActions } from '../components/MessageActions';
+import { PersonaPicker } from '../components/PersonaPicker';
 
 interface History {
   chat: ChatDetail;
@@ -151,6 +152,14 @@ export default function Chat() {
           <Link to={`/chat/${id}/state`} className="app-link">
             State
           </Link>
+          {/* Who the reader is in this scene. Without one, {{user}} in a card stays a
+              literal placeholder, which is why the picker warns rather than sitting
+              quietly on "none". */}
+          <PersonaPicker
+            chatId={id}
+            current={data.chat.persona_id}
+            onChange={() => reload()}
+          />
           <CacheMeter hitRate={hitRate} />
         </div>
       </header>

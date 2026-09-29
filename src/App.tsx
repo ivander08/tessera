@@ -7,8 +7,12 @@ import Settings from './routes/Settings';
 import Setup from './routes/Setup';
 import Characters from './routes/Characters';
 import CharacterNew from './routes/CharacterNew';
+import CharacterEdit from './routes/CharacterEdit';
 import Memory from './routes/Memory';
 import State from './routes/State';
+import Personas from './routes/Personas';
+import Forge from './routes/Forge';
+import Presets from './routes/Presets';
 
 export default function App() {
   return (
@@ -17,9 +21,13 @@ export default function App() {
       <Route path="/" element={<RequireToken>{<ChatList />}</RequireToken>} />
       <Route path="/characters" element={<RequireToken>{<Characters />}</RequireToken>} />
       <Route path="/characters/new" element={<RequireToken>{<CharacterNew />}</RequireToken>} />
+      <Route path="/characters/:id/edit" element={<RequireToken>{<CharacterEdit />}</RequireToken>} />
       <Route path="/chat/:id" element={<RequireToken>{<Chat />}</RequireToken>} />
       <Route path="/chat/:id/memory" element={<RequireToken>{<Memory />}</RequireToken>} />
       <Route path="/chat/:id/state" element={<RequireToken>{<State />}</RequireToken>} />
+      <Route path="/personas" element={<RequireToken>{<Personas />}</RequireToken>} />
+      <Route path="/forge" element={<RequireToken>{<Forge />}</RequireToken>} />
+      <Route path="/presets" element={<RequireToken>{<Presets />}</RequireToken>} />
       <Route path="/settings" element={<RequireToken>{<Settings />}</RequireToken>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

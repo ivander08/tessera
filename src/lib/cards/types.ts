@@ -26,6 +26,14 @@ export interface CharacterCardJson {
 
 export interface ParsedCard extends CharacterCardJson {
   sourceFormat: 'ccv2' | 'ccv3' | 'charx' | 'byaf';
+  /**
+   * The card's own `avatar` field, when it has one.
+   *
+   * Usually a remote URL rather than bytes, which is why it is a hint and not an image:
+   * storing a URL would make the app fetch from a third party on every render. It is
+   * only used when it is a `data:` URL that can be decoded inline.
+   */
+  avatarHint: string | null;
   /** The untouched source object, kept so nothing is ever unrecoverable. */
   raw: unknown;
 }

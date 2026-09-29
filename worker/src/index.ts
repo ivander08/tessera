@@ -8,8 +8,12 @@ import { handleChat } from './chat';
 import {
   createCharacter,
   deleteCharacter,
+  deleteCharacterAvatar,
+  forkCharacter,
   getAvatar,
+  getCharacterDetail,
   listCharacters,
+  updateCharacter,
 } from './characters';
 import { createFact, listMemory, mutateMemory } from './memory/api';
 import {
@@ -18,11 +22,29 @@ import {
   editMessage,
   swipeMessage,
 } from './messages';
-import { deletePreset, getPreset, importPreset, listPresets } from './presets';
+import {
+  applyPresetToChat,
+  deletePreset,
+  duplicatePreset,
+  getChatPreset,
+  getPreset,
+  importPreset,
+  listPresets,
+  updatePreset,
+} from './presets';
 import { clearState, getState, patchState } from './state/api';
+import {
+  forgeCards,
+  forgeCritique,
+  forgeDraft,
+  forgeSmuggle,
+  forgeSuggest,
+  forgeTokens,
+} from './forge/api';
 import {
   createPersona,
   deletePersona,
+  getPersona,
   listPersonas,
   setChatPersona,
   updatePersona,
@@ -122,16 +144,31 @@ async function route(req: Request, env: Env, url: URL, ctx: ExecutionContext): P
     return notFound();
   }
 
+  // Order matters: `/api/characters/fork` and `/:id/fork` must match BEFORE the bare
+  // `:id` route, or "fork" is captured as a character id and 404s.
+  if (path === '/api/characters/fork' && method === 'POST') return forkCharacter(env, req);
+
   const avatarMatch = /^\/api\/characters\/([^/]+)\/avatar$/.exec(path);
   if (avatarMatch) {
-    if (method !== 'GET') return notFound();
-    return getAvatar(env, decodeURIComponent(avatarMatch[1]));
+    const avatarId = decodeURIComponent(avatarMatch[1]);
+    if (method === 'GET') return getAvatar(env, avatarId);
+    if (method === 'DELETE') return deleteCharacterAvatar(env, avatarId);
+    return notFound();
+  }
+
+  const forkMatch = /^\/api\/characters\/([^/]+)\/fork$/.exec(path);
+  if (forkMatch) {
+    if (method !== 'POST') return notFound();
+    return forkCharacter(env, req);
   }
 
   const characterMatch = /^\/api\/characters\/([^/]+)$/.exec(path);
   if (characterMatch) {
-    if (method !== 'DELETE') return notFound();
-    return deleteCharacter(env, decodeURIComponent(characterMatch[1]));
+    const characterId = decodeURIComponent(characterMatch[1]);
+    if (method === 'GET') return getCharacterDetail(env, characterId);
+    if (method === 'PATCH') return updateCharacter(env, req);
+    if (method === 'DELETE') return deleteCharacter(env, characterId);
+    return notFound();
   }
 
   if (path === '/api/chats') {
@@ -165,8 +202,11 @@ async function route(req: Request, env: Env, url: URL, ctx: ExecutionContext): P
   if (path === '/api/persona' && method === 'POST') return setChatPersona(env, req);
 
   const personaMatch = /^\/api\/personas\/([^/]+)$/.exec(path);
-  if (personaMatch && method === 'DELETE') {
-    return deletePersona(env, decodeURIComponent(personaMatch[1]));
+  if (personaMatch) {
+    const personaId = decodeURIComponent(personaMatch[1]);
+    if (method === 'GET') return getPersona(env, personaId);
+    if (method === 'DELETE') return deletePersona(env, personaId);
+    return notFound();
   }
 
   if (path === '/api/message/swipe' && method === 'POST') return swipeMessage(env, req);
@@ -206,13 +246,29 @@ async function route(req: Request, env: Env, url: URL, ctx: ExecutionContext): P
     return notFound();
   }
 
+  if (path === '/api/presets/duplicate' && method === 'POST') return duplicatePreset(env, req);
+  if (path === '/api/preset/apply' && method === 'POST') return applyPresetToChat(env, req);
+
   const presetMatch = /^\/api\/presets\/([^/]+)$/.exec(path);
   if (presetMatch) {
     const presetId = decodeURIComponent(presetMatch[1]);
     if (method === 'GET') return getPreset(env, presetId);
+    if (method === 'PATCH') return updatePreset(env, req);
     if (method === 'DELETE') return deletePreset(env, presetId);
     return notFound();
   }
+
+  const chatPresetMatch = /^\/api\/chats\/([^/]+)\/preset$/.exec(path);
+  if (chatPresetMatch && method === 'GET') {
+    return getChatPreset(env, decodeURIComponent(chatPresetMatch[1]));
+  }
+
+  if (path === '/api/forge/cards' && method === 'GET') return forgeCards(env);
+  if (path === '/api/forge/draft' && method === 'POST') return forgeDraft(env, req);
+  if (path === '/api/forge/critique' && method === 'POST') return forgeCritique(env, req);
+  if (path === '/api/forge/smuggle' && method === 'POST') return forgeSmuggle(env, req);
+  if (path === '/api/forge/tokens' && method === 'POST') return forgeTokens(env, req);
+  if (path === '/api/forge/suggest' && method === 'POST') return forgeSuggest(env, req);
 
   if (path === '/api/chat' && method === 'POST') return handleChat(req, env, ctx);
 

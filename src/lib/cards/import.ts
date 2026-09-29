@@ -88,6 +88,7 @@ export function parseJsonCard(json: string, format: ParsedCard['sourceFormat']):
     tags: strArray(inner.tags),
     characterBook:
       inner.character_book && typeof inner.character_book === 'object' ? inner.character_book : null,
+    avatarHint: str(inner.avatar) || null,
     ...(sourceFormat === 'ccv3' || inner.nickname !== undefined
       ? { nickname: str(inner.nickname) }
       : {}),

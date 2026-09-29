@@ -45,7 +45,11 @@ export default function CharacterNew() {
     try {
       const parsed = await parseCardFile(file);
       setCard(parsed);
-      if (file.type === 'image/png') setAvatar(await extractPngAvatar(file));
+      // Dispatch on the bytes, not `file.type`. The browser infers the type from the
+      // extension, so a card named `.card` or `.json` that is really a PNG reports the
+      // wrong mime and would silently lose its avatar — while `parseCardFile` reads the
+      // same file correctly by magic bytes. Two answers for one file is the bug.
+      setAvatar(await extractAvatar(await file.arrayBuffer(), parsed.avatarHint));
     } catch (cause) {
       setCard(null);
       setError(cause instanceof CardParseError ? cause.message : messageOf(cause));
@@ -214,17 +218,42 @@ function Field({
  * in the `characters` row — a base64 data URL would push a large card past D1's
  * 2 MB per-row limit.
  */
-async function extractPngAvatar(
-  file: File,
+async function extractAvatar(
+  buffer: ArrayBuffer,
+  hint: string | null,
 ): Promise<{ contentType: string; dataBase64: string } | null> {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  // Only strip the card chunk when the avatar fits comfortably; otherwise keep the
-  // file intact rather than risk an oversized request.
+  const bytes = new Uint8Array(buffer);
+
+  // Only ship the image when it is comfortably under D1's 2 MB row limit. A large card
+  // keeps its data in the card itself; the avatar is a nicety, not worth failing the
+  // import over.
   if (bytes.length > 1_500_000) return null;
+
+  // A card's own `avatar` field is a URL, not bytes, and is usually remote. Storing the
+  // URL means the app fetches from a third party on every render, so it is only used
+  // when it is a data URL we can decode inline.
+  if (hint && hint.startsWith('data:')) {
+    const match = /^data:([^;,]+);base64,(.*)$/s.exec(hint);
+    if (match) return { contentType: match[1], dataBase64: match[2] };
+  }
+
+  // Otherwise use the PNG we were handed, which for a card file is the portrait.
+  if (!isPng(bytes)) return null;
+
   let binary = '';
   const chunk = 0x8000;
   for (let i = 0; i < bytes.length; i += chunk) {
     binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
   }
   return { contentType: 'image/png', dataBase64: btoa(binary) };
+}
+
+function isPng(bytes: Uint8Array): boolean {
+  return (
+    bytes.length > 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47
+  );
 }
