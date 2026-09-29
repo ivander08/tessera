@@ -19,6 +19,7 @@ import {
   swipeMessage,
 } from './messages';
 import { deletePreset, getPreset, importPreset, listPresets } from './presets';
+import { clearState, getState, patchState } from './state/api';
 import {
   createPersona,
   deletePersona,
@@ -139,6 +140,15 @@ async function route(req: Request, env: Env, url: URL, ctx: ExecutionContext): P
   if (messagesMatch) {
     if (method !== 'GET') return notFound();
     return listMessages(env, decodeURIComponent(messagesMatch[1]));
+  }
+
+  const stateMatch = /^\/api\/state\/([^/]+)$/.exec(path);
+  if (stateMatch) {
+    const stateChatId = decodeURIComponent(stateMatch[1]);
+    if (method === 'GET') return getState(env, stateChatId);
+    if (method === 'PATCH') return patchState(env, req);
+    if (method === 'DELETE') return clearState(env, stateChatId);
+    return notFound();
   }
 
   if (path === '/api/personas') {

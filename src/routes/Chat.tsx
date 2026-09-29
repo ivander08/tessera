@@ -148,6 +148,9 @@ export default function Chat() {
           <Link to={`/chat/${id}/memory`} className="app-link">
             Memory
           </Link>
+          <Link to={`/chat/${id}/state`} className="app-link">
+            State
+          </Link>
           <CacheMeter hitRate={hitRate} />
         </div>
       </header>

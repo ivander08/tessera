@@ -183,3 +183,97 @@ describe('renderStateBlock', () => {
     expect(estimateTokens(renderStateBlock(state))).toBeLessThanOrEqual(800);
   });
 });
+
+describe('world state: weather and cast hygiene', () => {
+  test('accepts a weather field', () => {
+    const result = validatePatch({}, { weather: 'Overcast, light drizzle' });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.next.weather).toBe('Overcast, light drizzle');
+  });
+
+  test('clears weather with null like the other scalars', () => {
+    const result = validatePatch({ weather: 'rain' }, { weather: null });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.next.weather).toBeUndefined();
+  });
+
+  /**
+   * Observed in real stored state: `present: ["me"]`. A pronoun in a cast list makes the
+   * reader invisible to the world model, and the narrator then has to guess who "me" is.
+   */
+  test('drops pronouns from the cast list without rejecting the patch', () => {
+    const result = validatePatch({}, { present: ['Ada', 'me', 'the user', 'Ivan'] });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.next.present).toEqual(['Ada', 'Ivan']);
+  });
+
+  test('keeps a cast list that is already clean', () => {
+    const result = validatePatch({}, { present: ['Ada', 'Ivan'] });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.next.present).toEqual(['Ada', 'Ivan']);
+  });
+
+  test('an all-pronoun cast list becomes empty rather than wrong', () => {
+    const result = validatePatch({}, { present: ['me', 'you'] });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.next.present).toEqual([]);
+  });
+
+  test('does not apply the name filter to inventory or notes', () => {
+    // "me" is a bad character name but a plausible note or inventory entry in prose.
+    const result = validatePatch({}, { inventory: ['a map of me'] });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.next.inventory).toEqual(['a map of me']);
+  });
+});
+
+describe('state block: weather', () => {
+  test('renders weather between location and the cast', () => {
+    const block = renderStateBlock({
+      time: 'dusk',
+      location: 'The docks',
+      weather: 'Overcast, light drizzle',
+      present: ['Ada'],
+    });
+    const lines = block.split('\n');
+    expect(lines.indexOf('Weather: Overcast, light drizzle')).toBe(
+      lines.indexOf('Location: The docks') + 1,
+    );
+  });
+
+  test('omits an empty weather line rather than emitting a bare label', () => {
+    expect(renderStateBlock({ weather: '   ' })).toBe('');
+  });
+
+  /**
+   * Shedding is by priority, not by size: notes go first, then inventory, conditions,
+   * weather, cast, location, time. A budget too tight for the whole block therefore drops
+   * the LOWEST-priority section that is present, whatever its length — so weather goes
+   * before the cast list even when the cast list is what does not fit.
+   */
+  test('sheds weather before the cast list', () => {
+    const state = {
+      time: 'late evening',
+      location: 'The Compass Rose',
+      weather: 'Overcast, light drizzle, humid, with a wind off the water',
+      present: ['Ada', 'Ivan'],
+    };
+    // Room for time, location and cast, but not weather as well.
+    const tight = renderStateBlock(state, 32);
+    expect(tight).not.toContain('Weather:');
+    expect(tight).toContain('Present: Ada, Ivan');
+  });
+
+  test('keeps time and location longest', () => {
+    const state = {
+      time: 'late evening',
+      location: 'The Compass Rose',
+      weather: 'Overcast',
+      present: ['Ada'],
+      inventory: ['tube'],
+      notes: ['something'],
+    };
+    const tight = renderStateBlock(state, 20);
+    expect(tight).toContain('Time: late evening');
+  });
+});

@@ -8,6 +8,7 @@ import Setup from './routes/Setup';
 import Characters from './routes/Characters';
 import CharacterNew from './routes/CharacterNew';
 import Memory from './routes/Memory';
+import State from './routes/State';
 
 export default function App() {
   return (
@@ -18,6 +19,7 @@ export default function App() {
       <Route path="/characters/new" element={<RequireToken>{<CharacterNew />}</RequireToken>} />
       <Route path="/chat/:id" element={<RequireToken>{<Chat />}</RequireToken>} />
       <Route path="/chat/:id/memory" element={<RequireToken>{<Memory />}</RequireToken>} />
+      <Route path="/chat/:id/state" element={<RequireToken>{<State />}</RequireToken>} />
       <Route path="/settings" element={<RequireToken>{<Settings />}</RequireToken>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

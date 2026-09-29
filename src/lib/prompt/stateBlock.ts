@@ -18,7 +18,7 @@ import type { WorldState } from '../state/schema';
  * Nothing here varies per turn except the state itself: no clock, no ids, no counters.
  */
 
-type SectionKey = 'time' | 'location' | 'present' | 'conditions' | 'inventory' | 'notes';
+type SectionKey = 'time' | 'location' | 'weather' | 'present' | 'conditions' | 'inventory' | 'notes';
 
 interface Section {
   key: SectionKey;
@@ -33,6 +33,7 @@ const DROP_ORDER: SectionKey[] = [
   'notes',
   'inventory',
   'conditions',
+  'weather',
   'present',
   'location',
   'time',
@@ -87,6 +88,10 @@ function collect(state: WorldState): Section[] {
   add('time', time.length > 0 ? `Time: ${time}` : '');
   const location = state.location?.trim() ?? '';
   add('location', location.length > 0 ? `Location: ${location}` : '');
+  // Weather sits with time and location: it is scene atmosphere the narrator writes
+  // against, and it sheds before the cast list because a scene can be written indoors.
+  const weather = state.weather?.trim() ?? '';
+  add('weather', weather.length > 0 ? `Weather: ${weather}` : '');
 
   const names: Array<[SectionKey, string, string[] | undefined]> = [
     ['present', 'Present', state.present],

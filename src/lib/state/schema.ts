@@ -13,8 +13,10 @@ import { asRecord } from '../json';
  * Every field is optional — an empty document is a legitimate state, not an error.
  */
 export interface WorldState {
+  /** In-world clock, free text ("late evening", "03:40"). Not a real timestamp. */
   time?: string;
   location?: string;
+  weather?: string;
   /** Characters currently in the scene. */
   present?: string[];
   inventory?: string[];
@@ -22,6 +24,20 @@ export interface WorldState {
   conditions?: Record<string, string>;
   notes?: string[];
 }
+
+/**
+ * Words that describe a role rather than name a character.
+ *
+ * Observed in real state: `present: ["me"]`. A pronoun in a cast list is always wrong —
+ * the narrator then has to decide who "me" is, and the reader's own name never appears.
+ * Rejecting these is cheap and the failure it prevents is a scene where the user is
+ * invisible to the world model.
+ */
+const NOT_A_NAME: Record<string, true> = {
+  me: true, i: true, you: true, them: true, him: true, her: true, us: true, we: true,
+  they: true, someone: true, anyone: true, everyone: true, nobody: true, user: true,
+  'the user': true, myself: true, yourself: true,
+};
 
 /**
  * Frozen so a caller cannot mutate the shared empty document by accident. Copy it
@@ -63,7 +79,8 @@ export function validatePatch(current: WorldState, patch: unknown): ValidationRe
   for (const [key, value] of Object.entries(record)) {
     switch (key) {
       case 'time':
-      case 'location': {
+      case 'location':
+      case 'weather': {
         if (value === null) {
           delete next[key];
           break;
@@ -75,7 +92,28 @@ export function validatePatch(current: WorldState, patch: unknown): ValidationRe
         break;
       }
 
-      case 'present':
+      case 'present': {
+        if (value === null) {
+          delete next.present;
+          break;
+        }
+        const list = stringList(value);
+        if (!list) {
+          return {
+            ok: false,
+            reason: `"present" must be an array of strings or null, got ${describe(value)}`,
+          };
+        }
+        // Drop role-words rather than rejecting the whole patch: the rest of the
+        // document is usually fine, and a rejected patch means no state advances at all.
+        const names = list.filter((entry) => NOT_A_NAME[entry.trim().toLowerCase()] !== true);
+        if (names.length !== list.length) {
+          console.warn(`[state] dropped non-names from present: ${list.filter((e) => NOT_A_NAME[e.trim().toLowerCase()]).join(', ')}`);
+        }
+        next.present = names;
+        break;
+      }
+
       case 'inventory':
       case 'notes': {
         if (value === null) {
