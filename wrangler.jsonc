@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "tessera",
+  "main": "./worker/src/index.ts",
+  "compatibility_date": "2026-09-29",
+  "account_id": "b6affd5f4ff8a1a9ce5582cd2bcdc4a9",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "tessera-db",
+      "database_id": "e0388d8e-2193-473f-8ba5-7450971ea729",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": { "APP_NAME": "Tessera" }
+}

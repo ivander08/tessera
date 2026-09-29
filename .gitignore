@@ -30,9 +30,13 @@ out/
 Thumbs.db
 
 # Logs
+logs
 *.log
 npm-debug.log*
+yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
 # Test / coverage
 coverage/
@@ -42,3 +46,24 @@ coverage/
 scratch/
 tmp/
 *.local.md
+
+# Vite
+dist-ssr
+*.local
+
+# Project files
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Wrangler generated types are committed; local build info is not
+node_modules/.tmp/
+
+# Native wrapper build output and generated projects — regenerate with
+# `npx cap add android` / `cargo build`. See WRAPPERS.md.
+src-tauri/target/
+src-tauri/gen/
+android/
+ios/
