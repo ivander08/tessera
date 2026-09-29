@@ -1,11 +1,50 @@
 @import "tailwindcss";
 
+/*
+ * Theme tokens live on :root and are written at runtime by `src/lib/theme.ts`.
+ * The values below are the dark defaults, present so the first paint before the stored
+ * theme loads is not a flash of unstyled content.
+ *
+ * Components reference `var(--ink)` and friends rather than Tailwind's palette, so a
+ * theme is data rather than a rebuild. Tailwind is still used for layout and spacing.
+ */
+:root {
+  --surface: #14110f;
+  --surface-raised: #1e1a17;
+  --surface-overlay: #262019;
+  --ink: #ece6df;
+  --ink-dim: #9a9089;
+  --ink-faint: #6b635c;
+  --accent: #c8a882;
+  --accent-ink: #14110f;
+  --line: rgba(255, 255, 255, 0.08);
+  --danger: #e0705f;
+  --good: #7fb069;
+  --warn: #d9a441;
+  --quote: #b9ada1;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --font-base: 15px;
+  --font-sm: 13px;
+  --font-xs: 11px;
+  --font-lg: 19px;
+  --line-height: 1.6;
+  --avatar-size: 32px;
+  --space: 8px;
+}
+
+/* Tailwind utilities bound to the tokens, so both systems agree. */
 @theme {
-  --color-surface: #14110f;
-  --color-surface-raised: #1e1a17;
-  --color-ink: #ece6df;
-  --color-ink-dim: #9a9089;
-  --color-accent: #c8a882;
+  --color-surface: var(--surface);
+  --color-raised: var(--surface-raised);
+  --color-overlay: var(--surface-overlay);
+  --color-ink: var(--ink);
+  --color-dim: var(--ink-dim);
+  --color-faint: var(--ink-faint);
+  --color-accent: var(--accent);
+  --color-line: var(--line);
+  --color-danger: var(--danger);
+  --color-good: var(--good);
+  --color-warn: var(--warn);
 }
 
 html,
@@ -16,7 +55,482 @@ body,
 
 body {
   margin: 0;
-  background-color: var(--color-surface);
-  color: var(--color-ink);
+  background-color: var(--surface);
+  color: var(--ink);
+  font-size: var(--font-base);
+  line-height: var(--line-height);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* ---------------------------------------------------------------- transcript */
+
+.msg {
+  display: grid;
+  grid-template-columns: var(--avatar-size) 1fr;
+  gap: calc(var(--space) * 1.25);
+  padding: calc(var(--space) * 1.5) 0;
+  border-top: 1px solid transparent;
+}
+
+/* The first message should not carry the separation the others need. */
+.msg:first-child {
+  padding-top: calc(var(--space) * 0.5);
+}
+
+.msg-avatar {
+  width: var(--avatar-size);
+  height: var(--avatar-size);
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--surface-overlay);
+  display: grid;
+  place-items: center;
+  font-size: var(--font-xs);
+  color: var(--ink-dim);
+  user-select: none;
+}
+
+.msg-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.msg-body {
+  min-width: 0;
+}
+
+.msg-head {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--space) * 1.5);
+  min-height: calc(var(--space) * 2.5);
+}
+
+.msg-name {
+  font-weight: 600;
+  font-size: var(--font-sm);
+  color: var(--ink);
+}
+
+.msg-user .msg-name {
+  color: var(--accent);
+}
+
+.msg-content {
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Actions are revealed on hover where hover exists, and always visible where it does
+ * not. A phone has no hover state, so hover-only controls are simply unreachable there.
+ */
+.msg-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.msg:hover .msg-actions,
+.msg:focus-within .msg-actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .msg-actions {
+    opacity: 1;
+  }
+}
+
+.msg-action {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+
+.msg-action:hover:not(:disabled) {
+  background: var(--surface-overlay);
+  color: var(--ink);
+}
+
+.msg-action:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.msg-swipe-count {
+  font-size: var(--font-xs);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  min-width: 2.4em;
+  text-align: center;
+}
+
+.msg-meta {
+  display: flex;
+  gap: calc(var(--space) * 1.5);
+  margin-top: calc(var(--space) * 0.5);
+  font-size: var(--font-xs);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.msg-cache.good {
+  color: var(--good);
+}
+.msg-cache.warn {
+  color: var(--warn);
+}
+.msg-cache.bad {
+  color: var(--ink-faint);
+}
+
+/* Bubble mode: opt-in, because flat reads better for prose but some people want chat. */
+.msg-bubbled {
+  grid-template-columns: 1fr;
+}
+
+.msg-bubbled .msg-avatar {
+  display: none;
+}
+
+.msg-bubbled .msg-content {
+  background: var(--surface-raised);
+  border-radius: 12px;
+  padding: calc(var(--space) * 1.25) calc(var(--space) * 1.5);
+  max-width: 92%;
+}
+
+.msg-bubbled.msg-user .msg-content {
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+  margin-left: auto;
+}
+
+.msg-bubbled .msg-head {
+  padding: 0 calc(var(--space) * 0.5) calc(var(--space) * 0.5);
+}
+
+/* Editing swaps the prose for a textarea in place, so the message does not move. */
+.msg-edit textarea {
+  width: 100%;
+  background: var(--surface-raised);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: calc(var(--space) * 1.25);
+  font: inherit;
+  line-height: inherit;
+  resize: none;
+  overflow: hidden;
+}
+
+.msg-edit textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.msg-edit-actions {
+  display: flex;
+  gap: var(--space);
+  justify-content: flex-end;
+  margin-top: var(--space);
+}
+
+.msg-edit-actions button {
+  font-size: var(--font-sm);
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+
+.msg-edit-actions button.primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: transparent;
+  font-weight: 600;
+}
+
+.msg-edit-actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* A caret rather than a spinner: the text itself is the progress indicator. */
+.msg-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: caret 1s steps(2, start) infinite;
+}
+
+@keyframes caret {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  51%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .msg-caret {
+    animation: none;
+    opacity: 1;
+  }
+}
+
+/* ---------------------------------------------------------------- markdown */
+
+.md-p {
+  margin: 0 0 calc(var(--space) * 1.1);
+}
+
+.md-p:last-child {
+  margin-bottom: 0;
+}
+
+.md-em {
+  font-style: italic;
+  color: var(--quote);
+}
+
+.md-strong {
+  font-weight: 650;
+}
+
+.md-quote {
+  margin: calc(var(--space) * 1.1) 0;
+  padding-left: calc(var(--space) * 1.5);
+  border-left: 2px solid var(--line);
+  color: var(--ink-dim);
+}
+
+.md-hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: calc(var(--space) * 2) 0;
+}
+
+.md-list {
+  margin: calc(var(--space) * 1.1) 0;
+  padding-left: calc(var(--space) * 2.5);
+}
+
+.md-code,
+.md-pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+  background: var(--surface-overlay);
+  border-radius: 4px;
+}
+
+.md-code {
+  padding: 0.1em 0.35em;
+}
+
+.md-pre {
+  padding: var(--space);
+  overflow-x: auto;
+}
+
+.md-link {
+  color: var(--accent);
+  text-underline-offset: 2px;
+}
+
+.md-heading {
+  font-weight: 650;
+}
+
+.md-image-alt {
+  color: var(--ink-faint);
+  font-style: italic;
+}
+
+.md-raw {
+  color: var(--ink-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+}
+
+.md-table {
+  border-collapse: collapse;
+  margin: calc(var(--space) * 1.1) 0;
+}
+
+.md-table th,
+.md-table td {
+  border: 1px solid var(--line);
+  padding: 4px 8px;
+  text-align: left;
+}
+
+/* The collapsible block a state or preset note arrives in. */
+.md-details {
+  margin: calc(var(--space) * 1.1) 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-raised) 60%, transparent);
+}
+
+.md-summary {
+  cursor: pointer;
+  padding: calc(var(--space) * 0.9) calc(var(--space) * 1.25);
+  font-size: var(--font-sm);
+  color: var(--ink-dim);
+  list-style: none;
+}
+
+.md-summary::-webkit-details-marker {
+  display: none;
+}
+
+.md-summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 6px;
+  transition: transform 120ms ease;
+}
+
+.md-details[open] .md-summary::before {
+  transform: rotate(90deg);
+}
+
+.md-details-body {
+  padding: 0 calc(var(--space) * 1.25) calc(var(--space) * 1.25);
+  font-size: var(--font-sm);
+  color: var(--ink-dim);
+}
+
+/* ---------------------------------------------------------------- shell */
+
+.app-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space);
+  padding: calc(var(--space) * 1.25) calc(var(--space) * 2);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(8px);
+  z-index: 10;
+}
+
+.app-link {
+  color: var(--ink-dim);
+  text-decoration: none;
+  font-size: var(--font-sm);
+}
+
+.app-link:hover {
+  color: var(--ink);
+}
+
+/* The composer sticks to the bottom and respects the on-screen keyboard. */
+.composer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  gap: var(--space);
+  align-items: flex-end;
+  padding: calc(var(--space) * 1.25) calc(var(--space) * 2);
+  padding-bottom: max(calc(var(--space) * 1.25), env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+.composer textarea {
+  flex: 1;
+  min-height: 40px;
+  max-height: 40vh;
+  background: var(--surface-raised);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: calc(var(--space) * 1.25);
+  font: inherit;
+  line-height: inherit;
+  resize: none;
+}
+
+.composer textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.btn {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-dim);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+}
+
+.btn.primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: transparent;
+  font-weight: 600;
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.field {
+  width: 100%;
+  background: var(--surface-raised);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font: inherit;
+}
+
+.field:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-raised);
+}
+
+@media (max-width: 640px) {
+  .app-bar,
+  .composer {
+    padding-left: calc(var(--space) * 1.5);
+    padding-right: calc(var(--space) * 1.5);
+  }
 }
