@@ -284,33 +284,55 @@ Implemented in `worker/src/cors.ts` and wired into the Worker entry:
 3. The preflight is answered **before** the auth check — a preflight carries no
    `Authorization` header by design, so routing it through `isAuthorized` would 401 every one
    of them.
-4. Origins are an explicit allowlist (`https://localhost`, `tauri://localhost`,
-   `https://tauri.localhost`, and the two Vite dev origins), never `*`: the bearer token is
-   the only credential, and `*` would let any page on the internet drive this API from a
-   user's browser. `Vary: Origin` is set so a shared cache cannot serve one origin's
-   response to another.
+4. Origins are an explicit allowlist, never `*`: the bearer token is the only credential,
+   and `*` would let any page on the internet drive this API from a user's browser.
+   `Vary: Origin` is set so a shared cache cannot serve one origin's response to another.
 
-Verified against the local Worker: preflight returns `204` with the headers above for
-`https://localhost`, an authenticated request returns `200` with `Access-Control-Allow-Origin`
-echoed, and a request from an unlisted origin receives no CORS headers at all.
+   The list must include **`http://tauri.localhost`** — Tauri on Windows serves from the
+   plain-`http` variant, not `https`. `tauri-utils` documents this directly:
+   `access-control-allow-origin: http://tauri.localhost`. `https://tauri.localhost` is
+   only used when `app.windows[].useHttpsScheme` is set, which it is not. Omitting the
+   `http` entry makes every desktop API call fail CORS, and the webview shows nothing
+   that identifies the cause.
+
+   Verified against the local Worker: preflight returns `204` with the headers above for
+   `https://localhost` and `http://tauri.localhost`, an authenticated request returns `200`
+   with `Access-Control-Allow-Origin` echoed, and a request from an unlisted origin
+   receives no CORS headers at all. The desktop binary was then driven over CDP and
+   confirmed to load data from the deployed Worker — see `docs/desktop-verification.md`.
 
 ---
 
 ## 5. Not done
 
-- **No APK and no installer have been built.** `npx cap add android` needs the Android SDK
-  and a JDK, and `cargo build` needs the Rust toolchain plus platform webview dev packages.
-  Neither is assumed present, and neither is appropriate for this repo's CI.
-- **`android/` is not generated or checked in**, and `src-tauri/target/` and
-  `src-tauri/gen/` are build output. All four paths (`android/`, `ios/`,
-  `src-tauri/target/`, `src-tauri/gen/`) are in `.gitignore`.
-- **No release signing.** A keystore for Android and a signing identity for Windows/macOS
-  are unconfigured — committing either would be a mistake.
-- **No share-sheet handler wired to the importer.** The intent filter and the plugin call are
-  documented above; the `shareReceived` listener that feeds `parseCardFile()` is not written,
-  because it cannot be exercised without a device.
+- **No APK.** `npx cap add android` needs the Android SDK and JDK 21; this machine has
+  JDK 17 and no SDK. The configuration, icons and web bundle are all done — see
+  [`docs/android-apk.md`](docs/android-apk.md) for the exact remaining steps.
+- **No share-sheet handler wired to the importer.** The intent filter and the plugin call
+  are documented above; the `shareReceived` listener that feeds `parseCardFile()` is not
+  written, because it cannot be exercised without a device.
 - **No iOS wrapper.** Capacitor's iOS target would work, but it needs macOS + Xcode, and
   distribution is a different problem entirely (§2).
+- **No release signing.** A keystore for Android and a signing identity for Windows/macOS
+  are unconfigured — committing either would be a mistake.
+
+### Built and verified
+
+The **desktop app is built**, not merely configured:
+
+| Artifact | Size |
+|---|---|
+| `src-tauri/target/release/tessera.exe` | 9.1 MB |
+| `Tessera_0.1.0_x64_en-US.msi` | 3.69 MiB |
+| `Tessera_0.1.0_x64-setup.exe` (NSIS) | 2.79 MiB |
+
+Against Electron's ~150 MB. It was launched, attached to over CDP, and confirmed to load
+chats and the model list from the deployed Worker across origins — see
+[`docs/desktop-verification.md`](docs/desktop-verification.md).
+
+`src-tauri/target/` and `src-tauri/gen/` are build output and gitignored. `src-tauri/icons/`
+is committed: the Windows build hard-fails without an `.ico`, so the generated icons are
+part of the source tree rather than a build step.
 
 ---
 
