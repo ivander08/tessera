@@ -8,6 +8,7 @@ import { estimateChatTokens, estimateTokens, applyCalibration } from '../../src/
 import { alwaysOnLore, parseLorebook } from '../../src/lib/cards/lorebook';
 import type { CharacterCardJson } from '../../src/lib/cards/types';
 import { renderMemoryBlock } from '../../src/lib/prompt/memoryBlock';
+import { dynamicMacrosIn, substituteHead, substituteTail } from '../../src/lib/prompt/macros';
 import { renderStateBlock } from '../../src/lib/prompt/stateBlock';
 import { recall } from './memory/recall';
 import { loadState } from './state/update';
@@ -134,26 +135,65 @@ export async function buildPrompt(
     buildStateBlock(env, chat.id, calibration),
   ]);
 
+  // `{{char}}` and `{{user}}` resolve to values fixed for the chat's life, so applying
+  // them to the head leaves the cached prefix byte-identical between turns. The dynamic
+  // tier is deliberately NOT applied here — a card with `{{time}}` in its description
+  // would otherwise rewrite the prefix every turn.
+  //
+  // `{{user}}` is only substituted when a persona actually exists. Falling back to the
+  // pronoun "You" is worse than leaving the placeholder: it produces "She calls You by
+  // name", which reads as a proper noun and makes the model invent a name for the user.
+  // A visible `{{user}}` is a prompt to go set a persona; a wrong name is a mystery.
+  const macroContext = personaRow
+    ? { char: card.name, user: personaRow.name, persona: personaRow.name }
+    : { char: card.name, user: null, persona: null };
+
+  // Warn rather than silently accept: this is the one way a card can kill the cache
+  // without anyone editing the app.
+  const headSources = [
+    card.systemPrompt || settings.systemPrompt,
+    card.description,
+    card.personality,
+    card.scenario,
+    card.mesExample,
+  ];
+  const offending = [...new Set(headSources.flatMap(dynamicMacrosIn))];
+  if (offending.length > 0) {
+    console.warn(
+      `[prefix-guard] chat=${chat.id} card has dynamic macros in the cached head ` +
+        `(${offending.map((m) => `{{${m}}}`).join(', ')}); they are left unexpanded so the ` +
+        `prefix stays stable. Move them to the tail to have them resolve.`,
+    );
+  }
+
   const input: AssembleInput = {
-    systemPrompt: card.systemPrompt || settings.systemPrompt,
+    systemPrompt: substituteHead(card.systemPrompt || settings.systemPrompt, macroContext),
     character: {
       name: card.name,
-      description: card.description,
-      personality: card.personality,
-      scenario: card.scenario,
-      mesExample: card.mesExample,
+      description: substituteHead(card.description, macroContext),
+      personality: substituteHead(card.personality, macroContext),
+      scenario: substituteHead(card.scenario, macroContext),
+      mesExample: substituteHead(card.mesExample, macroContext),
     },
     persona: personaRow
-      ? { name: personaRow.name, description: personaRow.description ?? '' }
+      ? { name: personaRow.name, description: substituteHead(personaRow.description ?? '', macroContext) }
       : null,
-    lorebook: alwaysOnLore(parseLorebook(card.characterBook)),
-    history,
+    lorebook: alwaysOnLore(parseLorebook(card.characterBook)).map((entry) => ({
+      id: entry.id,
+      content: substituteHead(entry.content, macroContext),
+    })),
+    history: history.map((row) => ({
+      role: row.role,
+      content: substituteHead(row.content, macroContext),
+    })),
     tail: {
-      memoryBlock,
-      stateBlock,
-      authorsNote: settings.authorsNote,
-      postHistoryInstructions: card.postHistoryInstructions,
-      userMessage: options.userContent,
+      // The tail gets both tiers: it is after `tailStart`, so it cannot disturb the
+      // cached prefix however much it changes.
+      memoryBlock: substituteTail(memoryBlock, macroContext),
+      stateBlock: substituteTail(stateBlock, macroContext),
+      authorsNote: substituteTail(settings.authorsNote, macroContext),
+      postHistoryInstructions: substituteTail(card.postHistoryInstructions, macroContext),
+      userMessage: substituteTail(options.userContent, macroContext),
     },
   };
 

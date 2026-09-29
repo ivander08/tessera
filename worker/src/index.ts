@@ -19,6 +19,13 @@ import {
   swipeMessage,
 } from './messages';
 import { deletePreset, getPreset, importPreset, listPresets } from './presets';
+import {
+  createPersona,
+  deletePersona,
+  listPersonas,
+  setChatPersona,
+  updatePersona,
+} from './personas';
 import { onWorkerWake } from './jobs';
 
 export default {
@@ -132,6 +139,20 @@ async function route(req: Request, env: Env, url: URL, ctx: ExecutionContext): P
   if (messagesMatch) {
     if (method !== 'GET') return notFound();
     return listMessages(env, decodeURIComponent(messagesMatch[1]));
+  }
+
+  if (path === '/api/personas') {
+    if (method === 'GET') return listPersonas(env);
+    if (method === 'POST') return createPersona(env, req);
+    if (method === 'PATCH') return updatePersona(env, req);
+    return notFound();
+  }
+
+  if (path === '/api/persona' && method === 'POST') return setChatPersona(env, req);
+
+  const personaMatch = /^\/api\/personas\/([^/]+)$/.exec(path);
+  if (personaMatch && method === 'DELETE') {
+    return deletePersona(env, decodeURIComponent(personaMatch[1]));
   }
 
   if (path === '/api/message/swipe' && method === 'POST') return swipeMessage(env, req);
