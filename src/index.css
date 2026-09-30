@@ -697,20 +697,17 @@ textarea.field {
   border-top-color: transparent;
 }
 
-/* The opening of a scene gets a drop cap. It is the one flourish in the whole
-   interface, spent on the first thing the reader sees, and it is what makes the first
-   screen read as a page of prose rather than a log that has not scrolled yet.
-   The class is applied by `Turn` only when the prose actually starts with a letter:
-   CSS cannot see the character, and a drop cap on an em-dash or a quote is a floating
-   punctuation mark. */
+/* The opening of a scene gets a raised initial — the one flourish in the interface,
+   spent on the first thing the reader sees.
+   Deliberately small and deliberately not floated. Floating takes the letter out of the
+   line, so `Q` sits in the margin while "uill looks up" carries on beside it and the word
+   is broken; sizing it like a display cap pushes every following line down. At 1.5em it
+   reads as an illuminated first letter while the sentence stays one uninterrupted line. */
 .prose.drop-cap > .md-p:first-child::first-letter {
-  float: left;
   font-family: var(--font-prose);
-  font-size: 3.1em;
-  line-height: 0.82;
-  font-weight: 400;
+  font-size: 1.5em;
+  line-height: 1;
   color: var(--brass);
-  padding: 0.06em 0.1em 0 0;
 }
 
 .turn-avatar {
@@ -1263,6 +1260,84 @@ textarea.field {
 .color-swatch::-moz-color-swatch {
   border: 0;
   border-radius: 4px;
+}
+
+/* The scene, always on screen. Sticky under the titlebar so it survives a scroll: the
+   whole reason it exists is that you want to know the time and place *while* reading,
+   and something you have to scroll up for is the thing it replaced. */
+.scene-bar {
+  position: sticky;
+  top: 52px;
+  z-index: 18;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 34px;
+  padding: 5px 16px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--ground) 88%, transparent);
+  backdrop-filter: blur(12px);
+  color: var(--ink-dim);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.scene-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.scene-bar:hover {
+  color: var(--ink);
+}
+
+.scene-bar > svg {
+  flex-shrink: 0;
+  color: var(--brass);
+}
+
+.scene-chip-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  flex-shrink: 0;
+  max-width: 34ch;
+}
+
+.scene-chip-label {
+  color: var(--ink-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.scene-chip-value {
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scene-bar:hover .scene-chip-value {
+  color: var(--ink);
+}
+
+.scene-bar-empty {
+  color: var(--ink-faint);
+  font-style: italic;
+}
+
+@media (max-width: 560px) {
+  .scene-bar {
+    gap: 10px;
+    padding: 5px 13px;
+  }
 }
 
 /* ---------------------------------------------------------------- the shelf */

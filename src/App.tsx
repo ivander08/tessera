@@ -13,6 +13,7 @@ import State from './routes/State';
 import Personas from './routes/Personas';
 import Forge from './routes/Forge';
 import Presets from './routes/Presets';
+import PresetEdit from './routes/PresetEdit';
 
 export default function App() {
   return (
@@ -28,6 +29,7 @@ export default function App() {
       <Route path="/personas" element={<RequireToken>{<Personas />}</RequireToken>} />
       <Route path="/forge" element={<RequireToken>{<Forge />}</RequireToken>} />
       <Route path="/presets" element={<RequireToken>{<Presets />}</RequireToken>} />
+      <Route path="/presets/:id" element={<RequireToken>{<PresetEdit />}</RequireToken>} />
       <Route path="/settings" element={<RequireToken>{<Settings />}</RequireToken>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

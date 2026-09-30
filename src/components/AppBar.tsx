@@ -24,10 +24,13 @@ export interface AppBarProps {
   /**
    * Where the title links to, or null to leave it plain text.
    *
-   * The title is the app's most reliable way back: it is in the same place on every
-   * screen and it is what a reader reaches for when they are lost. Defaulting it to the
-   * scene list means every screen has a way home without each one remembering to add
-   * one — the failure that left the reader hunting through the menu.
+   * Defaults to the scene list, because the title is the app's most reliable way back: it
+   * is in the same place on every screen and it is what a reader reaches for when they
+   * are lost.
+   *
+   * It is suppressed when the bar already has a `lead` back link, which goes somewhere
+   * more specific — the character list, the chat you came from. Two arrows side by side
+   * pointing at different places is not a richer affordance, it is a question.
    */
   titleHref?: string | null;
 }
@@ -38,8 +41,10 @@ export function AppBar({
   trailing,
   scoped,
   onMenuOpen,
-  titleHref = '/',
+  titleHref,
 }: AppBarProps) {
+  // One way back. A screen with its own back link keeps that one and shows a plain title.
+  const href = titleHref !== undefined ? titleHref : lead ? null : '/';
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement | null>(null);
   const location = useLocation();
@@ -71,8 +76,8 @@ export function AppBar({
   return (
     <header className="bar">
       {lead}
-      {titleHref && title ? (
-        <Link to={titleHref} className="bar-home" title="All chats">
+      {href && title ? (
+        <Link to={href} className="bar-home" title="All chats">
           {title}
         </Link>
       ) : (

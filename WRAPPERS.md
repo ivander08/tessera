@@ -203,7 +203,7 @@ production", and it would load the remote SPA instead of the bundled one. See §
 window around the same `dist/` bundle:
 
 - `build.frontendDist: "../dist"` — the same Vite output.
-- `build.beforeDevCommand: "bun run dev"` and `devUrl: "http://localhost:5173"` for HMR.
+- `build.beforeDevCommand: "bun run dev"` and `devUrl: "http://localhost:5180"` for HMR.
 - `build.beforeBuildCommand: "bun run build"`.
 - A 1100×780 window (min 420×480) — chat-shaped: a message column with room for a sidebar.
 - `dragDropEnabled: false`, which is required for HTML5 drag-and-drop on Windows because

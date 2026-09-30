@@ -167,9 +167,12 @@ export default function Characters() {
             const busy = busyId === character.id;
             return (
               <article key={character.id} className="plate">
-                <div className="plate-portrait">
-                  <Avatar src={character.avatar} name={shown} zoomable />
-                </div>
+                {/* The portrait opens the character's own screen, which is where the
+                    avatar is actually set — clicking a picture to change it is the most
+                    direct thing it can do here. */}
+                <Link to={`/characters/${character.id}/edit`} className="plate-portrait">
+                  <Avatar src={character.avatar} name={shown} />
+                </Link>
 
                 <div className="plate-body">
                   <div className="plate-head">

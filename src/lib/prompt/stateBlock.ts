@@ -18,7 +18,15 @@ import type { WorldState } from '../state/schema';
  * Nothing here varies per turn except the state itself: no clock, no ids, no counters.
  */
 
-type SectionKey = 'time' | 'location' | 'weather' | 'present' | 'conditions' | 'inventory' | 'notes';
+type SectionKey =
+  | 'time'
+  | 'location'
+  | 'weather'
+  | 'present'
+  | 'away'
+  | 'conditions'
+  | 'inventory'
+  | 'notes';
 
 interface Section {
   key: SectionKey;
@@ -33,6 +41,7 @@ const DROP_ORDER: SectionKey[] = [
   'notes',
   'inventory',
   'conditions',
+  'away',
   'weather',
   'present',
   'location',
@@ -102,6 +111,11 @@ function collect(state: WorldState): Section[] {
     add(key, entries.length > 0 ? `${label}: ${entries.join(', ')}` : '');
   }
 
+  // Rendered right after `present`, because the two answer the same question — who is in
+  // the room — and a narrator that reads only one of them writes the other person into
+  // the scene. Only characters who are AWAY appear here, so the common case costs nothing.
+  add('away', renderAway(state.away));
+
   add('conditions', renderConditions(state.conditions));
 
   // Notes are whole sentences, so they get their own lines rather than being
@@ -110,6 +124,17 @@ function collect(state: WorldState): Section[] {
   add('notes', notes.length > 0 ? `Notes:\n${notes.map((note) => `- ${note}`).join('\n')}` : '');
 
   return out;
+}
+
+/** Sorted by name: a record's iteration order is insertion order, which is not stable. */
+function renderAway(away: Record<string, string> | undefined): string {
+  const entries = Object.entries(away ?? {})
+    .map(([name, place]) => [name.trim(), place.trim()] as const)
+    .filter(([name, place]) => name.length > 0 && place.length > 0)
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+
+  if (entries.length === 0) return '';
+  return `Elsewhere: ${entries.map(([name, place]) => `${name} is at ${place}`).join('; ')}`;
 }
 
 /** Sorted by name: a record's iteration order is insertion order, which is not stable. */

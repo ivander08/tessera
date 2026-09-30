@@ -129,23 +129,57 @@ describe('FTS5 escaping', () => {
   test('wraps each token in quotes and doubles internal quotes', () => {
     expect(escapeFtsToken('Ada')).toBe('"Ada"');
     expect(escapeFtsToken('say "hi"')).toBe('"say ""hi"""');
-    expect(buildMatchQuery('Ada Lovelace')).toBe('"Ada" "Lovelace"');
+    expect(buildMatchQuery('Ada Lovelace')).toBe('"Ada" OR "Lovelace"');
   });
 
   test('neutralizes every FTS5 operator by making it a literal word', () => {
     // `-` is NOT, `*` is prefix, `NEAR(` opens a proximity clause, `^` is a column
     // filter, `OR`/`AND` are boolean. All become plain quoted text.
-    expect(buildMatchQuery('Ada -refuses')).toBe('"Ada" "-refuses"');
-    expect(buildMatchQuery('re*')).toBe('"re*"');
-    expect(buildMatchQuery('NEAR(Ada Bob)')).toBe('"NEAR(Ada" "Bob)"');
-    expect(buildMatchQuery('Ada OR Bob')).toBe('"Ada" "OR" "Bob"');
+    //
+    // The leading `-` is stripped as punctuation rather than quoted, which is strictly
+    // safer: `-"refuses"` would be a NOT operator applied to a quoted phrase, so the
+    // operator is removed before it can be spelled.
+    expect(buildMatchQuery('Ada -refuses')).toBe('"Ada" OR "refuses"');
+    // Likewise the prefix operator: `re*` becomes the literal word "re", so a query
+    // cannot ask FTS5 for a prefix expansion at all.
+    expect(buildMatchQuery('re*')).toBe('"re"');
+    // Only leading and trailing punctuation is stripped, so `NEAR(Ada` keeps its
+    // interior paren — harmless, because inside the quotes FTS5 treats the whole thing
+    // as literal text and the operator cannot be spelled.
+    expect(buildMatchQuery('NEAR(Ada Bob)')).toBe('"NEAR(Ada" OR "Bob"');
     expect(buildMatchQuery('content:secret')).toBe('"content:secret"');
+  });
+
+  test('terms are ORed, because an AND over a whole message matches nothing', () => {
+    // The regression this guards: with AND, the reader's message "the chest below is
+    // locked and I have lost the thing that opens it" matched exactly one row — the
+    // question itself — because no other row contains all of its own words. Recall
+    // returned the question and the model invented an answer.
+    const query = buildMatchQuery('the chest below is locked and I have lost the key');
+    expect(query).toContain(' OR ');
+    expect(query).not.toContain('"the"');
+    expect(query).not.toContain('"is"');
+    expect(query).not.toContain('"and"');
+    expect(query).toContain('"chest"');
+    expect(query).toContain('"locked"');
+    expect(query).toContain('"key"');
+  });
+
+  test('an all-stopword query keeps its words rather than matching everything', () => {
+    // Dropping every token would leave an empty MATCH, which is a syntax error — and
+    // matching nothing is still better than matching the entire chat.
+    expect(buildMatchQuery('what is it')).toBe('"what" OR "is" OR "it"');
+  });
+
+  test('strips surrounding punctuation so a sentence finds its words', () => {
+    // "it?" and "it." are different tokens to FTS5 and neither is the word "it".
+    expect(buildMatchQuery('the key, marked 417.')).toBe('"key" OR "marked" OR "417"');
   });
 
   test('collapses whitespace and returns empty for blank input', () => {
     expect(buildMatchQuery('')).toBe('');
     expect(buildMatchQuery('   \t\n ')).toBe('');
-    expect(buildMatchQuery('  Ada   Bob  ')).toBe('"Ada" "Bob"');
+    expect(buildMatchQuery('  Ada   Bob  ')).toBe('"Ada" OR "Bob"');
   });
 
   test('an injected operator is neutralized — the raw query would return the wrong rows', async () => {
@@ -170,15 +204,23 @@ describe('FTS5 escaping', () => {
     // contains the word "OR".
     expect(rawMatches('room OR Ada')).toHaveLength(2);
 
-    // Escaped, `OR` is the literal word "OR", so the query is a conjunction of three
-    // words the user actually typed and matches nothing. No row is invented.
-    expect(await recall(env, chatId, 'room OR Ada', 10)).toEqual([]);
+    // Escaped, `OR` is the literal word "OR" and the only rows returned are ones that
+    // genuinely contain a word the reader typed. With OR-joined terms that means the two
+    // messages containing "room", not the two the injected operator would have produced.
+    const hits = await recall(env, chatId, 'room OR Ada', 10);
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.every((hit) => hit.kind === 'message')).toBe(true);
+
+    // The literal word "OR" appears in neither seeded message, so a row returned FOR it
+    // would mean the operator was interpreted rather than quoted.
+    const seqs = hits.map((hit) => hit.refId);
+    expect(new Set(seqs).size).toBe(seqs.length);
 
     // A bare `"` is worse than a wrong result: unescaped it is an unterminated phrase
     // and throws, taking the whole recall down. Escaped, it is literal text.
     expect(() => rawMatches('Ada "refuses')).toThrow(/unterminated string/);
-    const hits = await recall(env, chatId, 'Ada "refuses', 10);
-    expect(hits.map((hit) => hit.kind)).toEqual(['message']);
+    const quoted = await recall(env, chatId, 'Ada "refuses', 10);
+    expect(quoted.map((hit) => hit.kind)).toEqual(['message']);
   });
 });
 
@@ -202,13 +244,13 @@ describe('recall', () => {
 
     const messageQuery = calls.find((call) => call.sql.includes('messages_fts MATCH'));
     expect(messageQuery).toBeDefined();
-    expect(messageQuery?.params).toEqual(['"Ada" "room"', chatId, 5]);
+    expect(messageQuery?.params).toEqual(['"Ada" OR "room"', chatId, 5]);
     // FTS5 stores only a rowid; without this join there is no way to filter by chat.
     expect(messageQuery?.sql).toContain('JOIN messages m ON m.seq = messages_fts.rowid');
     expect(messageQuery?.sql).toContain('bm25(messages_fts)');
 
     const factQuery = calls.find((call) => call.sql.includes('facts_fts MATCH'));
-    expect(factQuery?.params).toEqual(['"Ada" "room"', chatId, 5]);
+    expect(factQuery?.params).toEqual(['"Ada" OR "room"', chatId, 5]);
     // Superseded facts must not be recalled: the caller labels these "Established
     // facts", and a superseded one is something the story has moved past.
     expect(factQuery?.sql).toContain("f.status = 'active'");

@@ -227,6 +227,74 @@ describe('world state: weather and cast hygiene', () => {
   });
 });
 
+/**
+ * `away` is what stops the narrator writing someone into a room they walked out of, so
+ * the one thing it must never do is contradict `present`.
+ */
+describe('world state: characters who have left', () => {
+  test('records where someone went', () => {
+    const result = validatePatch({ present: ['Ada'] }, { away: { Bram: 'the courtyard' } });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.next.away).toEqual({ Bram: 'the courtyard' });
+  });
+
+  test('a departure moves someone out of present', () => {
+    const result = validatePatch(
+      { present: ['Ada', 'Bram'] },
+      { present: ['Ada'], away: { Bram: 'the courtyard' } },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.next.present).toEqual(['Ada']);
+      expect(result.next.away).toEqual({ Bram: 'the courtyard' });
+    }
+  });
+
+  test('someone listed as present is not also elsewhere', () => {
+    // A model that writes both is confused; rendering the contradiction would tell the
+    // narrator that Bram is in the room and out of it. Present wins — the reader can see
+    // who is there.
+    const result = validatePatch(
+      { present: ['Bram'], away: { Bram: 'the courtyard', Ada: 'the gate' } },
+      { present: ['Bram'] },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.next.away).toEqual({ Ada: 'the gate' });
+  });
+
+  test('a returning character leaves no stale away entry', () => {
+    const result = validatePatch(
+      { present: ['Ada'], away: { Bram: 'the courtyard' } },
+      { present: ['Ada', 'Bram'] },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.next.away).toBeUndefined();
+  });
+
+  test('pronouns are dropped from away, like present', () => {
+    const result = validatePatch({}, { away: { me: 'the kitchen', Bram: 'the gate' } });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.next.away).toEqual({ Bram: 'the gate' });
+  });
+
+  test('clears with null, and an emptied map disappears', () => {
+    const cleared = validatePatch({ away: { Bram: 'the gate' } }, { away: null });
+    expect(cleared.ok).toBe(true);
+    if (cleared.ok) expect(cleared.next.away).toBeUndefined();
+
+    // Every entry filtered out is the same as clearing it: an empty record would render
+    // as a heading with nothing under it.
+    const emptied = validatePatch({}, { away: { me: 'somewhere' } });
+    expect(emptied.ok).toBe(true);
+    if (emptied.ok) expect(emptied.next.away).toBeUndefined();
+  });
+
+  test('rejects a value that is not a name -> place map', () => {
+    const result = validatePatch({}, { away: ['Bram'] });
+    expect(result.ok).toBe(false);
+  });
+});
+
 describe('state block: weather', () => {
   test('renders weather between location and the cast', () => {
     const block = renderStateBlock({
@@ -275,5 +343,35 @@ describe('state block: weather', () => {
     };
     const tight = renderStateBlock(state, 20);
     expect(tight).toContain('Time: late evening');
+  });
+});
+
+/**
+ * The rendered block is what the narrator actually reads, so a section that exists in
+ * the document but never renders is a feature that does not work.
+ */
+describe('state block: characters elsewhere', () => {
+  test('renders away right after present, so the two read together', () => {
+    const block = renderStateBlock({
+      location: 'The scriptorium',
+      present: ['Ada'],
+      away: { Bram: 'the courtyard' },
+    });
+    const lines = block.split('\n');
+    expect(lines.indexOf('Elsewhere: Bram is at the courtyard')).toBe(
+      lines.indexOf('Present: Ada') + 1,
+    );
+  });
+
+  test('sorts entries by name rather than by insertion order', () => {
+    // A record's iteration order is insertion order, so without a sort the same state
+    // would render differently depending on which patch happened to write it first.
+    const block = renderStateBlock({ away: { Zoe: 'the gate', Ada: 'the well' } });
+    expect(block).toContain('Elsewhere: Ada is at the well; Zoe is at the gate');
+  });
+
+  test('omits the section entirely when nobody is away', () => {
+    const block = renderStateBlock({ location: 'The scriptorium', present: ['Ada'] });
+    expect(block).not.toContain('Elsewhere');
   });
 });

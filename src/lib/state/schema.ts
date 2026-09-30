@@ -20,6 +20,22 @@ export interface WorldState {
   /** Characters currently in the scene. */
   present?: string[];
   inventory?: string[];
+  /**
+   * Characters who are NOT where the scene is, and where they are instead.
+   *
+   * `location` is single-valued because a scene has one point of view: the reader is
+   * somewhere, and `present` lists who is there with them. But a story routinely cuts
+   * away — "meanwhile, Ada is still in the courtyard" — and without this the narrator
+   * has no way to know that Ada is not standing in the room, so she keeps being written
+   * into a scene she left.
+   *
+   * Deliberately a map rather than a full location per character: only the characters
+   * who are AWAY need an entry, which keeps the common case (everyone together) at zero
+   * extra tokens. Per-character clocks and timezones are not modelled — a scene that
+   * spans timezones is rare enough that inventing a timezone table would cost every
+   * other scene for it.
+   */
+  away?: Record<string, string>;
   /** Character name -> short condition, e.g. `{ Ada: 'bleeding' }`. */
   conditions?: Record<string, string>;
   notes?: string[];
@@ -110,7 +126,46 @@ export function validatePatch(current: WorldState, patch: unknown): ValidationRe
         if (names.length !== list.length) {
           console.warn(`[state] dropped non-names from present: ${list.filter((e) => NOT_A_NAME[e.trim().toLowerCase()]).join(', ')}`);
         }
+        // Someone cannot be both here and away. A model that writes both is confused
+        // about the scene, and the contradiction would render into the prompt as two
+        // facts — so whoever is listed as present wins and their `away` entry is dropped.
+        const away = next.away;
+        if (away && typeof away === 'object' && !Array.isArray(away)) {
+          const remaining: Record<string, string> = {};
+          for (const [who, where] of Object.entries(away)) {
+            if (!names.some((name) => name.toLowerCase() === who.toLowerCase())) {
+              remaining[who] = String(where);
+            }
+          }
+          if (Object.keys(remaining).length > 0) next.away = remaining;
+          else delete next.away;
+        }
         next.present = names;
+        break;
+      }
+
+      case 'away': {
+        if (value === null) {
+          delete next.away;
+          break;
+        }
+        const map = stringMap(value);
+        if (!map) {
+          return {
+            ok: false,
+            reason: `"away" must be an object of name -> place, or null, got ${describe(value)}`,
+          };
+        }
+        // Same reasoning as `present`: a pronoun is not a character, and "me" is away
+        // from a scene the reader is standing in.
+        const cleaned: Record<string, string> = {};
+        for (const [who, where] of Object.entries(map)) {
+          if (NOT_A_NAME[who.trim().toLowerCase()] === true) continue;
+          if (where.trim().length === 0) continue;
+          cleaned[who] = where;
+        }
+        if (Object.keys(cleaned).length > 0) next.away = cleaned;
+        else delete next.away;
         break;
       }
 

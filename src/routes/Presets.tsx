@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
+import { Link, useNavigate } from 'react-router';
 import { AppBar } from '../components/AppBar';
 import { apiJson } from '../lib/api';
 import { messageOf, useAsync } from '../lib/hooks';
 import { parseFf5 } from '../lib/presets/ff5';
 import { PresetParseError, parsePresetFile } from '../lib/presets/importSt';
 import type { NormalizedPreset } from '../lib/presets/types';
-import { PresetEditor, type PresetDetail, type PresetSummary } from '../components/PresetEditor';
+import type { PresetDetail, PresetSummary } from '../components/PresetEditor';
 
 /** What `/api/presets` returns for a fresh import. */
 interface ImportResult {
@@ -38,23 +39,16 @@ export default function Presets() {
     () => apiJson<PresetSummary[]>('/api/presets'),
     [],
   );
+  const navigate = useNavigate();
 
   const [importing, setImporting] = useState(false);
   const [creating, setCreating] = useState(false);
   const [ff5, setFf5] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [editing, setEditing] = useState<PresetDetail | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
-  const editorRef = useRef<HTMLDivElement>(null);
-
-  // The editor sits below the import zone, so on a phone it opens off-screen. Without
-  // this the user taps Edit or New preset and the screen appears not to have changed.
-  useEffect(() => {
-    if (editing) editorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, [editing]);
 
   async function importFile(file: File) {
     setStatus(null);
@@ -101,15 +95,6 @@ export default function Presets() {
     }
   }
 
-  async function openEditor(id: string) {
-    setStatus(null);
-    try {
-      setEditing(await apiJson<PresetDetail>(`/api/presets/${encodeURIComponent(id)}`));
-    } catch (cause) {
-      setStatus(messageOf(cause));
-    }
-  }
-
   /**
    * A preset with nothing in it, created through the import endpoint.
    *
@@ -127,8 +112,8 @@ export default function Presets() {
         method: 'POST',
         body: JSON.stringify({ name: 'New preset', json: { prompts: [] } }),
       });
-      reload();
-      await openEditor(created.id);
+      // Straight into the editor, which is the only reason to make a blank one.
+      navigate(`/presets/${created.id}`);
     } catch (cause) {
       setStatus(messageOf(cause));
     } finally {
@@ -163,7 +148,6 @@ export default function Presets() {
     setBusy(true);
     try {
       await apiJson(`/api/presets/${encodeURIComponent(preset.id)}`, { method: 'DELETE' });
-      if (editing?.id === preset.id) setEditing(null);
       reload();
     } catch (cause) {
       setStatus(messageOf(cause));
@@ -270,23 +254,6 @@ export default function Presets() {
 
       {result && <ImportReport result={result} onDismiss={() => setResult(null)} />}
 
-      {editing && (
-        <div ref={editorRef} style={{ scrollMarginTop: 14 }}>
-          <PresetEditor
-            // Keyed by id so opening a second preset remounts rather than reusing the
-            // first one's draft state — the fields below hold local copies of the values.
-            key={editing.id}
-            preset={editing}
-            onSaved={() => {
-              setEditing(null);
-              setStatus('Saved. Chats using this preset pick it up next turn.');
-              reload();
-            }}
-            onCancel={() => setEditing(null)}
-          />
-        </div>
-      )}
-
       {loading && <p className="sheet-sub">Loading…</p>}
       {error && <div className="note danger">{error}</div>}
 
@@ -325,9 +292,9 @@ export default function Presets() {
                   truncates the one thing the row exists to show. The rule keeps the
                   stacked buttons from reading as a fourth line of metadata. */}
               <div className="row-actions border-t border-[var(--line)] pt-3 sm:border-t-0 sm:pt-0" style={{ gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                <button type="button" className="btn" onClick={() => void openEditor(preset.id)}>
+                <Link to={`/presets/${preset.id}`} className="btn">
                   Edit
-                </button>
+                </Link>
                 <button
                   type="button"
                   className="btn quiet"

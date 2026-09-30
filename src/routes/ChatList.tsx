@@ -82,9 +82,12 @@ export default function ChatList() {
             const written = new Date(chat.updated_at);
             return (
               <article key={chat.id} className="plate">
-                <div className="plate-portrait">
-                  <Avatar src={chat.character_avatar} name={name} zoomable />
-                </div>
+                {/* The whole plate is the door. On the shelf you are choosing a scene, so
+                    the portrait is part of that choice rather than a separate control —
+                    which is also why it does not zoom here. */}
+                <Link to={`/chat/${chat.id}`} className="plate-portrait">
+                  <Avatar src={chat.character_avatar} name={name} />
+                </Link>
                 <Link to={`/chat/${chat.id}`} className="plate-body">
                   <div className="plate-head">
                     <span className="plate-name">{name}</span>

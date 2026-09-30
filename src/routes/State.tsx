@@ -28,8 +28,8 @@ const GROUPS: Array<{ heading: string; fields: Field[] }> = [
   {
     heading: 'Where and when',
     fields: [
-      { key: 'time', label: 'Time', hint: 'In-world clock, e.g. "late evening".' },
-      { key: 'location', label: 'Location', hint: 'Where the scene is.' },
+      { key: 'time', label: 'Time', hint: 'In-world clock, e.g. "late evening", "the 3rd of Rain, dusk".' },
+      { key: 'location', label: 'Location', hint: 'Where the scene is — a room and a spot: "the scriptorium, at the desk".' },
       { key: 'weather', label: 'Weather', hint: 'Optional atmosphere.' },
     ],
   },
@@ -205,6 +205,24 @@ export default function State({ embedded = false }: { embedded?: boolean } = {})
                 ))}
               </section>
             ))}
+
+            {state.away && Object.keys(state.away).length > 0 && (
+              <section className="section">
+                <span className="eyebrow">Elsewhere</span>
+                <div className="panel panel-pad">
+                  {Object.entries(state.away).map(([who, where]) => (
+                    <div key={who} style={{ display: 'flex', gap: 10 }}>
+                      <span style={{ minWidth: 90, color: 'var(--ink)' }}>{who}</span>
+                      <span style={{ color: 'var(--ink-dim)' }}>{where}</span>
+                    </div>
+                  ))}
+                </div>
+                <p className="form-hint" style={{ marginTop: 8 }}>
+                  Characters who have left the scene and where they went. This is what stops the
+                  narrator writing someone into a room they walked out of.
+                </p>
+              </section>
+            )}
 
             {state.conditions && Object.keys(state.conditions).length > 0 && (
               <section className="section">

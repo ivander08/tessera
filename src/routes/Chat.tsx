@@ -10,28 +10,10 @@ import { PersonaMenu } from '../components/PersonaMenu';
 import { Turn, type TurnView } from '../components/Turn';
 import { MessageActions } from '../components/MessageActions';
 import { Modal } from '../components/Modal';
+import { SceneBar } from '../components/SceneBar';
 import { AppearancePanel } from '../components/AppearancePanel';
 import StatePanel from './State';
 import MemoryPanel from './Memory';
-
-/** The few facts about a scene worth one line in the titlebar, most specific first. */
-function sceneSummary(state: WorldState | undefined): string | null {
-  if (!state) return null;
-  const parts = [state.location, state.time, state.weather].filter(
-    (part): part is string => typeof part === 'string' && part.trim().length > 0,
-  );
-  if (parts.length === 0) return null;
-  return parts.slice(0, 2).join(' · ');
-}
-
-function SceneGlyph() {
-  return (
-    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 21s7-5.5 7-11a7 7 0 1 0-14 0c0 5.5 7 11 7 11z" />
-      <circle cx="12" cy="10" r="2.6" />
-    </svg>
-  );
-}
 
 function MemoryGlyph() {
   return (
@@ -55,6 +37,15 @@ interface Pending {
   targetId: string | null;
   /** The user's own text, shown immediately for `send` rather than after the round trip. */
   sent?: string;
+  /**
+   * The stream is over but the refetch has not landed.
+   *
+   * Clearing the overlay the instant the last frame arrives puts the OLD text back on
+   * screen until `reload()` resolves — a regenerate visibly reverts for a moment before
+   * the new reply appears. While settling, the overlay stays and keeps showing what was
+   * just written.
+   */
+  settling?: boolean;
 }
 
 export default function Chat() {
@@ -93,6 +84,27 @@ export default function Chat() {
     const at = messages.findIndex((message) => message.id === targetId);
     return at === -1 ? messages : messages.slice(0, at + 1);
   }, [messages, pending?.targetId]);
+
+  // The overlay comes down when the refetched transcript actually CONTAINS what the
+  // overlay is showing — matched on content rather than on the message count, because a
+  // regenerate replaces a row without changing the count and a send adds two at once.
+  const overlayStored = useMemo(() => {
+    if (!pending) return false;
+    if (pending.sent && !messages.some((m) => m.role === 'user' && m.content === pending.sent)) {
+      return false;
+    }
+    if (pending.text.length === 0) return true;
+    return messages.some((m) => m.content === pending.text);
+  }, [pending, messages]);
+
+  useEffect(() => {
+    if (pending?.settling && overlayStored) setPending(null);
+  }, [pending?.settling, overlayStored]);
+
+  // While settling, the stored copy and the overlay can both be true for one frame
+  // before the effect above runs — which would render the reply twice. The overlay is
+  // the thing that yields.
+  const overlay = pending && !(pending.settling && overlayStored) ? pending : null;
 
   // The scene chip in the bar. Fetched separately from the transcript so a slow state
   // read never delays the conversation, and reloaded with it so a corrected value shows
@@ -164,13 +176,18 @@ export default function Chat() {
         if (!controller.signal.aborted) setSendError(messageOf(cause));
       } finally {
         abortRef.current = null;
-        setPending(null);
         setBusy(false);
+        // Held, not cleared: the refetch below replaces the transcript with the stored
+        // version, and clearing first would flash the pre-turn text back on screen.
+        setPending((current) => (current ? { ...current, settling: true } : current));
         reload();
-        // The state engine runs after a completed turn, so the scene chip is stale the
+        // The state engine runs after a completed turn, so the scene bar is stale the
         // moment the reply lands. Held in a ref because the callback identity changes
         // every render and putting it in the deps would rebuild `run` continuously.
         stateReload.current();
+        // A refetch that returns the same transcript never trips the settle check, so the
+        // overlay would stay up forever. The timeout is the guarantee that it comes down.
+        window.setTimeout(() => setPending((current) => (current?.settling ? null : current)), 6000);
       }
     },
     [id, reload],
@@ -254,38 +271,22 @@ export default function Chat() {
   }
 
   const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
-  const scene = sceneSummary(state.data?.state);
+
 
   return (
     <>
       <AppBar
-        lead={<BackLink to="/" label="All chats" />}
         title={<span className="bar-title">{characterName}</span>}
         trailing={
-          <>
-            <button
-              type="button"
-              className="scene-chip"
-              onClick={() => setPanel('state')}
-              title={
-                scene
-                  ? 'Where the scene stands. Click to read or correct it.'
-                  : 'The narrator has not recorded where this scene is yet.'
-              }
-            >
-              <SceneGlyph />
-              <span className="scene-chip-text">{scene ?? 'Set the scene'}</span>
-            </button>
-            <button
-              type="button"
-              className="icon-btn"
-              onClick={() => setPanel('memory')}
-              title="Memory"
-              aria-label="Memory"
-            >
-              <MemoryGlyph />
-            </button>
-          </>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => setPanel('memory')}
+            title="Memory"
+            aria-label="Memory"
+          >
+            <MemoryGlyph />
+          </button>
         }
         scoped={
           <>
@@ -315,69 +316,82 @@ export default function Chat() {
         }
       />
 
+      {/* The scene, always visible. This is the one fact about a roleplay scene you want
+          while reading rather than by opening something — it is what tells you the
+          narrator has drifted. Replaces the chip that only said "Set the scene". */}
+      <SceneBar state={state.data?.state} onOpen={() => setPanel('state')} />
+
       <div className="transcript">
         {visible.map((message, index) => {
           const isUser = message.role === 'user';
           // The turn being redone. Its reply replaces this slot rather than appending,
           // so regenerating an early message shows the new version where the reader is
           // looking instead of at the bottom of a scene they then have to scroll up from.
-          const isTarget = pending?.targetId === message.id;
+          const isTarget = overlay?.targetId === message.id;
           return (
             <Fragment key={message.id}>
-              <Turn
-                message={message as TurnView}
-                name={isUser ? userName : characterName}
-                avatar={isUser ? null : data.character?.avatar}
-                // The first thing in the scene opens with a drop cap; everything else is
-                // body text.
-                dropCap={index === 0}
-                editing={editingId === message.id}
-                busy={busy}
-                onEditStart={() => setEditingId(message.id)}
-                onEditCancel={() => setEditingId(null)}
-                onEditSave={(content) => void saveEdit(message.id, content)}
-                actions={
-                  editingId === message.id ? null : (
-                    <MessageActions
-                      canSwipeLeft={(message.swipeIndex ?? 0) > 0}
-                      canSwipeRight={(message.swipeIndex ?? 0) < (message.swipes?.length ?? 1) - 1}
-                      swipeIndex={message.swipeIndex ?? 0}
-                      swipeCount={message.swipes?.length ?? 1}
-                      onSwipe={(direction) => void swipe(message.id, direction)}
-                      onCopy={() => message.content}
-                      onEdit={() => setEditingId(message.id)}
-                      onDelete={() => void remove(message.id)}
-                      onRegenerate={
-                        // Offered on every reply, not only the newest. Regenerating an
-                        // earlier one is a branch: the new version takes that position and
-                        // the turns after it step out of the transcript until you swipe
-                        // back, which is what makes rewriting a scene's direction possible
-                        // without losing the scene you had.
-                        !isUser ? () => void run('regenerate', '', message.id) : undefined
-                      }
-                      busy={busy}
-                    />
-                  )
-                }
-              />
-
-              {/* The reply being redone, in the slot it belongs to. Before the first
-                  token it is the character composing; the dots are the same treatment a
-                  normal turn gets, so a redo does not look like a different operation. */}
-              {isTarget && pending.mode !== 'impersonate' && pending.text.length === 0 && (
+              {/* The turn being redone. Its OLD text is replaced by the new one in the same
+                  slot rather than left on screen with the reply appended below it — a redo
+                  is a replacement, and leaving the previous version visible makes it look
+                  like a new message arriving at the end of the scene. */}
+              {isTarget && !isUser ? (
+                overlay.text.length === 0 ? (
+                  <Turn
+                    message={{ ...(message as TurnView), content: '' }}
+                    name={characterName}
+                    avatar={data.character?.avatar}
+                    dropCap={index === 0}
+                    thinking
+                  />
+                ) : (
+                  <Turn
+                    message={{ ...(message as TurnView), content: overlay.text }}
+                    name={characterName}
+                    avatar={data.character?.avatar}
+                    dropCap={index === 0}
+                    streaming
+                  />
+                )
+              ) : (
                 <Turn
-                  message={{ id: 'pending-thinking', role: 'assistant', content: '' }}
-                  name={characterName}
-                  avatar={data.character?.avatar}
-                  thinking
-                />
-              )}
-              {isTarget && pending.text.length > 0 && (
-                <Turn
-                  message={{ id: 'pending', role: 'assistant', content: pending.text }}
-                  name={characterName}
-                  avatar={data.character?.avatar}
-                  streaming
+                  message={message as TurnView}
+                  name={isUser ? userName : characterName}
+                  avatar={isUser ? null : data.character?.avatar}
+                  // In the transcript you are already reading one character, so the
+                  // portrait has nothing else to do — enlarging it is the only useful
+                  // action, and it is also how you check an import carried an avatar.
+                  zoomAvatar
+                  // The first thing in the scene opens with a drop cap; everything else is
+                  // body text.
+                  dropCap={index === 0}
+                  editing={editingId === message.id}
+                  busy={busy}
+                  onEditStart={() => setEditingId(message.id)}
+                  onEditCancel={() => setEditingId(null)}
+                  onEditSave={(content) => void saveEdit(message.id, content)}
+                  actions={
+                    editingId === message.id ? null : (
+                      <MessageActions
+                        canSwipeLeft={(message.swipeIndex ?? 0) > 0}
+                        canSwipeRight={(message.swipeIndex ?? 0) < (message.swipes?.length ?? 1) - 1}
+                        swipeIndex={message.swipeIndex ?? 0}
+                        swipeCount={message.swipes?.length ?? 1}
+                        onSwipe={(direction) => void swipe(message.id, direction)}
+                        onCopy={() => message.content}
+                        onEdit={() => setEditingId(message.id)}
+                        onDelete={() => void remove(message.id)}
+                        onRegenerate={
+                          // Offered on every reply, not only the newest. Regenerating an
+                          // earlier one is a branch: the new version takes that position
+                          // and the turns after it step out of the transcript until you
+                          // swipe back, which is what makes rewriting a scene's direction
+                          // possible without losing the scene you had.
+                          !isUser ? () => void run('regenerate', '', message.id) : undefined
+                        }
+                        busy={busy}
+                      />
+                    )
+                  }
                 />
               )}
             </Fragment>
@@ -385,9 +399,9 @@ export default function Chat() {
         })}
 
         {/* The reader's own line, before the server has answered. */}
-        {pending?.sent && (
+        {overlay?.sent && (
           <Turn
-            message={{ id: 'pending-user', role: 'user', content: pending.sent }}
+            message={{ id: 'pending-user', role: 'user', content: overlay.sent }}
             name={userName}
             avatar={null}
           />
@@ -395,7 +409,7 @@ export default function Chat() {
 
         {/* A new turn streams at the end, because that is where it belongs. A redo
             streams in the slot above, so this only covers the modes with no target. */}
-        {pending && !pending.targetId && pending.mode !== 'impersonate' && pending.text.length === 0 && (
+        {overlay && !overlay.targetId && overlay.mode !== 'impersonate' && overlay.text.length === 0 && (
           <Turn
             message={{ id: 'pending-thinking', role: 'assistant', content: '' }}
             name={characterName}
@@ -403,15 +417,15 @@ export default function Chat() {
             thinking
           />
         )}
-        {pending && !pending.targetId && pending.text.length > 0 && (
+        {overlay && !overlay.targetId && overlay.text.length > 0 && (
           <Turn
             message={{
               id: 'pending',
-              role: pending.mode === 'impersonate' ? 'user' : 'assistant',
-              content: pending.text,
+              role: overlay.mode === 'impersonate' ? 'user' : 'assistant',
+              content: overlay.text,
             }}
-            name={pending.mode === 'impersonate' ? userName : characterName}
-            avatar={pending.mode === 'impersonate' ? null : data.character?.avatar}
+            name={overlay.mode === 'impersonate' ? userName : characterName}
+            avatar={overlay.mode === 'impersonate' ? null : data.character?.avatar}
             streaming
           />
         )}

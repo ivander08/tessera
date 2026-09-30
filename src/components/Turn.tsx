@@ -34,6 +34,8 @@ export interface TurnProps {
   thinking?: boolean;
   /** Set a drop cap on the first paragraph. Only the opening turn of a scene gets one. */
   dropCap?: boolean;
+  /** Open the speaker's portrait full size when it is clicked. */
+  zoomAvatar?: boolean;
   busy?: boolean;
   editing?: boolean;
   onEditStart?: () => void;
@@ -51,6 +53,7 @@ export function Turn({
   streaming = false,
   thinking = false,
   dropCap = false,
+  zoomAvatar = false,
   editing = false,
   onEditStart,
   onEditCancel,
@@ -78,7 +81,7 @@ export function Turn({
       data-streaming={streaming || undefined}
       data-thinking={thinking || undefined}
     >
-      <Avatar src={avatar} name={name} className="turn-avatar" />
+      <Avatar src={avatar} name={name} className="turn-avatar" zoomable={zoomAvatar} />
 
       <div className="turn-body">
         <div className="turn-head">

@@ -26,9 +26,12 @@ const ALLOWED_ORIGINS: Record<string, true> = {
   'tauri://localhost': true,
   // Tauri v2 when `useHttpsScheme` is enabled.
   'https://tauri.localhost': true,
-  // `wrangler dev` serving the SPA to a second dev port (e.g. `vite` on 5173).
-  'http://localhost:5173': true,
-  'http://127.0.0.1:5173': true,
+  // `wrangler dev` serving the SPA to a second dev port (e.g. `vite` on 5180).
+  // 5173 is Vite's default and belongs to whatever else is running on this machine;
+  // this project claims its own port so `bun run dev` never collides. Keep in sync
+  // with `server.port` in `vite.config.ts`.
+  'http://localhost:5180': true,
+  'http://127.0.0.1:5180': true,
 };
 
 export function corsHeaders(origin: string | null): Record<string, string> {
