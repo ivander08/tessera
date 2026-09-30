@@ -347,6 +347,11 @@ async function listMessages(env: Env, chatId: string): Promise<Response> {
   const chat = await getChat(env, chatId);
   if (!chat) return notFound('chat not found');
 
+  // The character rides along so the transcript can show its shown name and avatar
+  // without a second round trip on every render.
+  const character = chat.character_id ? await getCharacter(env, chat.character_id) : null;
+  const persona = chat.persona_id ? await loadPersonaRow(env, chat.persona_id) : null;
+
   // Every row, active or not: the reader sees only the active one per position, but the
   // client needs the alternatives to render swipe arrows and to swipe back without a
   // round trip per direction.
@@ -400,7 +405,31 @@ async function listMessages(env: Env, chatId: string): Promise<Response> {
       };
     });
 
-  return json({ chat, messages });
+  return json({
+    chat,
+    character: character
+      ? {
+          id: character.id,
+          name: character.name,
+          avatar: character.avatar,
+          // CCv3's `nickname` is the name the reader sees; `name` is the card's own
+          // title, which is often a dated label like "Quill 25/09/2026".
+          shownName: readShownName(character.card_json) || character.name,
+        }
+      : null,
+    persona: persona ? { id: persona.id, name: persona.name } : null,
+    messages,
+  });
+}
+
+/** Reads the card's `nickname`, falling back to nothing. Never throws on bad JSON. */
+function readShownName(cardJson: string): string {
+  try {
+    const card = JSON.parse(cardJson) as { nickname?: unknown };
+    return typeof card.nickname === 'string' ? card.nickname : '';
+  } catch {
+    return '';
+  }
 }
 
 async function listModels(env: Env, providerId: string): Promise<Response> {

@@ -215,11 +215,15 @@ export async function buildPrompt(
       stateBlock: substituteTail(stateBlock, macroContext),
       loreBlock: substituteTail(loreBlock, macroContext),
       authorsNote: substituteTail(settings.authorsNote, macroContext),
-      // A preset's post-history instructions replace the card's, matching how the
-      // field behaves elsewhere: it is a directive, and two competing directives are
-      // worse than the more deliberate one.
+      // Precedence, per the CCv2/v3 spec: the CARD's post-history instructions replace
+      // the user's global setting. That is what the field is for — it is the card's own
+      // final directive, sent after the user message, and the spec says frontends MUST
+      // let it override the global value.
+      //
+      // `{{original}}` inside it expands to the global value, which is how a card can
+      // extend the user's jailbreak rather than replace it.
       postHistoryInstructions: substituteTail(
-        settings.presetPostHistory || card.postHistoryInstructions,
+        applyOriginal(card.postHistoryInstructions, settings.presetPostHistory || settings.authorsNote),
         macroContext,
       ),
       userMessage: substituteTail(options.userContent, macroContext),
@@ -310,6 +314,19 @@ async function loadCalibration(env: Env, model: string | null): Promise<number> 
     .bind(model)
     .first<{ factor: number }>();
   return asNumber(row?.factor, 1);
+}
+
+/**
+ * Expands `{{original}}` to the user's own setting.
+ *
+ * The spec requires this and gives the reason: a card that does not use it silently
+ * discards the reader's configured instructions, which is a surprise they cannot see or
+ * debug. With it, a card can append its own directive to theirs instead of replacing it.
+ */
+function applyOriginal(cardValue: string, userValue: string): string {
+  if (cardValue.length === 0) return userValue;
+  if (!cardValue.includes('{{original}}')) return cardValue;
+  return cardValue.replaceAll('{{original}}', userValue);
 }
 
 function messageOf(error: unknown): string {

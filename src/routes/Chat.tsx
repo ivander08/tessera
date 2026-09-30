@@ -1,23 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router';
+import { useParams } from 'react-router';
 import { apiJson, streamChat, type TurnMode } from '../lib/api';
-import type { ChatDetail, MessageRow } from '../lib/apiTypes';
+import type { ChatCharacter, ChatDetail, ChatPersona, MessageRow } from '../lib/apiTypes';
 import { computeHitRate } from '../lib/cache';
 import { messageOf, useAsync } from '../lib/hooks';
-import { CacheMeter } from '../components/CacheMeter';
-import { Message, type MessageView } from '../components/Message';
+import { AppBar, BackLink, MenuAction, MenuLabel, MenuSep } from '../components/AppBar';
+import { PresetMenu } from '../components/PresetMenu';
+import { PersonaMenu } from '../components/PersonaMenu';
+import { Turn, type TurnView } from '../components/Turn';
 import { MessageActions } from '../components/MessageActions';
-import { PersonaPicker } from '../components/PersonaPicker';
 
 interface History {
   chat: ChatDetail;
+  character: ChatCharacter | null;
+  persona: ChatPersona | null;
   messages: MessageRow[];
 }
 
 interface Pending {
   mode: TurnMode;
   text: string;
-  /** The message being replaced, for regenerate/continue. Null for a fresh turn. */
   targetId: string | null;
 }
 
@@ -34,12 +36,14 @@ export default function Chat() {
   const [busy, setBusy] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Only the active row per position is shown. The alternatives are already in the
-  // payload, so swiping is instant and costs no request.
   const messages = useMemo(() => data?.messages ?? [], [data]);
   const hitRate = useMemo(() => computeHitRate(messages), [messages]);
+
+  const characterName = data?.character?.shownName ?? data?.chat.title ?? 'Character';
+  const userName = data?.persona?.name ?? 'You';
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: 'end' });
@@ -60,7 +64,9 @@ export default function Chat() {
           content,
           (frame) => {
             if (frame.type === 'delta') {
-              setPending((current) => (current ? { ...current, text: current.text + frame.text } : current));
+              setPending((current) =>
+                current ? { ...current, text: current.text + frame.text } : current,
+              );
             } else if (frame.type === 'error') {
               setSendError(frame.message);
             }
@@ -80,11 +86,11 @@ export default function Chat() {
     [id, reload],
   );
 
-  function send(event?: React.FormEvent) {
-    event?.preventDefault();
+  function send() {
     const content = draft.trim();
     if (!content || busy) return;
     setDraft('');
+    if (inputRef.current) inputRef.current.style.height = 'auto';
     void run('send', content, null);
   }
 
@@ -132,52 +138,66 @@ export default function Chat() {
     setBusy(false);
   }
 
-  if (loading) return <Shell>Loading…</Shell>;
-  if (error) return <Shell>{error}</Shell>;
-  if (!data) return null;
+  if (loading) {
+    return (
+      <>
+        <AppBar lead={<BackLink to="/" label="All chats" />} title={<span className="bar-title">…</span>} />
+        <div className="sheet">
+          <p className="sheet-sub">Loading…</p>
+        </div>
+      </>
+    );
+  }
 
-  const characterName = data.chat.title ?? 'Character';
+  if (error || !data) {
+    return (
+      <>
+        <AppBar lead={<BackLink to="/" label="All chats" />} title={<span className="bar-title">Chat</span>} />
+        <div className="sheet">
+          <div className="note danger">{error ?? 'Chat not found.'}</div>
+        </div>
+      </>
+    );
+  }
+
   const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
 
   return (
-    <main className="mx-auto flex h-full max-w-3xl flex-col">
-      <header className="app-bar">
-        <Link to="/" className="app-link">
-          ← Chats
-        </Link>
-        <div className="ml-auto flex items-center gap-4">
-          <Link to={`/chat/${id}/memory`} className="app-link">
-            Memory
-          </Link>
-          <Link to={`/chat/${id}/state`} className="app-link">
-            State
-          </Link>
-          {/* Who the reader is in this scene. Without one, {{user}} in a card stays a
-              literal placeholder, which is why the picker warns rather than sitting
-              quietly on "none". */}
-          <PersonaPicker
-            chatId={id}
-            current={data.chat.persona_id}
-            onChange={() => reload()}
-          />
-          <CacheMeter hitRate={hitRate} />
-        </div>
-      </header>
+    <>
+      <AppBar
+        lead={<BackLink to="/" label="All chats" />}
+        title={<span className="bar-title">{characterName}</span>}
+        trailing={
+          hitRate !== null ? (
+            <span className="data" title="Share of the prompt served from the provider's cache">
+              {Math.round(hitRate * 100)}%
+            </span>
+          ) : null
+        }
+        scoped={
+          <>
+            <MenuLabel>This chat</MenuLabel>
+            <PersonaMenu chatId={id} current={data.persona?.id ?? null} onChanged={reload} />
+            <MenuSep />
+            <PresetMenu chatId={id} onChanged={reload} />
+            <MenuSep />
+            <MenuAction label="World state" onClick={() => { window.location.href = `/chat/${id}/state`; }} />
+            <MenuAction label="Memory" onClick={() => { window.location.href = `/chat/${id}/memory`; }} />
+          </>
+        }
+      />
 
-      <div className="flex-1 px-4 pb-4">
+      <div className="transcript">
         {messages.map((message) => {
-          const isPendingTarget = pending?.targetId === message.id;
-          const streaming = isPendingTarget && pending?.mode !== 'regenerate';
-
+          const isUser = message.role === 'user';
           return (
-            <Message
+            <Turn
               key={message.id}
-              message={message as MessageView}
-              name={message.role === 'user' ? 'You' : characterName}
-              layout="flat"
-              streaming={streaming}
-              busy={busy}
+              message={message as TurnView}
+              name={isUser ? userName : characterName}
+              avatar={isUser ? null : data.character?.avatar}
               editing={editingId === message.id}
+              busy={busy}
               onEditStart={() => setEditingId(message.id)}
               onEditCancel={() => setEditingId(null)}
               onEditSave={(content) => void saveEdit(message.id, content)}
@@ -189,11 +209,11 @@ export default function Chat() {
                     swipeIndex={message.swipeIndex ?? 0}
                     swipeCount={message.swipes?.length ?? 1}
                     onSwipe={(direction) => void swipe(message.id, direction)}
-                    onCopy={() => navigator.clipboard.writeText(message.content)}
+                    onCopy={() => message.content}
                     onEdit={() => setEditingId(message.id)}
                     onDelete={() => void remove(message.id)}
                     onRegenerate={
-                      message.id === lastAssistant?.id && message.role === 'assistant'
+                      message.id === lastAssistant?.id && !isUser
                         ? () => void run('regenerate', '', message.id)
                         : undefined
                     }
@@ -205,17 +225,17 @@ export default function Chat() {
           );
         })}
 
-        {/* The in-flight reply. Rendered as a real message so the layout does not jump
-            when it lands, and so the streaming caret has somewhere to live. */}
+        {/* The in-flight reply, rendered as a real turn so the layout does not jump when
+            it lands and the caret has somewhere to live. */}
         {pending && pending.text.length > 0 && (
-          <Message
+          <Turn
             message={{
               id: 'pending',
               role: pending.mode === 'impersonate' ? 'user' : 'assistant',
               content: pending.text,
             }}
-            name={pending.mode === 'impersonate' ? 'You' : characterName}
-            layout="flat"
+            name={pending.mode === 'impersonate' ? userName : characterName}
+            avatar={pending.mode === 'impersonate' ? null : data.character?.avatar}
             streaming
           />
         )}
@@ -223,72 +243,88 @@ export default function Chat() {
       </div>
 
       {sendError && (
-        <p className="border-t border-[var(--danger)] bg-[color-mix(in_srgb,var(--danger)_12%,transparent)] px-4 py-2 text-sm text-[var(--danger)]">
-          {sendError}
-        </p>
+        <div className="composer" style={{ borderTop: 0, paddingBottom: 0 }}>
+          <div className="composer-inner">
+            <div className="note danger" style={{ flex: 1 }}>
+              {sendError}
+            </div>
+          </div>
+        </div>
       )}
 
-      <form onSubmit={send} className="composer">
-        <textarea
-          value={draft}
-          onChange={(event) => {
-            setDraft(event.target.value);
-            const node = event.currentTarget;
-            node.style.height = 'auto';
-            node.style.height = `${Math.min(node.scrollHeight, window.innerHeight * 0.4)}px`;
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey) {
-              event.preventDefault();
-              send();
-            }
-          }}
-          rows={1}
-          placeholder={busy ? 'Streaming…' : 'Write a message'}
-          disabled={busy}
-          aria-label="Message"
-        />
+      <form
+        className="composer"
+        onSubmit={(event) => {
+          event.preventDefault();
+          send();
+        }}
+      >
+        <div className="composer-inner">
+          {/* The two secondary actions sit to the LEFT of the field, as icon buttons, so
+              they read as modifiers of what you are about to write rather than as peers
+              of Send — and so the field gets every pixel they do not need. */}
+          <div className="composer-actions">
+            <button
+              type="button"
+              className="icon-btn"
+              disabled={busy}
+              title="Write my next line for me"
+              aria-label="Impersonate"
+              onClick={() => void run('impersonate', '', null)}
+            >
+              <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="8" r="3.2" />
+                <path d="M5.5 20a6.5 6.5 0 0 1 13 0" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className="icon-btn"
+              disabled={busy || !lastAssistant}
+              title="Continue the last reply"
+              aria-label="Continue"
+              onClick={() => lastAssistant && void run('continue', '', lastAssistant.id)}
+            >
+              <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 12h13" />
+                <path d="M12 7l5 5-5 5" />
+              </svg>
+            </button>
+          </div>
 
-        <button
-          type="button"
-          className="btn"
-          onClick={() => void run('impersonate', '', null)}
-          disabled={busy}
-          title="Write my next line for me"
-        >
-          Impersonate
-        </button>
-
-        {lastAssistant && (
-          <button
-            type="button"
-            className="btn"
-            onClick={() => void run('continue', '', lastAssistant.id)}
+          <textarea
+            ref={inputRef}
+            className="composer-input"
+            value={draft}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              const node = event.currentTarget;
+              node.style.height = 'auto';
+              node.style.height = `${Math.min(node.scrollHeight, window.innerHeight * 0.42)}px`;
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                send();
+              }
+            }}
+            rows={1}
+            placeholder={busy ? 'Streaming…' : `Write as ${userName}`}
             disabled={busy}
-            title="Continue the last reply"
-          >
-            Continue
-          </button>
-        )}
+            aria-label="Message"
+          />
 
-        {busy ? (
-          <button type="button" className="btn" onClick={stop}>
-            Stop
-          </button>
-        ) : (
-          <button type="submit" className="btn primary" disabled={draft.trim().length === 0}>
-            Send
-          </button>
-        )}
+          {busy ? (
+            <button type="button" className="btn" onClick={stop}>
+              Stop
+            </button>
+          ) : (
+            <button type="submit" className="btn primary" disabled={draft.trim().length === 0}>
+              Send
+            </button>
+          )}
+        </div>
       </form>
-    </main>
-  );
-}
-
-function Shell({ children }: { children: React.ReactNode }) {
-  return (
-    <main className="mx-auto max-w-3xl p-4">
-      <p className="text-sm text-[var(--ink-dim)]">{children}</p>
-    </main>
+    </>
   );
 }

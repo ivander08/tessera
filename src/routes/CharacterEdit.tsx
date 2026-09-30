@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { apiJson } from '../lib/api';
-import { resolveAssetUrl } from '../lib/assets';
 import { alwaysOnLore, parseLorebook } from '../lib/cards/lorebook';
 import type { CharacterCardJson } from '../lib/cards/types';
 import { loadTokenCounter } from '../lib/tokenizerClient';
 import { messageOf, useAsync } from '../lib/hooks';
+import { GreetingsEditor } from '../components/GreetingsEditor';
+import { Avatar } from '../components/Avatar';
 
 interface CharacterDetail {
   id: string;
@@ -22,6 +23,7 @@ interface CharacterDetail {
 /** The card's string-valued fields, which is what the form edits as text. */
 type TextField =
   | 'name'
+  | 'nickname'
   | 'description'
   | 'personality'
   | 'scenario'
@@ -44,7 +46,18 @@ type TextField =
  * constant while varying token count, so no optimal size is asserted here.
  */
 const FIELDS: Array<{ key: TextField; label: string; rows: number; cost: string }> = [
-  { key: 'name', label: 'name', rows: 1, cost: 'every turn' },
+  {
+    key: 'name',
+    label: 'name',
+    rows: 1,
+    cost: 'the card’s title — what the library lists',
+  },
+  {
+    key: 'nickname',
+    label: 'shown name',
+    rows: 1,
+    cost: 'what the transcript calls them · falls back to name',
+  },
   { key: 'description', label: 'description', rows: 4, cost: 'every turn' },
   { key: 'personality', label: 'personality', rows: 3, cost: 'every turn' },
   { key: 'scenario', label: 'scenario', rows: 3, cost: 'every turn' },
@@ -84,7 +97,7 @@ export default function CharacterEdit() {
 
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [tagsText, setTagsText] = useState('');
-  const [greetingsText, setGreetingsText] = useState('');
+  const [greetings, setGreetings] = useState<string[]>([]);
   const [bookText, setBookText] = useState('');
   const [avatar, setAvatar] = useState<{ contentType: string; dataBase64: string } | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
@@ -112,7 +125,7 @@ export default function CharacterEdit() {
     if (!data) return;
     setEdits({});
     setTagsText(data.card?.tags.join(', ') ?? '');
-    setGreetingsText(data.card?.alternateGreetings.join('\n') ?? '');
+    setGreetings(data.card?.alternateGreetings ?? []);
     setBookText(data.card?.characterBook ? JSON.stringify(data.card.characterBook, null, 2) : '');
     setAvatar(null);
     setAvatarPreview(null);
@@ -174,7 +187,7 @@ export default function CharacterEdit() {
         if (field.key !== 'name' && edited !== undefined) next[field.key] = edited;
       }
       next.tags = splitTags(tagsText);
-      next.alternateGreetings = splitLines(greetingsText);
+      next.alternateGreetings = greetings.map((entry) => entry.trim()).filter(Boolean);
       next.characterBook = parsedBook.value;
 
       await apiJson(`/api/characters/${encodeURIComponent(id)}`, {
@@ -236,7 +249,10 @@ export default function CharacterEdit() {
     setRemoveAvatar(false);
   }
 
-  const shownAvatar = avatarPreview ?? (removeAvatar ? null : resolveAssetUrl(data?.avatar));
+  // The stored avatar lives behind the same bearer auth as everything else, so it has to
+  // be fetched rather than pointed at — see Avatar. A locally-chosen image is still a
+  // data URL at this point and needs no fetch.
+  const storedAvatar = removeAvatar ? null : (data?.avatar ?? null);
 
   return (
     <main className="mx-auto max-w-2xl space-y-5 p-4 pb-24">
@@ -271,11 +287,12 @@ export default function CharacterEdit() {
           </p>
 
           <section className="card flex items-center gap-3 p-3">
-            {shownAvatar ? (
-              <img src={shownAvatar} alt="" className="h-16 w-16 shrink-0 rounded-full object-cover" />
-            ) : (
-              <div className="h-16 w-16 shrink-0 rounded-full bg-[var(--surface-overlay)]" />
-            )}
+            <Avatar
+              src={avatarPreview ?? storedAvatar}
+              name={value('name') || '?'}
+              className="chip"
+              style={{ width: 64, height: 64, fontSize: 'var(--text-lg)' }}
+            />
             <div className="flex min-w-0 flex-1 flex-wrap gap-2">
               <button type="button" className="btn" onClick={() => fileRef.current?.click()}>
                 {data.avatar ? 'Replace image' : 'Upload image'}
@@ -377,21 +394,11 @@ export default function CharacterEdit() {
             />
           </label>
 
-          <label className="block space-y-1">
-            <span className="flex items-baseline justify-between gap-2">
-              <span className="text-[var(--font-sm)] font-medium">alternate_greetings</span>
-              <span className="text-[var(--font-xs)] text-[var(--ink-faint)]">
-                never sent · one per line
-              </span>
-            </span>
-            <textarea
-              className="field"
-              rows={4}
-              value={greetingsText}
-              onChange={(event) => setGreetingsText(event.target.value)}
-              placeholder="one per line"
-            />
-          </label>
+          <GreetingsEditor
+            greetings={greetings}
+            onChange={setGreetings}
+            countTokens={(text) => tokensOf(text)}
+          />
 
           <label className="block space-y-1">
             <span className="flex items-baseline justify-between gap-2">
@@ -440,13 +447,6 @@ function splitTags(text: string): string[] {
     .split(',')
     .map((tag) => tag.trim())
     .filter((tag) => tag.length > 0);
-}
-
-function splitLines(text: string): string[] {
-  return text
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
 }
 
 /** An untyped object field edited as text: parsed on every render so the error shows live. */

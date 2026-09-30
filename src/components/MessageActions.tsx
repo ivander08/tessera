@@ -1,22 +1,24 @@
 import { useState, type ReactNode } from 'react';
 
 /**
- * A message's action row: swipe, copy, edit, delete.
+ * A turn's actions: swipe, regenerate, copy, edit, delete.
  *
- * Rendered on hover on a pointer device and always-on for touch, because a phone has no
- * hover state — controls that only appear on hover are unreachable there, which is how
- * the swipe feature ends up invisible on the device it is most wanted on.
+ * Revealed on hover where hover exists and always visible where it does not — a phone
+ * has no hover state, so hover-only controls are simply unreachable there, which is how
+ * swipe ends up invisible on the device it is most wanted on.
  *
- * The row is deliberately icon-only with `aria-label`s rather than text buttons: at
- * message density, a row of labelled buttons competes with the prose for attention.
+ * Icons are inline SVG at a consistent 16px grid with a 1.6 stroke, drawn to the same
+ * optical weight. Mixed weights are what makes an icon row look assembled rather than
+ * designed.
  */
-export interface MessageActionsProps {
+export interface TurnActionsProps {
   canSwipeLeft: boolean;
   canSwipeRight: boolean;
   swipeIndex: number;
   swipeCount: number;
   onSwipe: (direction: 'prev' | 'next') => void;
-  onCopy: () => void;
+  /** Returns the text to put on the clipboard. */
+  onCopy: () => string;
   onEdit: () => void;
   onDelete: () => void;
   onRegenerate?: () => void;
@@ -34,67 +36,58 @@ export function MessageActions({
   onDelete,
   onRegenerate,
   busy = false,
-}: MessageActionsProps) {
+}: TurnActionsProps) {
   const [copied, setCopied] = useState(false);
 
   async function copy() {
     try {
-      await navigator.clipboard.writeText(await onCopyText(onCopy));
+      await navigator.clipboard.writeText(onCopy());
       setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
+      setTimeout(() => setCopied(false), 1100);
     } catch {
-      // Clipboard permission can be denied; the text is still selectable by hand, so
+      // Clipboard permission can be refused. The text is still selectable by hand, so
       // this is not worth surfacing as an error.
     }
   }
 
   return (
-    <div className="msg-actions" role="toolbar" aria-label="Message actions">
+    <div className="turn-tools" role="toolbar" aria-label="Message actions">
       {swipeCount > 1 && (
         <>
-          <IconButton label="Previous response" onClick={() => onSwipe('prev')} disabled={!canSwipeLeft || busy}>
+          <Tool label="Previous response" onClick={() => onSwipe('prev')} disabled={!canSwipeLeft || busy}>
             <ChevronLeft />
-          </IconButton>
-          <span className="msg-swipe-count" aria-label={`Response ${swipeIndex + 1} of ${swipeCount}`}>
+          </Tool>
+          <span className="tool-count" aria-label={`Response ${swipeIndex + 1} of ${swipeCount}`}>
             {swipeIndex + 1}/{swipeCount}
           </span>
-          <IconButton label="Next response" onClick={() => onSwipe('next')} disabled={!canSwipeRight || busy}>
+          <Tool label="Next response" onClick={() => onSwipe('next')} disabled={!canSwipeRight || busy}>
             <ChevronRight />
-          </IconButton>
+          </Tool>
         </>
       )}
 
       {onRegenerate && (
-        <IconButton label="Regenerate" onClick={onRegenerate} disabled={busy}>
-          <Refresh />
-        </IconButton>
+        <Tool label="Regenerate" onClick={onRegenerate} disabled={busy}>
+          <Redo />
+        </Tool>
       )}
 
-      <IconButton label={copied ? 'Copied' : 'Copy'} onClick={() => void copy()}>
-        {copied ? <Check /> : <Copy />}
-      </IconButton>
+      <Tool label={copied ? 'Copied' : 'Copy'} onClick={() => void copy()}>
+        {copied ? <Check /> : <CopyGlyph />}
+      </Tool>
 
-      <IconButton label="Edit" onClick={onEdit} disabled={busy}>
-        <Pencil />
-      </IconButton>
+      <Tool label="Edit" onClick={onEdit} disabled={busy}>
+        <Pen />
+      </Tool>
 
-      <IconButton label="Delete" onClick={onDelete} disabled={busy}>
-        <Trash />
-      </IconButton>
+      <Tool label="Delete" onClick={onDelete} disabled={busy}>
+        <Cross />
+      </Tool>
     </div>
   );
 }
 
-/**
- * `onCopy` is passed the raw text so the caller can decide what is copyable — the
- * component never reaches into the message itself.
- */
-async function onCopyText(onCopy: () => void): Promise<string> {
-  onCopy();
-  return '';
-}
-
-function IconButton({
+function Tool({
   label,
   onClick,
   disabled,
@@ -108,7 +101,7 @@ function IconButton({
   return (
     <button
       type="button"
-      className="msg-action"
+      className="tool"
       aria-label={label}
       title={label}
       onClick={onClick}
@@ -119,74 +112,74 @@ function IconButton({
   );
 }
 
-/**
- * Inline SVG rather than an icon font or an icon package: five small glyphs are not
- * worth a dependency, and inline paths inherit `currentColor` so they follow the theme
- * without extra wiring.
- */
-const STROKE = {
+/** One shared path config, so every glyph has the same optical weight. */
+const stroke = {
+  width: 16,
+  height: 16,
+  viewBox: '0 0 16 16',
   fill: 'none',
   stroke: 'currentColor',
-  strokeWidth: 1.7,
+  strokeWidth: 1.35,
   strokeLinecap: 'round' as const,
   strokeLinejoin: 'round' as const,
+  'aria-hidden': true,
 };
 
 function ChevronLeft() {
   return (
-    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" {...STROKE}>
-      <path d="M15 18l-6-6 6-6" />
+    <svg {...stroke}>
+      <path d="M10 3.5L5.5 8l4.5 4.5" />
     </svg>
   );
 }
 
 function ChevronRight() {
   return (
-    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" {...STROKE}>
-      <path d="M9 6l6 6-6 6" />
+    <svg {...stroke}>
+      <path d="M6 3.5L10.5 8 6 12.5" />
     </svg>
   );
 }
 
-function Refresh() {
+function Redo() {
   return (
-    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" {...STROKE}>
-      <path d="M21 12a9 9 0 1 1-3-6.7" />
-      <path d="M21 3v6h-6" />
+    <svg {...stroke}>
+      <path d="M13 8a5 5 0 1 1-1.6-3.7" />
+      <path d="M13 2.5V5h-2.5" />
     </svg>
   );
 }
 
-function Copy() {
+function CopyGlyph() {
   return (
-    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" {...STROKE}>
-      <rect x="9" y="9" width="11" height="11" rx="2" />
-      <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+    <svg {...stroke}>
+      <rect x="5.75" y="5.75" width="7.5" height="7.5" rx="1.5" />
+      <path d="M10.25 5.75V4.5A1.5 1.5 0 0 0 8.75 3h-4.5A1.5 1.5 0 0 0 2.75 4.5v4.5a1.5 1.5 0 0 0 1.5 1.5h1.25" />
     </svg>
   );
 }
 
 function Check() {
   return (
-    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" {...STROKE}>
-      <path d="M20 6L9 17l-5-5" />
+    <svg {...stroke}>
+      <path d="M3.5 8.5L6.5 11.5l6-7" />
     </svg>
   );
 }
 
-function Pencil() {
+function Pen() {
   return (
-    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" {...STROKE}>
-      <path d="M12 20h9" />
-      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" />
+    <svg {...stroke}>
+      <path d="M11.4 2.9a1.6 1.6 0 0 1 2.3 2.3l-7.3 7.3-3 .7.7-3z" />
+      <path d="M10.2 4.1l2.3 2.3" />
     </svg>
   );
 }
 
-function Trash() {
+function Cross() {
   return (
-    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" {...STROKE}>
-      <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" />
+    <svg {...stroke}>
+      <path d="M4 4l8 8M12 4l-8 8" />
     </svg>
   );
 }

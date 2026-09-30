@@ -2,8 +2,25 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      The address bar and the Android status bar take these, so a themed app is not
+      framed by a colour it never uses. Values match the dark theme's ground and brass.
+    -->
+    <meta name="theme-color" content="#16130F" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#F6F2EA" media="(prefers-color-scheme: light)" />
+    <meta name="color-scheme" content="dark light" />
+    <meta
+      name="description"
+      content="A personal roleplay client with a cache-stable prompt assembler, long-term memory, and world state."
+    />
+    <!-- Installable on a phone without an app store: the APK is the fuller option, but
+         this is one tap from the browser. -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Tessera" />
     <title>Tessera</title>
   </head>
   <body>

@@ -3,10 +3,19 @@
 export interface CharacterSummary {
   id: string;
   name: string;
+  /**
+   * The card's own title, e.g. "Quill 25/09/2026". This is what the library lists and
+   * what you search for; it is not what the reader sees in the transcript.
+   */
   avatar: string | null;
   source_format: string;
   tokens: number | null;
   created_at: number;
+  /**
+   * CCv3's `nickname` — the name the character is called in the transcript. Distinct
+   * from `name`, which is the card's title. Falls back to `name` when unset.
+   */
+  shownName?: string;
 }
 
 export interface ChatSummary {
@@ -33,6 +42,19 @@ export interface MessageRow {
   /** Alternative ids at this position, in order. Length 1 when never regenerated. */
   swipes?: string[];
   swipeIndex?: number;
+}
+
+export interface ChatCharacter {
+  id: string;
+  name: string;
+  avatar: string | null;
+  /** What the reader sees in the transcript. */
+  shownName: string;
+}
+
+export interface ChatPersona {
+  id: string;
+  name: string;
 }
 
 export interface ChatDetail {
