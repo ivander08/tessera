@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from 'react';
-import { Link } from 'react-router';
+import { AppBar } from '../components/AppBar';
 import { apiJson } from '../lib/api';
 import { parseJsonCard } from '../lib/cards/import';
 import type { ParsedCard } from '../lib/cards/types';
@@ -80,38 +80,31 @@ export default function Forge() {
   const counter = count ?? estimateTokens;
 
   return (
-    <main className="mx-auto max-w-2xl space-y-5 p-4 pb-24">
-      <header className="flex items-center justify-between">
-        <h1 className="text-[var(--font-lg)] font-semibold">Forge</h1>
-        <nav className="flex gap-3">
-          <Link to="/characters" className="app-link">
-            Characters
-          </Link>
-          <Link to="/" className="app-link">
-            Chats
-          </Link>
-        </nav>
-      </header>
+    <>
+      <AppBar title={<span className="bar-title">Forge</span>} />
 
-      <nav className="flex gap-2">
+      <main className="sheet">
+      <div className="tabs" role="tablist">
         {TABS.map((tab) => (
           <button
             key={tab.id}
             type="button"
-            className={`btn min-h-10 ${tool === tab.id ? 'primary' : ''}`}
+            role="tab"
+            className="tab"
+            aria-selected={tool === tab.id}
             onClick={() => setTool(tab.id)}
           >
             {tab.label}
           </button>
         ))}
-      </nav>
+      </div>
 
       {tool === 'draft' && <DraftTool counter={counter} exact={count !== null} />}
       {tool !== 'draft' && (
         <>
-          {cards.loading && <p className="text-sm text-[var(--ink-dim)]">Loading characters…</p>}
+          {cards.loading && <p className="sheet-sub">Loading characters…</p>}
           {cards.error && (
-            <p className="text-sm text-[var(--danger)]">
+            <p className="note danger">
               {cards.error} — pasting a card still works.
             </p>
           )}
@@ -119,7 +112,8 @@ export default function Forge() {
           {tool === 'tokens' && <TokensTool cards={cards.data ?? []} />}
         </>
       )}
-    </main>
+      </main>
+    </>
   );
 }
 
@@ -198,7 +192,7 @@ function CardSource({
         </>
       )}
 
-      {problem && <p className="text-sm text-[var(--danger)]">{problem}</p>}
+      {problem && <p className="note danger">{problem}</p>}
     </div>
   );
 }
@@ -322,7 +316,7 @@ function DraftTool({
   return (
     <section className="space-y-4">
       <label className="block space-y-1">
-        <span className="text-[var(--font-sm)] font-medium">One-line premise</span>
+        <span className="form-label">One-line premise</span>
         <textarea
           className="field"
           rows={2}
@@ -341,27 +335,27 @@ function DraftTool({
         {busy ? 'Drafting…' : 'Draft a card'}
       </button>
 
-      {problem && <p className="text-sm text-[var(--danger)]">{problem}</p>}
-      {status && <p className="text-sm text-[var(--ink-dim)]">{status}</p>}
+      {problem && <p className="note danger">{problem}</p>}
+      {status && <p className="sheet-sub">{status}</p>}
 
       {edited && (
         <>
-          <div className="card space-y-1 p-3 text-[var(--font-sm)]">
+          <div className="panel panel-pad">
             <p>
-              <span className="font-mono text-[var(--accent)]">{permanent}</span> permanent tokens
+              <span className="font-mono text-[var(--brass)]">{permanent}</span> permanent tokens
               — paid on every turn, forever.
             </p>
-            <p className="text-[var(--font-xs)] text-[var(--ink-dim)]">
+            <p className="form-hint">
               first_mes {counter(edited.firstMes)} — the only true one-time cost: it becomes the
               chat's opening message rather than prompt text.
             </p>
-            <p className="text-[var(--font-xs)] text-[var(--ink-dim)]">
+            <p className="form-hint">
               mes_example {counter(edited.mesExample)} and post_history_instructions{' '}
               {counter(edited.postHistoryInstructions)} are <em>not</em> one-time despite reading
               that way — <code className="md-code">assemble()</code> emits mesExample in the prompt
               head and post_history_instructions in the tail, so both are re-sent every turn.
             </p>
-            <p className="text-[var(--font-xs)] text-[var(--ink-faint)]">
+            <p className="form-hint">
               counted with{' '}
               {exact
                 ? 'the exact o200k_base vocabulary'
@@ -370,9 +364,9 @@ function DraftTool({
           </div>
 
           <label className="block space-y-1">
-            <span className="flex items-baseline justify-between text-[var(--font-sm)]">
+            <span className="flex items-baseline justify-between text-[var(--text-sm)]">
               <span className="font-medium">name</span>
-              <span className="font-mono text-[var(--font-xs)] text-[var(--ink-faint)]">
+              <span className="data">
                 {counter(edited.name)} tok
               </span>
             </span>
@@ -390,9 +384,9 @@ function DraftTool({
           {TEXT_FIELDS.map((field) => (
             <div key={String(field.key)} className="space-y-1">
               <label className="block space-y-1">
-                <span className="flex items-baseline justify-between text-[var(--font-sm)]">
+                <span className="flex items-baseline justify-between text-[var(--text-sm)]">
                   <span className="font-medium">{field.label}</span>
-                  <span className="font-mono text-[var(--font-xs)] text-[var(--ink-faint)]">
+                  <span className="data">
                     {counter(String(edited[field.key] ?? ''))} tok
                   </span>
                 </span>
@@ -408,12 +402,12 @@ function DraftTool({
                 />
               </label>
               {field.key === 'mesExample' && (
-                <p className="text-[var(--font-xs)] text-[var(--ink-faint)]">
+                <p className="form-hint">
                   re-sent every turn — it lives in the cached prompt head
                 </p>
               )}
               {field.key === 'postHistoryInstructions' && (
-                <p className="text-[var(--font-xs)] text-[var(--ink-faint)]">
+                <p className="form-hint">
                   re-sent every turn — it lives in the prompt tail
                 </p>
               )}
@@ -432,9 +426,9 @@ function DraftTool({
 
           <div className="space-y-1">
             <label className="block space-y-1">
-              <span className="flex items-baseline justify-between text-[var(--font-sm)]">
+              <span className="flex items-baseline justify-between text-[var(--text-sm)]">
                 <span className="font-medium">tags</span>
-                <span className="font-mono text-[var(--font-xs)] text-[var(--ink-faint)]">
+                <span className="data">
                   {edited.tags.reduce((sum, tag) => sum + counter(tag), 0)} tok · never sent
                 </span>
               </span>
@@ -457,9 +451,9 @@ function DraftTool({
 
           <div className="space-y-1">
             <label className="block space-y-1">
-              <span className="flex items-baseline justify-between text-[var(--font-sm)]">
+              <span className="flex items-baseline justify-between text-[var(--text-sm)]">
                 <span className="font-medium">alternate_greetings</span>
-                <span className="font-mono text-[var(--font-xs)] text-[var(--ink-faint)]">
+                <span className="data">
                   {edited.alternateGreetings.reduce((sum, line) => sum + counter(line), 0)} tok ·
                   never sent
                 </span>
@@ -568,15 +562,15 @@ function CritiqueTool({ cards }: { cards: ForgeCard[] }) {
         </button>
       )}
 
-      {problem && <p className="text-sm text-[var(--danger)]">{problem}</p>}
+      {problem && <p className="note danger">{problem}</p>}
 
       {picked && (
         <section className="card space-y-2 border-[var(--danger)] p-3">
-          <h2 className="text-[var(--font-sm)] font-semibold">
+          <h2 className="eyebrow">
             Instructions smuggled into description or personality
             {localBusy ? '' : ` — ${smuggled.length}`}
           </h2>
-          <p className="text-[var(--font-xs)] text-[var(--ink-dim)]">
+          <p className="form-hint">
             Behavioural directives belong in <code className="md-code">system_prompt</code> or{' '}
             <code className="md-code">post_history_instructions</code>. In a description they are
             paid on every turn and read as characterisation, which is why they are the loudest
@@ -584,7 +578,7 @@ function CritiqueTool({ cards }: { cards: ForgeCard[] }) {
             same answer every time.
           </p>
 
-          {localBusy && <p className="text-sm text-[var(--ink-dim)]">Scanning…</p>}
+          {localBusy && <p className="sheet-sub">Scanning…</p>}
 
           {!localBusy && smuggled.length === 0 && (
             <p className="text-sm text-[var(--good)]">
@@ -597,7 +591,7 @@ function CritiqueTool({ cards }: { cards: ForgeCard[] }) {
               {smuggled.map((item) => (
                 <li
                   key={item}
-                  className="border-l-2 border-[var(--danger)] pl-2 text-[var(--font-sm)]"
+                  className="note danger"
                 >
                   “{item}”
                 </li>
@@ -606,7 +600,7 @@ function CritiqueTool({ cards }: { cards: ForgeCard[] }) {
           )}
 
           {result && (
-            <p className="text-[var(--font-xs)] text-[var(--ink-faint)]">
+            <p className="form-hint">
               {local?.length ?? 0} found by the local scan; {result.smuggledInstructions.length} in
               total after the model's pass.
             </p>
@@ -616,15 +610,15 @@ function CritiqueTool({ cards }: { cards: ForgeCard[] }) {
 
       {result && (
         <section className="space-y-2">
-          <h2 className="text-[var(--font-sm)] font-semibold uppercase tracking-wide text-[var(--ink-dim)]">
+          <h2 className="text-[var(--text-sm)] font-semibold uppercase tracking-wide text-[var(--ink-dim)]">
             Critique
           </h2>
-          <p className="card p-3 text-[var(--font-sm)] whitespace-pre-wrap">{result.critique}</p>
+          <p className="card p-3 text-[var(--text-sm)] whitespace-pre-wrap">{result.critique}</p>
         </section>
       )}
 
       {!picked && (
-        <p className="text-sm text-[var(--ink-dim)]">Pick or paste a card to review it.</p>
+        <p className="sheet-sub">Pick or paste a card to review it.</p>
       )}
     </section>
   );
@@ -670,34 +664,34 @@ function TokensTool({ cards }: { cards: ForgeCard[] }) {
     <section className="space-y-4">
       <CardSource cards={cards} onSelect={setPicked} />
 
-      <p className="text-[var(--font-xs)] text-[var(--ink-dim)]">
+      <p className="form-hint">
         This reports <strong>cost</strong>, not quality. No controlled test holds a character
         constant while varying token count, so no optimal length is claimed — only what a field
         costs, and mechanical observations about the text (a phrase repeated three times, one
         paragraph longer than the rest combined). Needs no model and no provider key.
       </p>
 
-      {busy && <p className="text-sm text-[var(--ink-dim)]">Counting…</p>}
-      {problem && <p className="text-sm text-[var(--danger)]">{problem}</p>}
+      {busy && <p className="sheet-sub">Counting…</p>}
+      {problem && <p className="note danger">{problem}</p>}
 
       {report && (
         <>
-          <div className="card space-y-1 p-3 text-[var(--font-sm)]">
+          <div className="panel panel-pad">
             <p>
-              <span className="font-mono text-[var(--accent)]">{report.permanentPerTurn}</span>{' '}
+              <span className="font-mono text-[var(--brass)]">{report.permanentPerTurn}</span>{' '}
               permanent tokens per turn ·{' '}
               <span className="font-mono">{report.oneTime}</span> one-time
             </p>
-            <p className="text-[var(--font-xs)] text-[var(--ink-dim)]">
+            <p className="form-hint">
               {report.totalOverTurns} tokens over 500 turns. Counted on the Worker with its
               estimator, not the browser's exact vocabulary — expect a few percent between them.
             </p>
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-[var(--font-sm)]">
+            <table className="w-full border-collapse text-[var(--text-sm)]">
               <thead>
-                <tr className="text-left text-[var(--font-xs)] uppercase tracking-wide text-[var(--ink-faint)]">
+                <tr className="text-left text-[var(--text-xs)] uppercase tracking-wide text-[var(--ink-faint)]">
                   <th className="py-1 pr-2 font-medium">Field</th>
                   <th className="py-1 pr-2 text-right font-medium">Tok</th>
                   <th className="py-1 pr-2 text-right font-medium">Per turn</th>
@@ -723,7 +717,7 @@ function TokensTool({ cards }: { cards: ForgeCard[] }) {
                       <tr>
                         <td
                           colSpan={4}
-                          className="pb-1.5 text-[var(--font-xs)] text-[var(--ink-dim)]"
+                          className="pb-1.5 text-[var(--text-xs)] text-[var(--ink-dim)]"
                         >
                           {field.trimSuggestions.map((suggestion) => (
                             <span key={suggestion} className="block">
@@ -740,12 +734,12 @@ function TokensTool({ cards }: { cards: ForgeCard[] }) {
           </div>
 
           <section className="space-y-1">
-            <h2 className="text-[var(--font-sm)] font-semibold uppercase tracking-wide text-[var(--ink-dim)]">
+            <h2 className="text-[var(--text-sm)] font-semibold uppercase tracking-wide text-[var(--ink-dim)]">
               Notes
             </h2>
             <ul className="space-y-1">
               {report.notes.map((note) => (
-                <li key={note} className="text-[var(--font-xs)] text-[var(--ink-faint)]">
+                <li key={note} className="form-hint">
                   {note}
                 </li>
               ))}
@@ -754,7 +748,7 @@ function TokensTool({ cards }: { cards: ForgeCard[] }) {
         </>
       )}
 
-      {!picked && <p className="text-sm text-[var(--ink-dim)]">Pick or paste a card to price it.</p>}
+      {!picked && <p className="sheet-sub">Pick or paste a card to price it.</p>}
     </section>
   );
 }

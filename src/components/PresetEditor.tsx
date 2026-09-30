@@ -108,7 +108,7 @@ export function PresetEditor({
   return (
     <section className="card space-y-4 p-3">
       <label className="block space-y-1">
-        <span className="text-[var(--font-xs)] text-[var(--ink-dim)]">Name</span>
+        <span className="text-[var(--text-xs)] text-[var(--ink-dim)]">Name</span>
         <input className="field" value={name} onChange={(event) => setName(event.target.value)} />
       </label>
 
@@ -122,10 +122,10 @@ export function PresetEditor({
 
       {carried.length > 0 && (
         <div className="space-y-1">
-          <p className="text-[var(--font-xs)] text-[var(--ink-dim)]">
+          <p className="text-[var(--text-xs)] text-[var(--ink-dim)]">
             Carried through from the import — not editable here, and preserved on save:
           </p>
-          <ul className="space-y-0.5 font-mono text-[var(--font-xs)] text-[var(--ink-faint)]">
+          <ul className="space-y-0.5 font-mono text-[var(--text-xs)] text-[var(--ink-faint)]">
             {carried.map(([key, value]) => (
               <li key={key}>
                 {key} = {JSON.stringify(value)}
@@ -136,7 +136,7 @@ export function PresetEditor({
       )}
 
       <section className="space-y-3">
-        <h3 className="text-[var(--font-sm)] font-semibold uppercase tracking-wide text-[var(--ink-dim)]">
+        <h3 className="text-[var(--text-sm)] font-semibold uppercase tracking-wide text-[var(--ink-dim)]">
           Prompt structure
         </h3>
 
@@ -242,7 +242,7 @@ export function PresetEditor({
         <button type="button" className="btn min-h-10" onClick={onCancel} disabled={busy}>
           Cancel
         </button>
-        {status && <span className="text-[var(--font-sm)] text-[var(--danger)]">{status}</span>}
+        {status && <span className="text-[var(--text-sm)] text-[var(--danger)]">{status}</span>}
       </div>
     </section>
   );
@@ -279,14 +279,14 @@ function ConfigText({
 }) {
   return (
     <label className="block space-y-1">
-      <span className="text-[var(--font-xs)] text-[var(--ink-dim)]">{label}</span>
+      <span className="text-[var(--text-xs)] text-[var(--ink-dim)]">{label}</span>
       <textarea
         className="field"
         rows={rows}
         value={value}
         onChange={(event) => onChange(event.target.value)}
       />
-      <span className="block text-[var(--font-xs)] text-[var(--ink-faint)]">{hint}</span>
+      <span className="block text-[var(--text-xs)] text-[var(--ink-faint)]">{hint}</span>
     </label>
   );
 }
@@ -312,7 +312,7 @@ function ConfigNumber({
 
   return (
     <label className="block space-y-1">
-      <span className="text-[var(--font-xs)] text-[var(--ink-dim)]">{label}</span>
+      <span className="text-[var(--text-xs)] text-[var(--ink-dim)]">{label}</span>
       <input
         className="field"
         inputMode="numeric"
@@ -344,9 +344,9 @@ function ConfigFlag({
         type="checkbox"
         checked={checked}
         onChange={(event) => onChange(event.target.checked)}
-        className="h-5 w-5 shrink-0 accent-[var(--accent)]"
+        className="h-5 w-5 shrink-0 accent-[var(--brass)]"
       />
-      <span className="text-[var(--font-sm)]">{label}</span>
+      <span className="text-[var(--text-sm)]">{label}</span>
     </label>
   );
 }

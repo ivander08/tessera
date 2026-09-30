@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Link } from 'react-router';
+import { AppBar } from '../components/AppBar';
 import { apiJson } from '../lib/api';
 import { messageOf, useAsync } from '../lib/hooks';
 import { parseFf5 } from '../lib/presets/ff5';
@@ -138,18 +138,15 @@ export default function Presets() {
   }
 
   return (
-    <main className="mx-auto max-w-2xl space-y-5 p-4 pb-24">
-      <header className="flex items-center justify-between">
-        <h1 className="text-[var(--font-lg)] font-semibold">Presets</h1>
-        <nav className="flex gap-3">
-          <Link to="/settings" className="app-link">
-            Settings
-          </Link>
-          <Link to="/" className="app-link">
-            ← Chats
-          </Link>
-        </nav>
-      </header>
+    <>
+      <AppBar title={<span className="bar-title">Presets</span>} />
+
+      <main className="sheet">
+      <p className="sheet-sub" style={{ marginTop: 0 }}>
+        A preset is a whole generation configuration — sampler values, prompt structure, stop
+        strings, prefill. Attach one to a chat from that chat&rsquo;s menu; every preset is
+        available in every chat.
+      </p>
 
       <section className="space-y-2">
         <div
@@ -164,11 +161,11 @@ export default function Presets() {
             const file = event.dataTransfer.files[0];
             if (file) void importFile(file);
           }}
-          className={`card flex flex-col items-center gap-2 p-5 text-center ${
-            dragging ? 'border-[var(--accent)]' : ''
+          className={`empty flex flex-col items-center gap-2 ${
+            dragging ? 'border-[var(--brass)]' : ''
           }`}
         >
-          <p className="text-[var(--font-sm)] text-[var(--ink-dim)]">
+          <p className="sheet-sub">
             Drop a SillyTavern preset here, or
           </p>
           <button
@@ -198,19 +195,19 @@ export default function Presets() {
             type="checkbox"
             checked={ff5}
             onChange={(event) => setFf5(event.target.checked)}
-            className="h-5 w-5 shrink-0 accent-[var(--accent)]"
+            className="h-5 w-5 shrink-0 accent-[var(--brass)]"
           />
-          <span className="text-[var(--font-sm)]">
+          <span className="text-[var(--text-sm)]">
             This is a Freaky Frankenstein archive
           </span>
         </label>
-        <p className="text-[var(--font-xs)] text-[var(--ink-faint)]">
+        <p className="text-[var(--text-xs)] text-[var(--ink-faint)]">
           An FF5 file is byte-for-byte a chat-completion preset, so nothing in it says so.
           Ticking this keeps its prompts and its regex pack together.
         </p>
       </section>
 
-      {status && <p className="text-[var(--font-sm)] text-[var(--danger)]">{status}</p>}
+      {status && <div className="note danger">{status}</div>}
 
       {result && <ImportReport result={result} onDismiss={() => setResult(null)} />}
 
@@ -229,24 +226,24 @@ export default function Presets() {
         />
       )}
 
-      {loading && <p className="text-[var(--font-sm)] text-[var(--ink-dim)]">Loading…</p>}
-      {error && <p className="text-[var(--font-sm)] text-[var(--danger)]">{error}</p>}
+      {loading && <p className="sheet-sub">Loading…</p>}
+      {error && <div className="note danger">{error}</div>}
 
       {data && data.length === 0 && (
-        <p className="text-[var(--font-sm)] text-[var(--ink-dim)]">
+        <p className="sheet-sub">
           Nothing imported yet. A preset overrides the sampler, prompt and stop-string
           settings for the chats that use it.
         </p>
       )}
 
-      <ul className="divide-y divide-[var(--line)]">
+      <div>
         {data?.map((preset) => (
-          <li key={preset.id} className="space-y-2 py-3">
+          <div key={preset.id} className="panel panel-pad" style={{ marginBottom: 10 }}>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
               <div className="min-w-0">
-                <p className="truncate font-medium">{preset.name}</p>
-                <p className="text-[var(--font-xs)] text-[var(--ink-dim)]">
-                  <span className="rounded border border-[var(--line)] px-1.5 py-0.5">
+                <p className="row-title">{preset.name}</p>
+                <p className="row-sub">
+                  <span className={`tag ${preset.kind === 'textgen' ? 'brass' : preset.kind === 'chat' ? 'verdigris' : ''}`}>
                     {preset.kind}
                   </span>{' '}
                   {preset.knob_count} knob{preset.knob_count === 1 ? '' : 's'}
@@ -254,7 +251,7 @@ export default function Presets() {
                   {preset.has_prompts === 1 && ' · prompts'}
                   {preset.has_config === 1 && ' · config'}
                 </p>
-                <p className="text-[var(--font-xs)] text-[var(--ink-faint)]">
+                <p className="form-hint">
                   imported {new Date(preset.created_at).toLocaleDateString()}
                   {preset.updated_at > preset.created_at &&
                     ` · edited ${new Date(preset.updated_at).toLocaleDateString()}`}
@@ -263,17 +260,13 @@ export default function Presets() {
               {/* Below the metadata on a phone, beside it on a wider screen: three
                   buttons plus the name do not fit across 390px, and squeezing them
                   truncates the one thing the row exists to show. */}
-              <div className="flex shrink-0 flex-wrap items-center gap-1">
-                <button
-                  type="button"
-                  className="btn min-h-10"
-                  onClick={() => void openEditor(preset.id)}
-                >
+              <div className="row-actions">
+                <button type="button" className="btn quiet" onClick={() => void openEditor(preset.id)}>
                   Edit
                 </button>
                 <button
                   type="button"
-                  className="btn min-h-10"
+                  className="btn quiet"
                   onClick={() => void duplicate(preset.id)}
                   disabled={busy}
                 >
@@ -281,7 +274,7 @@ export default function Presets() {
                 </button>
                 <button
                   type="button"
-                  className="btn min-h-10"
+                  className="btn quiet danger"
                   onClick={() => void remove(preset)}
                   disabled={busy}
                 >
@@ -289,10 +282,11 @@ export default function Presets() {
                 </button>
               </div>
             </div>
-          </li>
+          </div>
         ))}
-      </ul>
-    </main>
+      </div>
+      </main>
+    </>
   );
 }
 
@@ -309,7 +303,7 @@ function ImportReport({ result, onDismiss }: { result: ImportResult; onDismiss: 
   return (
     <section className="card space-y-2 p-3">
       <div className="flex items-start justify-between gap-3">
-        <p className="text-[var(--font-sm)]">
+        <p className="text-[var(--text-sm)]">
           Imported <span className="font-medium">{result.name}</span> as {result.kind} — {knobs}{' '}
           knob{knobs === 1 ? '' : 's'}
           {result.regexCount > 0 && `, ${result.regexCount} regex script${result.regexCount === 1 ? '' : 's'}`}
@@ -321,7 +315,7 @@ function ImportReport({ result, onDismiss }: { result: ImportResult; onDismiss: 
       </div>
 
       {result.needsRegexPack && (
-        <p className="text-[var(--font-sm)] text-[var(--warn)]">
+        <p className="text-[var(--text-sm)] text-[var(--warn)]">
           This preset ships prompts but no regex scripts. It needs its regex pack to run as
           designed — without it the markup those prompts produce is never cleaned up, and
           stays in the prompt on every later turn.
@@ -330,11 +324,11 @@ function ImportReport({ result, onDismiss }: { result: ImportResult; onDismiss: 
 
       {result.dropped.length > 0 && (
         <div className="space-y-1">
-          <p className="text-[var(--font-sm)] text-[var(--warn)]">
+          <p className="text-[var(--text-sm)] text-[var(--warn)]">
             {result.dropped.length} setting{result.dropped.length === 1 ? '' : 's'} could not be
             carried over:
           </p>
-          <ul className="space-y-0.5 font-mono text-[var(--font-xs)] text-[var(--ink-dim)]">
+          <ul className="space-y-0.5 font-mono text-[var(--text-xs)] text-[var(--ink-dim)]">
             {result.dropped.map((entry) => (
               <li key={entry}>{entry}</li>
             ))}

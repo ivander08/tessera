@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router';
 import { apiJson } from '../lib/api';
 import type { ModelInfo, ProviderKeyRow } from '../lib/apiTypes';
 import { messageOf, useAsync } from '../lib/hooks';
+import { AppBar } from '../components/AppBar';
 import { KnobEditor } from '../components/KnobEditor';
 import { ThemeEditor, useLiveTheme } from '../components/ThemeEditor';
 import { parseTheme, type Theme } from '../lib/theme';
@@ -114,8 +114,8 @@ export default function Settings() {
 
   return (
     <Frame>
-      <section className="space-y-3">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-dim">Provider keys</h2>
+      <section className="section panel panel-pad">
+        <h2 className="eyebrow">Provider keys</h2>
         {PROVIDERS.map((providerId) => (
           <div key={providerId} className="flex items-center gap-2">
             <span className="w-24 font-mono text-sm">{providerId}</span>
@@ -126,12 +126,12 @@ export default function Settings() {
                 setKeyDraft((current) => ({ ...current, [providerId]: event.target.value }))
               }
               placeholder={keyed.has(providerId) ? 'stored — replace' : 'not set'}
-              className="flex-1 rounded border border-white/15 bg-black/30 px-3 py-1.5 font-mono text-sm outline-none focus:border-accent"
+              className="field" style={{ fontFamily: 'var(--font-data)' }}
             />
             <button
               type="button"
               onClick={() => void saveKey(providerId)}
-              className="rounded bg-white/10 px-3 py-1.5 text-sm hover:bg-white/20"
+              className="btn"
             >
               Save
             </button>
@@ -139,13 +139,13 @@ export default function Settings() {
         ))}
       </section>
 
-      <section className="space-y-3">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-dim">Model</h2>
+      <section className="section panel panel-pad">
+        <h2 className="eyebrow">Model</h2>
         <div className="flex gap-2">
           <select
             value={provider}
             onChange={(event) => setForm({ ...form, provider: event.target.value, model: '' })}
-            className="rounded border border-white/15 bg-black/30 px-3 py-1.5 text-sm outline-none focus:border-accent"
+            className="field"
           >
             <option value="">— provider —</option>
             {PROVIDERS.map((providerId) => (
@@ -159,7 +159,7 @@ export default function Settings() {
             value={model}
             onChange={(event) => setForm({ ...form, model: event.target.value })}
             disabled={modelList.length === 0}
-            className="flex-1 rounded border border-white/15 bg-black/30 px-3 py-1.5 text-sm outline-none focus:border-accent disabled:opacity-40"
+            className="field"
           >
             <option value="">— model —</option>
             {modelList.map((entry) => (
@@ -169,8 +169,8 @@ export default function Settings() {
             ))}
           </select>
         </div>
-        {models.error && <p className="text-sm text-amber-400">{models.error}</p>}
-        <p className="text-xs text-ink-dim">
+        {models.error && <p className="note warn">{models.error}</p>}
+        <p className="form-hint">
           No default model ships with Tessera. Nothing sends until both are chosen here.
         </p>
       </section>
@@ -183,21 +183,21 @@ export default function Settings() {
         onChange={(next) => setForm({ ...form, knobs: next })}
       />
 
-      <section className="space-y-3">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-dim">Prompt</h2>
+      <section className="section panel panel-pad">
+        <h2 className="eyebrow">Prompt</h2>
         <Field label="System prompt (used when the card defines none)">
           <textarea
             value={form.systemPrompt ?? ''}
             onChange={(event) => setForm({ ...form, systemPrompt: event.target.value })}
             rows={4}
-            className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 text-sm outline-none focus:border-accent"
+            className="field"
           />
         </Field>
         <Field label="Author's note (tail — safe to change every turn)">
           <input
             value={form.authorsNote ?? ''}
             onChange={(event) => setForm({ ...form, authorsNote: event.target.value })}
-            className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 text-sm outline-none focus:border-accent"
+            className="field"
           />
         </Field>
         <div className="flex gap-3">
@@ -206,7 +206,7 @@ export default function Settings() {
               value={form.maxTokens ?? ''}
               onChange={(event) => setForm({ ...form, maxTokens: event.target.value })}
               inputMode="numeric"
-              className="w-32 rounded border border-white/15 bg-black/30 px-3 py-2 text-sm outline-none focus:border-accent"
+              className="field" style={{ maxWidth: 32 * 4 }}
             />
           </Field>
           <Field label="Context budget (prompt tokens)">
@@ -214,7 +214,7 @@ export default function Settings() {
               value={form.contextBudget ?? ''}
               onChange={(event) => setForm({ ...form, contextBudget: event.target.value })}
               inputMode="numeric"
-              className="w-40 rounded border border-white/15 bg-black/30 px-3 py-2 text-sm outline-none focus:border-accent"
+              className="field" style={{ maxWidth: 40 * 4 }}
             />
           </Field>
         </div>
@@ -223,7 +223,7 @@ export default function Settings() {
             value={form.cheapProvider ?? ''}
             onChange={(event) => setForm({ ...form, cheapProvider: event.target.value })}
             placeholder={form.provider ?? 'same as above'}
-            className="w-48 rounded border border-white/15 bg-black/30 px-3 py-2 text-sm outline-none focus:border-accent"
+            className="field" style={{ maxWidth: 48 * 4 }}
           />
         </Field>
         <Field label="Cheap model id">
@@ -231,7 +231,7 @@ export default function Settings() {
             value={form.cheapModel ?? ''}
             onChange={(event) => setForm({ ...form, cheapModel: event.target.value })}
             placeholder={form.model ?? 'same as above'}
-            className="w-64 rounded border border-white/15 bg-black/30 px-3 py-2 text-sm outline-none focus:border-accent"
+            className="field" style={{ maxWidth: 64 * 4 }}
           />
         </Field>
         <Field label="IDR per USD (Kenari bills in Rupiah; blank leaves costs unreported)">
@@ -239,7 +239,7 @@ export default function Settings() {
             value={form.idrPerUsd ?? ''}
             onChange={(event) => setForm({ ...form, idrPerUsd: event.target.value })}
             inputMode="decimal"
-            className="w-32 rounded border border-white/15 bg-black/30 px-3 py-2 text-sm outline-none focus:border-accent"
+            className="field" style={{ maxWidth: 32 * 4 }}
           />
         </Field>
       </section>
@@ -250,11 +250,11 @@ export default function Settings() {
         <button
           type="button"
           onClick={() => void save()}
-          className="rounded bg-accent px-4 py-2 text-sm font-medium text-black"
+          className="btn primary"
         >
           Save settings
         </button>
-        {status && <span className="text-sm text-ink-dim">{status}</span>}
+        {status && <span className="form-hint">{status}</span>}
       </div>
     </Frame>
   );
@@ -262,29 +262,17 @@ export default function Settings() {
 
 function Frame({ children }: { children: React.ReactNode }) {
   return (
-    <main className="mx-auto max-w-2xl space-y-6 p-4">
-      <header className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold">Settings</h1>
-        <nav className="flex items-center gap-3">
-          {/* Presets are the other half of the sampler and prompt settings on this
-              screen, so this is where you go looking for them. */}
-          <Link to="/presets" className="text-sm text-ink-dim hover:text-ink">
-            Presets
-          </Link>
-          <Link to="/" className="text-sm text-ink-dim hover:text-ink">
-            ← Chats
-          </Link>
-        </nav>
-      </header>
-      {children}
-    </main>
+    <>
+      <AppBar title={<span className="bar-title">Settings</span>} />
+      <main className="sheet">{children}</main>
+    </>
   );
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block space-y-1">
-      <span className="text-xs text-ink-dim">{label}</span>
+      <span className="form-hint">{label}</span>
       {children}
     </label>
   );

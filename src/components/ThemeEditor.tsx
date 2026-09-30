@@ -31,7 +31,7 @@ export function ThemeEditor({
   return (
     <section className="space-y-4">
       <div className="flex items-baseline justify-between">
-        <h2 className="text-[var(--font-sm)] font-semibold uppercase tracking-wide text-[var(--ink-dim)]">
+        <h2 className="text-[var(--text-sm)] font-semibold uppercase tracking-wide text-[var(--ink-dim)]">
           Appearance
         </h2>
         <button
@@ -105,7 +105,7 @@ export function ThemeEditor({
 
       <Row label="Custom CSS">
         <textarea
-          className="field font-mono text-[var(--font-xs)]"
+          className="field font-mono text-[var(--text-xs)]"
           rows={3}
           value={preview.customCss}
           placeholder=".msg-content { letter-spacing: 0.01em; }"
@@ -113,7 +113,7 @@ export function ThemeEditor({
         />
       </Row>
 
-      <p className="text-[var(--font-xs)] text-[var(--ink-faint)]">
+      <p className="text-[var(--text-xs)] text-[var(--ink-faint)]">
         Custom CSS is applied last, so it overrides anything above. Every colour and size is a
         CSS variable on <code className="md-code">:root</code> — for example{' '}
         <code className="md-code">--accent</code>, <code className="md-code">--surface</code>.
@@ -125,7 +125,7 @@ export function ThemeEditor({
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="space-y-1">
-      <span className="text-[var(--font-xs)] text-[var(--ink-dim)]">{label}</span>
+      <span className="text-[var(--text-xs)] text-[var(--ink-dim)]">{label}</span>
       {children}
     </div>
   );
@@ -151,8 +151,8 @@ function Slider({
   return (
     <div className="space-y-1">
       <div className="flex items-baseline justify-between">
-        <span className="text-[var(--font-xs)] text-[var(--ink-dim)]">{label}</span>
-        <span className="font-mono text-[var(--font-xs)] text-[var(--ink-faint)]">{format(value)}</span>
+        <span className="text-[var(--text-xs)] text-[var(--ink-dim)]">{label}</span>
+        <span className="font-mono text-[var(--text-xs)] text-[var(--ink-faint)]">{format(value)}</span>
       </div>
       <input
         type="range"
@@ -162,7 +162,7 @@ function Slider({
         value={value}
         aria-label={label}
         onChange={(event) => onChange(Number(event.target.value))}
-        className="w-full accent-[var(--accent)]"
+        className="w-full accent-[var(--brass)]"
       />
     </div>
   );

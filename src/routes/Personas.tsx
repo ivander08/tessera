@@ -252,7 +252,7 @@ function PersonaForm({
   return (
     <form onSubmit={(event) => void submit(event)} className="space-y-2">
       <label className="block space-y-1">
-        <span className="text-[var(--font-xs)] text-[var(--ink-faint)]">Name — replaces {'{{user}}'}</span>
+        <span className="text-[var(--text-xs)] text-[var(--ink-faint)]">Name — replaces {'{{user}}'}</span>
         <input
           className="field min-h-10"
           value={name}
@@ -263,7 +263,7 @@ function PersonaForm({
       </label>
 
       <label className="block space-y-1">
-        <span className="text-[var(--font-xs)] text-[var(--ink-faint)]">
+        <span className="text-[var(--text-xs)] text-[var(--ink-faint)]">
           Description — sent to the model every turn
         </span>
         <textarea
@@ -276,7 +276,7 @@ function PersonaForm({
       </label>
 
       <label className="block space-y-1">
-        <span className="text-[var(--font-xs)] text-[var(--ink-faint)]">
+        <span className="text-[var(--text-xs)] text-[var(--ink-faint)]">
           Avatar URL — optional, shown in the list only
         </span>
         <input

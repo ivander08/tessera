@@ -87,7 +87,7 @@ export function PersonaPicker({
   return (
     <div className="space-y-1">
       <label className="block space-y-1">
-        <span className="text-[var(--font-xs)] text-[var(--ink-faint)]">Persona — who you are in this chat</span>
+        <span className="text-[var(--text-xs)] text-[var(--ink-faint)]">Persona — who you are in this chat</span>
         <select
           className="field min-h-10"
           value={value}
@@ -107,24 +107,24 @@ export function PersonaPicker({
       </label>
 
       {value.length === 0 && (
-        <p className="text-[var(--font-xs)] text-[var(--ink-faint)]">
+        <p className="text-[var(--text-xs)] text-[var(--ink-faint)]">
           <code className="md-code">{USER_MACRO}</code> will be left as a literal placeholder.{' '}
-          <Link to="/personas" className="text-[var(--accent)] underline underline-offset-2">
+          <Link to="/personas" className="text-[var(--brass)] underline underline-offset-2">
             {personas.length === 0 ? 'Create a persona' : 'Manage personas'}
           </Link>
         </p>
       )}
 
       {orphanId !== null && (
-        <p className="text-[var(--font-xs)] text-[var(--danger)]">
+        <p className="text-[var(--text-xs)] text-[var(--danger)]">
           {orphan.data
             ? 'This persona is no longer in the list — it was deleted elsewhere.'
             : 'This chat points at a persona that no longer exists.'}
         </p>
       )}
 
-      {error && <p className="text-[var(--font-xs)] text-[var(--danger)]">{error}</p>}
-      {problem && <p className="text-[var(--font-xs)] text-[var(--danger)]">{problem}</p>}
+      {error && <p className="text-[var(--text-xs)] text-[var(--danger)]">{error}</p>}
+      {problem && <p className="text-[var(--text-xs)] text-[var(--danger)]">{problem}</p>}
     </div>
   );
 }
