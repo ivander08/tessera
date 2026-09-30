@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router';
 import { apiJson, streamChat, type TurnMode } from '../lib/api';
 import type { ChatCharacter, ChatDetail, ChatPersona, MessageRow } from '../lib/apiTypes';
@@ -82,6 +82,18 @@ export default function Chat() {
 
   const messages = useMemo(() => data?.messages ?? [], [data]);
 
+  // What the transcript shows. Regenerating an early reply cuts everything after it
+  // immediately, rather than waiting for the server to answer: the turns after that
+  // position belong to the version being replaced, so they are already gone the moment
+  // the reader asks for a new one. The server persists exactly the same outcome, so the
+  // reload that follows agrees with what was on screen the whole time.
+  const visible = useMemo(() => {
+    const targetId = pending?.targetId;
+    if (!targetId) return messages;
+    const at = messages.findIndex((message) => message.id === targetId);
+    return at === -1 ? messages : messages.slice(0, at + 1);
+  }, [messages, pending?.targetId]);
+
   // The scene chip in the bar. Fetched separately from the transcript so a slow state
   // read never delays the conversation, and reloaded with it so a corrected value shows
   // up as soon as the turn lands.
@@ -98,10 +110,15 @@ export default function Chat() {
   // Follow the stream. `pending.text` is a dependency rather than `pending` because the
   // object identity changes on every delta and the layout has already been committed by
   // the time this runs, so the caret stays in view as the reply grows.
+  //
+  // A redo streams into the slot it replaces, which is usually above the fold — pulling
+  // the view down to the end of the page on every token would drag the reader away from
+  // the text they are watching. Only turns that append get followed.
   useEffect(() => {
     if (!pinnedToBottom.current) return;
+    if (pending?.targetId) return;
     bottomRef.current?.scrollIntoView({ block: 'end' });
-  }, [messages.length, pending?.text]);
+  }, [visible.length, pending?.text, pending?.targetId]);
 
   useEffect(() => {
     function onScroll() {
@@ -299,46 +316,71 @@ export default function Chat() {
       />
 
       <div className="transcript">
-        {messages.map((message, index) => {
+        {visible.map((message, index) => {
           const isUser = message.role === 'user';
+          // The turn being redone. Its reply replaces this slot rather than appending,
+          // so regenerating an early message shows the new version where the reader is
+          // looking instead of at the bottom of a scene they then have to scroll up from.
+          const isTarget = pending?.targetId === message.id;
           return (
-            <Turn
-              key={message.id}
-              message={message as TurnView}
-              name={isUser ? userName : characterName}
-              avatar={isUser ? null : data.character?.avatar}
-              // The first thing in the scene opens with a drop cap; everything else is
-              // body text.
-              dropCap={index === 0}
-              editing={editingId === message.id}
-              busy={busy}
-              onEditStart={() => setEditingId(message.id)}
-              onEditCancel={() => setEditingId(null)}
-              onEditSave={(content) => void saveEdit(message.id, content)}
-              actions={
-                editingId === message.id ? null : (
-                  <MessageActions
-                    canSwipeLeft={(message.swipeIndex ?? 0) > 0}
-                    canSwipeRight={(message.swipeIndex ?? 0) < (message.swipes?.length ?? 1) - 1}
-                    swipeIndex={message.swipeIndex ?? 0}
-                    swipeCount={message.swipes?.length ?? 1}
-                    onSwipe={(direction) => void swipe(message.id, direction)}
-                    onCopy={() => message.content}
-                    onEdit={() => setEditingId(message.id)}
-                    onDelete={() => void remove(message.id)}
-                    onRegenerate={
-                      // Offered on every reply, not only the newest. Regenerating an
-                      // earlier one is a branch: the new version takes that position and
-                      // the turns after it step out of the transcript until you swipe
-                      // back, which is what makes rewriting a scene's direction possible
-                      // without losing the scene you had.
-                      !isUser ? () => void run('regenerate', '', message.id) : undefined
-                    }
-                    busy={busy}
-                  />
-                )
-              }
-            />
+            <Fragment key={message.id}>
+              <Turn
+                message={message as TurnView}
+                name={isUser ? userName : characterName}
+                avatar={isUser ? null : data.character?.avatar}
+                // The first thing in the scene opens with a drop cap; everything else is
+                // body text.
+                dropCap={index === 0}
+                editing={editingId === message.id}
+                busy={busy}
+                onEditStart={() => setEditingId(message.id)}
+                onEditCancel={() => setEditingId(null)}
+                onEditSave={(content) => void saveEdit(message.id, content)}
+                actions={
+                  editingId === message.id ? null : (
+                    <MessageActions
+                      canSwipeLeft={(message.swipeIndex ?? 0) > 0}
+                      canSwipeRight={(message.swipeIndex ?? 0) < (message.swipes?.length ?? 1) - 1}
+                      swipeIndex={message.swipeIndex ?? 0}
+                      swipeCount={message.swipes?.length ?? 1}
+                      onSwipe={(direction) => void swipe(message.id, direction)}
+                      onCopy={() => message.content}
+                      onEdit={() => setEditingId(message.id)}
+                      onDelete={() => void remove(message.id)}
+                      onRegenerate={
+                        // Offered on every reply, not only the newest. Regenerating an
+                        // earlier one is a branch: the new version takes that position and
+                        // the turns after it step out of the transcript until you swipe
+                        // back, which is what makes rewriting a scene's direction possible
+                        // without losing the scene you had.
+                        !isUser ? () => void run('regenerate', '', message.id) : undefined
+                      }
+                      busy={busy}
+                    />
+                  )
+                }
+              />
+
+              {/* The reply being redone, in the slot it belongs to. Before the first
+                  token it is the character composing; the dots are the same treatment a
+                  normal turn gets, so a redo does not look like a different operation. */}
+              {isTarget && pending.mode !== 'impersonate' && pending.text.length === 0 && (
+                <Turn
+                  message={{ id: 'pending-thinking', role: 'assistant', content: '' }}
+                  name={characterName}
+                  avatar={data.character?.avatar}
+                  thinking
+                />
+              )}
+              {isTarget && pending.text.length > 0 && (
+                <Turn
+                  message={{ id: 'pending', role: 'assistant', content: pending.text }}
+                  name={characterName}
+                  avatar={data.character?.avatar}
+                  streaming
+                />
+              )}
+            </Fragment>
           );
         })}
 
@@ -351,11 +393,9 @@ export default function Chat() {
           />
         )}
 
-        {/* The in-flight reply, rendered as a real turn so the layout does not jump when
-            it lands and the caret has somewhere to live. Before the first token arrives
-            it is the character thinking, which is a state worth drawing rather than an
-            empty gap. */}
-        {pending && pending.mode !== 'impersonate' && pending.text.length === 0 && (
+        {/* A new turn streams at the end, because that is where it belongs. A redo
+            streams in the slot above, so this only covers the modes with no target. */}
+        {pending && !pending.targetId && pending.mode !== 'impersonate' && pending.text.length === 0 && (
           <Turn
             message={{ id: 'pending-thinking', role: 'assistant', content: '' }}
             name={characterName}
@@ -363,7 +403,7 @@ export default function Chat() {
             thinking
           />
         )}
-        {pending && pending.text.length > 0 && (
+        {pending && !pending.targetId && pending.text.length > 0 && (
           <Turn
             message={{
               id: 'pending',

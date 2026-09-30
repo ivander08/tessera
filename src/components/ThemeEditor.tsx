@@ -120,7 +120,7 @@ export function ThemeEditor({
             aria-label="Character colour"
             value={preview.accent || (resolveMode(preview, true) === 'dark' ? '#C2A36B' : '#7E6224')}
             onChange={(event) => update({ accent: event.target.value })}
-            className="h-9 w-12 shrink-0 cursor-pointer rounded border border-[var(--line-strong)] bg-transparent"
+            className="color-swatch"
           />
           <input
             className="field font-mono text-[var(--text-xs)]"
@@ -135,6 +135,52 @@ export function ThemeEditor({
           )}
         </div>
       </Row>
+
+      {/* Prose elements, each independently overridable. These are the colours a reader
+          actually points at when they say a reply is hard to read — and they want them
+          weighted differently, which one contrast slider cannot express. */}
+      <div className="space-y-2">
+        <span className="text-[var(--text-xs)] text-[var(--ink-dim)]">Prose colours</span>
+        {(
+          [
+            ['text', 'Body text'],
+            ['emphasis', 'Narration (italics)'],
+            ['quote', 'Quotes'],
+            ['link', 'Links'],
+          ] as const
+        ).map(([key, label]) => (
+          <div key={key} className="flex items-center gap-2">
+            <input
+              type="color"
+              aria-label={label}
+              value={preview.colors[key] || fallbackSwatch(key, preview)}
+              onChange={(event) =>
+                update({ colors: { ...preview.colors, [key]: event.target.value } })
+              }
+              className="color-swatch"
+            />
+            <span className="flex-1 text-[var(--text-xs)]">{label}</span>
+            <input
+              className="field font-mono text-[var(--text-xs)]"
+              style={{ maxWidth: '11ch' }}
+              value={preview.colors[key]}
+              placeholder="theme"
+              onChange={(event) =>
+                update({ colors: { ...preview.colors, [key]: event.target.value } })
+              }
+            />
+            {preview.colors[key] && (
+              <button
+                type="button"
+                className="btn quiet"
+                onClick={() => update({ colors: { ...preview.colors, [key]: '' } })}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
 
       <Row label="Custom CSS">
         <textarea
@@ -154,6 +200,21 @@ export function ThemeEditor({
       </p>
     </section>
   );
+}
+
+/**
+ * What a colour input shows when the field is empty.
+ *
+ * `<input type="color">` cannot express "unset" — it always holds a hex — so an unset
+ * field is seeded with the colour the theme would use anyway. Without this the swatch
+ * reads black and the control looks broken rather than optional.
+ */
+function fallbackSwatch(key: keyof Theme['colors'], theme: Theme): string {
+  const dark = resolveMode(theme, true) === 'dark';
+  if (key === 'text') return dark ? '#E9E2D7' : '#221D17';
+  if (key === 'emphasis') return dark ? '#C6BEB1' : '#5C5348';
+  if (key === 'quote') return dark ? '#9A8F82' : '#6B6157';
+  return theme.accent || (dark ? '#C2A36B' : '#7E6224');
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {

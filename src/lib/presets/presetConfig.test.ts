@@ -133,6 +133,8 @@ describe('parsePresetConfig — a complete config', () => {
 
   test('a round trip through JSON preserves a fully specified config', () => {
     const full = {
+      provider: 'openrouter',
+      model: 'anthropic/claude-sonnet-4',
       systemPrompt: 'Write in present tense.',
       preHistoryInstructions: 'The scene opens in a rain-soaked alley.',
       postHistoryInstructions: 'Never end a reply with a question.',

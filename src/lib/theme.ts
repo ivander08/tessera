@@ -60,6 +60,24 @@ export interface Theme {
    * in the other.
    */
   accent: string;
+  /**
+   * Per-element prose colours, each an override or empty to keep the theme's own.
+   *
+   * A single "contrast" slider cannot answer the actual request, which is "make the
+   * italics lighter but leave the quotes alone" — the elements carry different meaning
+   * and readers want to weight them differently. These are the four the reader points at
+   * in a transcript: body text, narration in italics, quoted speech, and links.
+   */
+  colors: {
+    /** Body prose. Empty keeps `--ink`. */
+    text: string;
+    /** `*action beats*` — the element the reader most often wants to quieten. */
+    emphasis: string;
+    /** Blockquotes. */
+    quote: string;
+    /** Links inside a reply. */
+    link: string;
+  };
   /** User CSS, appended last so it can override anything above it. */
   customCss: string;
 }
@@ -73,6 +91,7 @@ export const DEFAULT_THEME: Theme = {
   measure: 68,
   emphasis: 82,
   accent: '',
+  colors: { text: '', emphasis: '', quote: '', link: '' },
   customCss: '',
 };
 
@@ -158,7 +177,11 @@ export function themeTokens(theme: Theme, prefersDark: boolean): Record<string, 
 
   // The character's colour. A user override wins over the palette's own brass, so a
   // reader who wants a different speaker colour is not forced to write custom CSS for it.
-  const accent = /^#[0-9a-f]{3,8}$/i.test(theme.accent.trim()) ? theme.accent.trim() : palette['--brass'];
+  const accent = hexOr(theme.accent, palette['--brass']);
+
+  // Per-element prose overrides. Each falls back to the theme's own value, so an unset
+  // field is not a colour choice — it is the absence of one.
+  const prose = theme.colors ?? { text: '', emphasis: '', quote: '', link: '' };
 
   return {
     ...palette,
@@ -180,11 +203,23 @@ export function themeTokens(theme: Theme, prefersDark: boolean): Record<string, 
     '--avatar': `${theme.avatarSize}px`,
     '--gap': `${(8 * scale).toFixed(2)}px`,
     '--radius': '7px',
-    // Consumed by `.turn-user .turn-speaker` and `.md-em`, which is what the reader
-    // actually points at when they say the italics are too loud.
+
+    // Consumed by `.turn-user .turn-speaker`, which is what ties the reader's name to
+    // their voice.
     '--reader': reader,
-    '--em': `color-mix(in srgb, var(--ink) ${emphasis}%, var(--ink-dim))`,
+    // Prose elements. `--em` is mixed from the slider; an explicit colour replaces it
+    // outright, because a reader who picks a hex means that hex.
+    '--prose': hexOr(prose.text, 'var(--ink)'),
+    '--em': hexOr(prose.emphasis, `color-mix(in srgb, var(--ink) ${emphasis}%, var(--ink-dim))`),
+    '--quote': hexOr(prose.quote, 'var(--ink-dim)'),
+    '--link': hexOr(prose.link, 'var(--brass)'),
   };
+}
+
+/** A hex colour from the theme, or the given fallback when it is unset or malformed. */
+function hexOr(value: string | undefined, fallback: string): string {
+  const trimmed = (value ?? '').trim();
+  return /^#[0-9a-f]{3,8}$/i.test(trimmed) ? trimmed : fallback;
 }
 
 /** Serializes tokens into a `:root { … }` block. */
@@ -236,6 +271,7 @@ export function parseTheme(raw: string | null | undefined): Theme {
       measure: clamp(Number(parsed.measure ?? 68), 45, 100),
       emphasis: clamp(Number(parsed.emphasis ?? 82), 0, 100),
       accent: typeof parsed.accent === 'string' ? parsed.accent : '',
+      colors: parseColors(parsed.colors),
       customCss: typeof parsed.customCss === 'string' ? parsed.customCss : '',
     };
   } catch {
@@ -246,4 +282,23 @@ export function parseTheme(raw: string | null | undefined): Theme {
 function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * Reads the prose colour overrides, tolerating a record that predates them.
+ *
+ * Each field falls back to empty — "no override" — rather than to a colour, so an older
+ * stored theme keeps the palette it was written against instead of being silently
+ * repainted with whatever the defaults happen to be today.
+ */
+function parseColors(raw: unknown): Theme['colors'] {
+  const record = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const pick = (key: string): string =>
+    typeof record[key] === 'string' ? (record[key] as string) : '';
+  return {
+    text: pick('text'),
+    emphasis: pick('emphasis'),
+    quote: pick('quote'),
+    link: pick('link'),
+  };
 }

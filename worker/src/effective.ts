@@ -59,6 +59,12 @@ export async function loadEffectiveSettings(
   if (row.config_json) {
     try {
       const config = JSON.parse(row.config_json) as Record<string, unknown>;
+      // The model is part of the preset, not a separate setting. Sampler values are
+      // per-model, so a preset authored against one model produces different prose on
+      // another — carrying the pair here is what makes "use this preset" a single choice.
+      // Empty means the preset has no opinion, and the chat's own selection stands.
+      if (typeof config.provider === 'string' && config.provider) effective.provider = config.provider;
+      if (typeof config.model === 'string' && config.model) effective.model = config.model;
       if (typeof config.maxTokens === 'number') effective.maxTokens = config.maxTokens;
       if (typeof config.contextSize === 'number') effective.contextBudget = config.contextSize;
       if (typeof config.systemPrompt === 'string') effective.presetSystemPrompt = config.systemPrompt;

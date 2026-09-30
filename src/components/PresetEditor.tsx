@@ -74,6 +74,16 @@ export function PresetEditor({
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // The preset's own model list, independent of what the chat is set to: this is the
+  // model the preset will force when it is attached.
+  const presetModels = useAsync(
+    () =>
+      config.provider
+        ? apiJson<ModelInfo[]>(`/api/models/${config.provider}`)
+        : Promise.resolve([]),
+    [config.provider],
+  );
+
   const carried = Object.entries(preset.knobs).filter(([, value]) => typeof value !== 'number');
 
   async function save() {
@@ -134,6 +144,48 @@ export function PresetEditor({
           </ul>
         </div>
       )}
+
+      <section className="space-y-3">
+        <h3 className="text-[var(--text-sm)] font-semibold uppercase tracking-wide text-[var(--ink-dim)]">
+          Model
+        </h3>
+        <p className="form-hint" style={{ marginTop: 0 }}>
+          Sampler values are per-model, so a preset is authored against one. Setting the pair
+          here means choosing this preset also chooses the model it was tuned for. Leave it on
+          the defaults to use whatever the chat is already set to.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="block space-y-1">
+            <span className="text-[var(--text-xs)] text-[var(--ink-dim)]">Provider</span>
+            <select
+              className="field"
+              value={config.provider ?? ''}
+              onChange={(event) => setConfig({ ...config, provider: event.target.value, model: '' })}
+            >
+              <option value="">— use the chat's —</option>
+              <option value="openrouter">openrouter</option>
+              <option value="kenari">kenari</option>
+            </select>
+          </label>
+          <label className="block space-y-1">
+            <span className="text-[var(--text-xs)] text-[var(--ink-dim)]">Model</span>
+            <select
+              className="field"
+              value={config.model ?? ''}
+              disabled={!config.provider}
+              onChange={(event) => setConfig({ ...config, model: event.target.value })}
+            >
+              <option value="">— use the chat's —</option>
+              {(presetModels.data ?? []).map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.name ? `${entry.name} (${entry.id})` : entry.id}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {presetModels.error && <p className="note warn">{presetModels.error}</p>}
+      </section>
 
       <section className="space-y-3">
         <h3 className="text-[var(--text-sm)] font-semibold uppercase tracking-wide text-[var(--ink-dim)]">

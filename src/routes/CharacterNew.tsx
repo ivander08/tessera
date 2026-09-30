@@ -28,7 +28,7 @@ const GROUPS: Array<{ title: string; hint: string; fields: Array<keyof ParsedCar
   },
   {
     title: 'Definition',
-    hint: 'every turn, forever',
+    hint: 'sent every turn, in the cached prompt head — this is where a card’s character lives',
     fields: ['description', 'personality', 'scenario'],
   },
   {
@@ -43,6 +43,40 @@ const GROUPS: Array<{ title: string; hint: string; fields: Array<keyof ParsedCar
   },
   { title: 'Meta', hint: 'never sent', fields: ['creatorNotes'] },
 ];
+
+/**
+ * How tall each prose field is, in rows.
+ *
+ * `description` is where most cards keep the whole character, so it gets a page rather
+ * than a slot — the field a reader spends real time in should not be the one they scroll
+ * inside of. `first_mes` is the second: it is the scene's opening, and it is written and
+ * rewritten the way prose is. The short fields stay short so the screen is scannable.
+ */
+const FIELD_ROWS: Partial<Record<keyof ParsedCard, number>> = {
+  name: 1,
+  nickname: 1,
+  description: 22,
+  personality: 6,
+  scenario: 5,
+  systemPrompt: 5,
+  mesExample: 12,
+  postHistoryInstructions: 4,
+  firstMes: 16,
+  creatorNotes: 3,
+};
+
+/** What each field is for. The two that are genuinely confusable get a real sentence. */
+const FIELD_HINTS: Partial<Record<keyof ParsedCard, string>> = {
+  description:
+    'The character as written: who they are, how they speak, what they want. Most cards keep everything here.',
+  personality:
+    'A short trait list — “Precise. Dry. Impatient.” Cards that put the full character in the description often leave this empty; it is kept because imported cards use it.',
+  scenario: 'The situation the scene opens in. Where and when, in the card’s own words.',
+  firstMes: 'The first thing they say. This becomes the opening message of a new chat.',
+  mesExample: 'Example dialogue showing how they sound. Re-sent every turn.',
+  systemPrompt: 'Overrides your global system prompt for this character.',
+  postHistoryInstructions: 'Sent after the history, every turn — the card’s final word on how to play it.',
+};
 
 /**
  * A card written from nothing rather than parsed from a file.
@@ -347,13 +381,13 @@ export default function CharacterNew() {
               <Field
                 key={String(field)}
                 label={String(field)}
-                hint={group.hint}
+                hint={FIELD_HINTS[field] ?? group.hint}
                 tokens={ready ? tokensOf(value(field)) : null}
               >
                 <textarea
                   value={value(field)}
                   onChange={(event) => set(field, event.target.value)}
-                  rows={field === 'name' || field === 'nickname' ? 1 : 4}
+                  rows={FIELD_ROWS[field] ?? 4}
                   className="field"
                 />
               </Field>
@@ -361,32 +395,67 @@ export default function CharacterNew() {
 
             {group.title === 'Meta' && (
               <>
+                {/* Editable here rather than only on the edit screen. A card that arrives
+                    with the wrong tags or an opening you want to drop should not have to be
+                    saved first and corrected second — that is two steps for one decision,
+                    and the intermediate save is a card you did not want. */}
                 <div className="form-row">
                   <span className="form-label">
                     <span>tags</span>
                     <span className="data">
-                      {card.tags.length > 0 ? card.tags.length : '—'}
+                      {card.tags.length > 0 ? `${card.tags.length}` : '—'} · never sent
                     </span>
                   </span>
-                  <span className="form-hint" style={{ display: 'block', marginBottom: 5 }}>
-                    {card.tags.length > 0
-                      ? card.tags.join(', ')
-                      : authored
-                        ? 'none yet'
-                        : 'none on this card'}
-                  </span>
+                  <input
+                    className="field"
+                    value={card.tags.join(', ')}
+                    onChange={(event) =>
+                      setCard((current) =>
+                        current
+                          ? {
+                              ...current,
+                              tags: event.target.value
+                                .split(',')
+                                .map((tag) => tag.trim())
+                                .filter(Boolean),
+                            }
+                          : current,
+                      )
+                    }
+                    placeholder="comma, separated, tags"
+                  />
                 </div>
+
                 <div className="form-row">
                   <span className="form-label">
                     <span>alternate greetings</span>
-                    <span className="data">{card.alternateGreetings.length}</span>
+                    <span className="data">{card.alternateGreetings.length} · never sent</span>
                   </span>
-                  <span className="form-hint" style={{ display: 'block' }}>
-                    {authored
-                      ? 'each is a separate opening; the edit screen is where they are added'
-                      : 'each is a separate opening; they carry over as they arrived, and the edit screen is where they are changed'}
-                  </span>
+                  <textarea
+                    className="field"
+                    rows={8}
+                    value={card.alternateGreetings.join('\n\n')}
+                    onChange={(event) =>
+                      setCard((current) =>
+                        current
+                          ? {
+                              ...current,
+                              alternateGreetings: event.target.value
+                                .split(/\n{2,}/)
+                                .map((entry) => entry.trim())
+                                .filter(Boolean),
+                            }
+                          : current,
+                      )
+                    }
+                    placeholder="one per paragraph — blank line between"
+                  />
+                  <p className="form-hint" style={{ marginTop: 6 }}>
+                    Each is a separate opening, offered when a new chat starts. Separate them
+                    with a blank line.
+                  </p>
                 </div>
+
                 <div className="form-row">
                   <span className="form-label">
                     <span>character_book</span>

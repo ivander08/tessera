@@ -177,11 +177,17 @@ export default function Presets() {
       <AppBar title={<span className="bar-title">Presets</span>} />
 
       <main className="sheet">
-      <p className="sheet-sub" style={{ marginTop: 0 }}>
-        A preset is a whole generation configuration — sampler values, prompt structure, stop
-        strings, prefill. Attach one to a chat from that chat&rsquo;s menu; every preset is
-        available in every chat.
-      </p>
+      <div className="sheet-head">
+        <div>
+          <h1 className="title">Presets</h1>
+          <p className="sheet-sub" style={{ marginTop: 8 }}>
+            A preset is a whole generation configuration — sampler values, prompt structure,
+            stop strings, prefill, and the model they were tuned for. Attach one to a chat from
+            that chat&rsquo;s menu; every preset is available in every chat.
+          </p>
+        </div>
+      </div>
+      <hr className="rule-fade" style={{ marginBottom: 18 }} />
 
       <section className="space-y-3">
         <div

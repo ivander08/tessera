@@ -9,22 +9,24 @@ import { Avatar } from '../components/Avatar';
  * The shelf.
  *
  * A chat is a scene being written with a character, so the home screen is the shelf of
- * scenes rather than a list of records: the portrait, what it is called, the last thing
- * written, and how long ago. The Worker returns them most-recently-written first, so the
- * time is the column that orients you down the page — which is why it is a relative
- * "3h ago" and not a date. `toLocaleDateString` printed the same string for something
- * written this morning and something written last week.
+ * scenes rather than a list of records. Each one is a plate: the portrait carries the
+ * character — it is the thing a reader recognises before they read a word — with the
+ * name, the last thing written, and how long ago.
+ *
+ * The portrait is large because the images are the only colour on the screen and the
+ * fastest way to find the scene you meant. Clicking it opens the full-size picture
+ * instead of the scene, which is the only reason a reader ever wants to look closer.
  *
  * `preview` arrives truncated to 140 characters, which is about two lines here. It is
- * clamped to those two lines rather than ellipsised onto one, because the first line of a
- * last message is rarely the informative one.
+ * clamped rather than ellipsised onto one, because the first line of a last message is
+ * rarely the informative one.
  */
 export default function ChatList() {
   const { data, error, loading } = useAsync(() => apiJson<ChatSummary[]>('/api/chats'), []);
 
   return (
     <>
-      <AppBar title={<span className="bar-title">Tessera</span>} />
+      <AppBar title={<span className="bar-title">Tessera</span>} titleHref={null} />
 
       <main className="shelf">
         <div className="sheet-head">
@@ -40,7 +42,7 @@ export default function ChatList() {
             Characters
           </Link>
         </div>
-        <hr className="rule-fade" style={{ marginBottom: 6 }} />
+        <hr className="rule-fade" style={{ marginBottom: 14 }} />
 
         {loading && <p className="sheet-sub">Loading…</p>}
         {error && <div className="note danger">{error}</div>}
@@ -74,28 +76,29 @@ export default function ChatList() {
           </div>
         )}
 
-        <div>
+        <div className="plates">
           {data?.map((chat) => {
+            const name = chat.character_name ?? chat.title ?? 'Untitled';
             const written = new Date(chat.updated_at);
             return (
-              <Link key={chat.id} to={`/chat/${chat.id}`} className="shelf-row">
-                <Avatar src={chat.character_avatar} name={chat.character_name ?? '?'} />
-                <div className="shelf-main">
-                  <div className="shelf-head">
-                    <span className="row-title" style={{ minWidth: 0 }}>
-                      {chat.character_name ?? chat.title ?? 'Untitled'}
-                    </span>
+              <article key={chat.id} className="plate">
+                <div className="plate-portrait">
+                  <Avatar src={chat.character_avatar} name={name} zoomable />
+                </div>
+                <Link to={`/chat/${chat.id}`} className="plate-body">
+                  <div className="plate-head">
+                    <span className="plate-name">{name}</span>
                     <time
-                      className="data shelf-time"
+                      className="data plate-time"
                       dateTime={written.toISOString()}
                       title={written.toLocaleString()}
                     >
                       {relativeTime(chat.updated_at)}
                     </time>
                   </div>
-                  <p className="shelf-preview">{chat.preview ?? 'No messages yet'}</p>
-                </div>
-              </Link>
+                  <p className="plate-preview">{chat.preview ?? 'No messages yet'}</p>
+                </Link>
+              </article>
             );
           })}
         </div>

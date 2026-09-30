@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { apiJson } from '../lib/api';
 import { useAsync } from '../lib/hooks';
-import { MenuAction, MenuLabel, MenuSep } from './AppBar';
 import { PresetEditor, type PresetDetail } from './PresetEditor';
 import { Modal } from './Modal';
 
@@ -10,15 +9,14 @@ import { Modal } from './Modal';
  *
  * This is where chub puts it, and the placement is not cosmetic: a preset is a
  * generation configuration — sampler values, stop strings, prefill, prompt structure —
- * and you change it *while* writing, when the prose is coming out wrong. Putting it in
- * Settings meant leaving the scene to adjust the thing that shapes the scene.
+ * and you change it *while* writing, when the prose is coming out wrong.
  *
- * The list is profile-wide: every preset is available in every chat, and the choice is
- * stored per chat so two scenes can run different settings.
+ * The list opens in its own sheet. Inline entries mean a reader with a hundred presets
+ * scrolls past all of them every time they want anything else in the menu, and the menu
+ * stops being navigable. One entry that opens a list keeps the menu a fixed length.
  *
- * Editing happens in a modal over the chat rather than by navigating away. Adjusting the
- * preset is something you do mid-scene, and losing your place in the transcript to do it
- * is the same mistake as putting the picker in Settings.
+ * Editing happens in a second sheet over the chat rather than by navigating away, for
+ * the same reason the picker is here at all.
  */
 interface PresetRow {
   id: string;
@@ -31,6 +29,7 @@ export function PresetMenu({ chatId, onChanged }: { chatId: string; onChanged?: 
   const presets = useAsync(() => apiJson<PresetRow[]>('/api/presets'), []);
   const [current, setCurrent] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<PresetDetail | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
 
@@ -44,6 +43,7 @@ export function PresetMenu({ chatId, onChanged }: { chatId: string; onChanged?: 
 
   async function choose(presetId: string | null) {
     setCurrent(presetId);
+    setOpen(false);
     try {
       await apiJson('/api/preset/apply', {
         method: 'POST',
@@ -66,51 +66,81 @@ export function PresetMenu({ chatId, onChanged }: { chatId: string; onChanged?: 
   }
 
   const rows = presets.data ?? [];
+  const activeName = rows.find((row) => row.id === current)?.name ?? 'Global settings';
 
   return (
     <>
-      <MenuLabel>Preset for this chat</MenuLabel>
+      {/* The sheet lives in this subtree, so the menu must not close on this click —
+          closing it unmounts the sheet before it can paint. The menu does close once a
+          preset is chosen, which `choose` does explicitly. */}
+      <button
+        type="button"
+        className="menu-item"
+        data-menu-keep
+        onClick={() => setOpen(true)}
+      >
+        <span className="menu-item-label">Preset</span>
+        <span className="menu-item-value">{activeName}</span>
+      </button>
 
-      {presets.loading && <div className="menu-item" style={{ opacity: 0.5 }}>Loading…</div>}
+      {open && (
+        <Modal
+          title="Preset"
+          subtitle="Sampler values, prompt structure, stop strings and the model they were tuned for."
+          onClose={() => setOpen(false)}
+        >
+          {presets.loading && <p className="sheet-sub">Loading…</p>}
 
-      {!presets.loading && rows.length === 0 && (
-        <div className="menu-item" style={{ opacity: 0.6, whiteSpace: 'normal' }}>
-          None imported yet. Add one under Presets.
-        </div>
-      )}
+          {!presets.loading && rows.length === 0 && (
+            <p className="sheet-sub">
+              No presets yet. A preset overrides the sampler, prompt and stop-string
+              settings for this chat.
+            </p>
+          )}
 
-      {/* Scrolls, so a long list cannot push the rest of the menu off the screen. */}
-      <div className="menu-scroll">
-        {rows.map((preset) => (
-          <div key={preset.id} className="menu-row">
-            <MenuAction
-              label={preset.name}
-              hint={current === preset.id ? '✓' : preset.knob_count ? `${preset.knob_count}` : undefined}
-              onClick={() => void choose(preset.id)}
-            />
-            <button
-              type="button"
-              className="menu-edit"
-              data-menu-keep
-              title={`Edit ${preset.name}`}
-              aria-label={`Edit ${preset.name}`}
-              onClick={() => void edit(preset.id)}
-            >
-              <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z" />
-              </svg>
-            </button>
+          {problem && <div className="note danger" style={{ marginBottom: 10 }}>{problem}</div>}
+
+          <div className="pick-list">
+            {rows.map((preset) => (
+              <div key={preset.id} className={`pick-row${current === preset.id ? ' is-active' : ''}`}>
+                <button
+                  type="button"
+                  className="pick-main"
+                  onClick={() => void choose(preset.id)}
+                >
+                  <span className="pick-name">{preset.name}</span>
+                  <span className="pick-note">
+                    {preset.kind}
+                    {preset.knob_count ? ` · ${preset.knob_count} knobs` : ''}
+                  </span>
+                  {current === preset.id && <span className="pick-tick">✓</span>}
+                </button>
+                <button
+                  type="button"
+                  className="menu-edit"
+                  title={`Edit ${preset.name}`}
+                  aria-label={`Edit ${preset.name}`}
+                  onClick={() => void edit(preset.id)}
+                >
+                  <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z" />
+                  </svg>
+                </button>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
 
-      {problem && <div className="menu-item" style={{ color: 'var(--danger)', whiteSpace: 'normal' }}>{problem}</div>}
-
-      {current && (
-        <>
-          <MenuSep />
-          <MenuAction label="Use global settings" onClick={() => void choose(null)} />
-        </>
+          <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
+            {current && (
+              <button type="button" className="btn" onClick={() => void choose(null)}>
+                Use global settings
+              </button>
+            )}
+            <a className="btn" href="/presets">
+              Manage presets
+            </a>
+          </div>
+        </Modal>
       )}
 
       {editing && (

@@ -286,6 +286,39 @@ textarea.field {
   white-space: nowrap;
 }
 
+/* The title as a link home. It stays visually identical to a plain title — the
+   affordance is that it is in the same place on every screen, not that it is underlined —
+   but it brightens on hover so a pointer user discovers it. */
+.bar-home {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  text-decoration: none;
+  color: inherit;
+}
+
+.bar-home:hover .bar-title {
+  color: var(--brass);
+}
+
+.bar-home::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-left: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+  opacity: 0.5;
+  flex-shrink: 0;
+  transition: opacity 130ms ease, transform 130ms ease;
+}
+
+.bar-home:hover::before {
+  opacity: 1;
+  transform: rotate(45deg) translate(-1px, -1px);
+}
+
 .bar-link {
   color: var(--ink-dim);
   text-decoration: none;
@@ -359,7 +392,28 @@ textarea.field {
   font-weight: 600;
   letter-spacing: 0.12em;
   text-transform: uppercase;
+  /* Faint, not dim. A section label that matches the weight of the entries under it
+     reads as one of them — which is exactly how "THIS CHAT" and "YOU ARE" ended up
+     looking like two entries of the same kind. */
   color: var(--ink-faint);
+  opacity: 0.75;
+}
+
+/* A menu entry that carries a current value: the label on the left, what it is set to
+   on the right. Used where the real choice happens in a sheet, so the menu line states
+   the state without trying to be the control. */
+.menu-item-label {
+  color: var(--ink-faint);
+}
+
+.menu-item-value {
+  margin-left: auto;
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-size: var(--text-xs);
 }
 
 .menu-sep {
@@ -406,6 +460,82 @@ textarea.field {
 .menu-edit:hover {
   color: var(--ink);
   background: color-mix(in srgb, var(--ink) 9%, transparent);
+}
+
+/* A list of things to choose inside a sheet. Taller and more scannable than a menu
+   entry, because there is room for a description and the list is the whole point of the
+   sheet rather than one section of a menu. */
+.pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pick-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.pick-row:hover {
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+  border-color: var(--line);
+}
+
+.pick-row.is-active {
+  background: color-mix(in srgb, var(--brass) 10%, transparent);
+  border-color: color-mix(in srgb, var(--brass) 40%, transparent);
+}
+
+/* When a row contains a second control, the choosing area is its own button so the
+   pencil beside it is not part of the same hit target. */
+.pick-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pick-name {
+  font-family: var(--font-prose);
+  font-size: var(--text-base);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pick-note {
+  color: var(--ink-faint);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pick-tick {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--brass);
 }
 
 /* ---------------------------------------------------------------- sheet over */
@@ -520,10 +650,16 @@ textarea.field {
 
 /* ---------------------------------------------------------------- transcript */
 
+/* The reading column. `--measure` is the measure in characters — the thing that keeps a
+   line readable — and the transcript adds its own gutter around it. On a wide window the
+   column grows with the viewport up to a ceiling rather than staying phone-width in the
+   middle of a 27-inch monitor: prose at 68ch on a 2560px screen is a column of text with
+   two screens of empty ground beside it. The ceiling is where a line stops being
+   comfortable, which is why it is not simply 100%. */
 .transcript {
-  max-width: calc(var(--measure) + 6rem);
+  max-width: min(calc(var(--measure) + 26rem), 100%);
   margin: 0 auto;
-  padding: 20px 16px 8px;
+  padding: 22px 24px 8px;
 }
 
 /* A turn is a small hanging-indent block: the speaker sits in the margin at desktop
@@ -536,16 +672,26 @@ textarea.field {
   padding: 15px 0;
 }
 
-/* The reader's turn is indented and tinted, so a long scene can be skimmed by its
-   alternation alone: the character owns the left margin, the reader answers inset from
-   it. Colour is not doing this work — position is, which survives being read in
-   greyscale or by someone who cannot distinguish the two metals. */
+/* The reader's turn is marked by tone, not by moving the grid. An earlier version
+   indented it, which put the reader's portrait in a different column than the
+   character's and read as a misalignment rather than as hierarchy — the portrait rail
+   has to stay straight or the eye loses the column it scans down. */
 .turn-user {
-  padding-left: 18px;
+  margin: 2px 0;
+  padding-left: 10px;
+  padding-right: 10px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
 }
 
 .turn + .turn {
   border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+}
+
+/* A reader's turn follows an assistant turn; the rule between them would double up with
+   the tinted block's own edge. */
+.turn-assistant + .turn-user {
+  border-top-color: transparent;
 }
 
 /* The opening of a scene gets a drop cap. It is the one flourish in the whole
@@ -705,6 +851,7 @@ textarea.field {
   font-size: var(--text-base);
   line-height: var(--leading);
   overflow-wrap: anywhere;
+  color: var(--prose, var(--ink));
 }
 
 .prose > * + * {
@@ -734,7 +881,7 @@ textarea.field {
   margin: 0.9em 0;
   padding-left: 14px;
   border-left: 2px solid var(--line-strong);
-  color: var(--ink-dim);
+  color: var(--quote, var(--ink-dim));
   font-style: italic;
 }
 
@@ -776,7 +923,7 @@ textarea.field {
 }
 
 .md-link {
-  color: var(--brass);
+  color: var(--link, var(--brass));
   text-underline-offset: 2px;
 }
 
@@ -1042,7 +1189,7 @@ textarea.field {
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  max-width: calc(var(--measure) + 6rem);
+  max-width: min(calc(var(--measure) + 26rem), 100%);
   margin: 0 auto;
 }
 
@@ -1086,6 +1233,33 @@ textarea.field {
   min-height: 40px;
   border-radius: 10px;
   padding: 0 18px;
+}
+
+/* A native colour input, sized to match a field and stripped of the browser's own
+   chrome so it reads as one of our controls rather than a system widget. */
+.color-swatch {
+  width: 44px;
+  height: 34px;
+  flex-shrink: 0;
+  padding: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--ground);
+  cursor: pointer;
+}
+
+.color-swatch::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.color-swatch::-webkit-color-swatch {
+  border: 0;
+  border-radius: 4px;
+}
+
+.color-swatch::-moz-color-swatch {
+  border: 0;
+  border-radius: 4px;
 }
 
 /* ---------------------------------------------------------------- the shelf */
@@ -1201,6 +1375,234 @@ textarea.field {
     color-mix(in srgb, var(--line) 30%, transparent) 70%,
     transparent
   );
+}
+
+/* ---------------------------------------------------------------- plates */
+
+/* The scene grid. A shelf is scanned by portrait, so each scene is a plate: the picture
+   is the biggest thing in it and the text hangs below. Cards rather than rows because a
+   row makes the portrait a 36px ornament beside a paragraph, which is the shape every
+   admin list has — and these are characters, not records. */
+.plates {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 16px;
+  padding-bottom: 20px;
+}
+
+.plate {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--surface);
+  overflow: hidden;
+  transition: border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+}
+
+.plate:hover {
+  border-color: var(--line-strong);
+  transform: translateY(-2px);
+  box-shadow: 0 10px 26px -14px rgba(0, 0, 0, 0.7);
+}
+
+/* The portrait is a square at the top of the plate. `aspect-ratio` rather than a fixed
+   height so it stays square as the grid column widens. */
+.plate-portrait {
+  position: relative;
+  aspect-ratio: 1;
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--line);
+}
+
+.plate-portrait .chip,
+.plate-portrait .zoomable {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-family: var(--font-prose);
+  font-size: 3rem;
+  color: var(--ink-faint);
+  cursor: default;
+}
+
+.plate-portrait img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Only a real image is clickable. The initial fallback is not a picture, so zooming it
+   would open a box around a letter. */
+.plate-portrait .zoomable {
+  cursor: zoom-in;
+}
+
+.plate-body {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  padding: 11px 13px 13px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.plate-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.plate-name {
+  font-family: var(--font-prose);
+  font-size: var(--text-base);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plate-time {
+  flex-shrink: 0;
+  color: var(--ink-faint);
+}
+
+.plate-preview {
+  margin: 6px 0 0;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--ink-dim);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.plate-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 12px;
+}
+
+.plate-actions .btn.primary {
+  flex: 1;
+  min-height: 32px;
+  font-size: var(--text-xs);
+}
+
+/* The plates arrive rather than appearing. A short stagger, capped so a long shelf does
+   not take a second to finish painting. */
+@keyframes plate-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.plate {
+  animation: plate-in 320ms cubic-bezier(0.22, 0.68, 0.36, 1) both;
+}
+
+.plate:nth-child(1) { animation-delay: 0ms; }
+.plate:nth-child(2) { animation-delay: 40ms; }
+.plate:nth-child(3) { animation-delay: 80ms; }
+.plate:nth-child(4) { animation-delay: 120ms; }
+.plate:nth-child(5) { animation-delay: 160ms; }
+.plate:nth-child(6) { animation-delay: 200ms; }
+.plate:nth-child(n + 7) { animation-delay: 240ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  .plate {
+    animation: none;
+  }
+
+  .plate:hover {
+    transform: none;
+  }
+}
+
+/* ---------------------------------------------------------------- lightbox */
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.lightbox-scrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  background: var(--scrim);
+  backdrop-filter: blur(6px);
+  cursor: zoom-out;
+  animation: scrim-in 160ms ease both;
+}
+
+.lightbox-figure {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: min(760px, 100%);
+  max-height: 100%;
+  margin: 0;
+  animation: sheet-in 200ms cubic-bezier(0.22, 0.68, 0.36, 1) both;
+}
+
+.lightbox-figure img {
+  max-width: 100%;
+  max-height: calc(100vh - 130px);
+  object-fit: contain;
+  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-raised);
+  box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.8);
+}
+
+.lightbox-missing {
+  padding: 40px 28px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 12px;
+  background: var(--surface);
+  text-align: center;
+  color: var(--ink-dim);
+}
+
+.lightbox-missing p {
+  margin: 10px 0 0;
+  font-size: var(--text-sm);
+}
+
+.lightbox-figure figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lightbox-scrim,
+  .lightbox-figure {
+    animation: none;
+  }
 }
 
 /* ---------------------------------------------------------------- lists */

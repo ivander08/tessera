@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { apiOrigin, getToken } from '../lib/api';
+import { Lightbox } from './Lightbox';
 
 /**
  * An avatar that actually loads.
@@ -70,10 +71,13 @@ export interface AvatarProps {
   size?: number | string;
   className?: string;
   style?: CSSProperties;
+  /** Open the full-size image when the portrait is clicked. */
+  zoomable?: boolean;
 }
 
-export function Avatar({ src, name, className = 'chip', style }: AvatarProps) {
+export function Avatar({ src, name, className = 'chip', style, zoomable = false }: AvatarProps) {
   const [resolved, setResolved] = useState<string | null>(null);
+  const [zoomed, setZoomed] = useState(false);
 
   // An absolute or inline URL needs no token, so it goes straight to the img.
   const direct = !src || /^[a-z][a-z0-9+.-]*:/i.test(src) ? (src ?? null) : null;
@@ -107,5 +111,30 @@ export function Avatar({ src, name, className = 'chip', style }: AvatarProps) {
     );
   }
 
-  return <img className={className} style={style} src={finalSrc} alt="" />;
+  if (!zoomable) return <img className={className} style={style} src={finalSrc} alt="" />;
+
+  // A portrait you can open. The whole image is the target rather than a corner button:
+  // there is nothing else to do with a portrait, and a button that small is a miss on a
+  // phone.
+  return (
+    <>
+      <button
+        type="button"
+        className={`${className} zoomable`}
+        style={style}
+        onClick={(event) => {
+          // The card behind a portrait is usually a link; opening the image should not
+          // also navigate.
+          event.preventDefault();
+          event.stopPropagation();
+          setZoomed(true);
+        }}
+        title={`${name} — click to enlarge`}
+        aria-label={`Enlarge ${name}`}
+      >
+        <img src={finalSrc} alt="" />
+      </button>
+      {zoomed && <Lightbox src={finalSrc} name={name} onClose={() => setZoomed(false)} />}
+    </>
+  );
 }

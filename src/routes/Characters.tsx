@@ -161,84 +161,77 @@ export default function Characters() {
           </div>
         )}
 
-        <div style={failure || status ? { marginTop: 14 } : undefined}>
+        <div className="plates" style={failure || status ? { marginTop: 14 } : undefined}>
           {data?.map((character) => {
             const shown = character.shownName ?? character.name;
             const busy = busyId === character.id;
             return (
-              <div key={character.id} className="row">
-                <Link
-                  to={`/characters/${character.id}/edit`}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 12,
-                    flex: '1 1 220px',
-                    minWidth: 0,
-                    color: 'inherit',
-                    textDecoration: 'none',
-                  }}
-                >
-                  <Avatar src={character.avatar} name={shown} />
-                  <div className="row-main">
-                    <div className="row-title">{shown}</div>
-                    <div className="row-sub">
-                      {character.name !== shown && `${character.name} · `}
-                      {character.source_format} ·{' '}
-                      <span className="data">{character.tokens ?? 0}</span> permanent tokens
-                      {character.chat_count > 0 && (
-                        <>
-                          {' · '}
-                          <span className="data">{character.chat_count}</span>{' '}
-                          {character.chat_count === 1 ? 'chat' : 'chats'}
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </Link>
-
-                <div className="row-actions" style={{ marginLeft: 'auto', gap: 6, alignItems: 'center' }}>
-                  <button
-                    type="button"
-                    onClick={() => void startChat(character)}
-                    disabled={busy}
-                    className="btn primary"
-                  >
-                    New chat
-                  </button>
-                  <Link
-                    to={`/characters/${character.id}/edit`}
-                    className="icon-btn"
-                    aria-label={`Edit ${shown}`}
-                    title="Edit"
-                    style={ICON_BTN}
-                  >
-                    <PencilGlyph />
-                  </Link>
-                  <button
-                    type="button"
-                    onClick={() => void fork(character)}
-                    disabled={busy}
-                    className="icon-btn"
-                    aria-label={`Fork ${shown}`}
-                    title="Fork"
-                    style={ICON_BTN}
-                  >
-                    <ForkGlyph />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void remove(character)}
-                    disabled={busy}
-                    className="icon-btn"
-                    aria-label={`Delete ${shown}`}
-                    title="Delete"
-                    style={{ ...ICON_BTN, color: 'var(--danger)' }}
-                  >
-                    <TrashGlyph />
-                  </button>
+              <article key={character.id} className="plate">
+                <div className="plate-portrait">
+                  <Avatar src={character.avatar} name={shown} zoomable />
                 </div>
-              </div>
+
+                <div className="plate-body">
+                  <div className="plate-head">
+                    <Link to={`/characters/${character.id}/edit`} className="plate-name" title={shown}>
+                      {shown}
+                    </Link>
+                  </div>
+                  <p className="plate-preview">
+                    {character.name !== shown && `${character.name} · `}
+                    <span className="data">{character.tokens ?? 0}</span> tokens
+                    {character.chat_count > 0 && (
+                      <>
+                        {' · '}
+                        <span className="data">{character.chat_count}</span>{' '}
+                        {character.chat_count === 1 ? 'chat' : 'chats'}
+                      </>
+                    )}
+                  </p>
+
+                  <div className="plate-actions">
+                    <button
+                      type="button"
+                      onClick={() => void startChat(character)}
+                      disabled={busy}
+                      className="btn primary"
+                    >
+                      New chat
+                    </button>
+                    <Link
+                      to={`/characters/${character.id}/edit`}
+                      className="icon-btn"
+                      aria-label={`Edit ${shown}`}
+                      title="Edit"
+                      style={ICON_BTN}
+                    >
+                      <PencilGlyph />
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => void fork(character)}
+                      disabled={busy}
+                      className="icon-btn"
+                      aria-label={`Fork ${shown}`}
+                      title="Fork"
+                      style={ICON_BTN}
+                    >
+                      <ForkGlyph />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void remove(character)}
+                      disabled={busy}
+                      className="icon-btn"
+                      aria-label={`Delete ${shown}`}
+                      title="Delete"
+                      style={{ ...ICON_BTN, color: 'var(--danger)' }}
+                    >
+                      <TrashGlyph />
+                    </button>
+                  </div>
+                </div>
+              </article>
             );
           })}
         </div>

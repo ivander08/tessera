@@ -22,6 +22,17 @@ import { asRecord } from '../json';
  * none of them changes nothing for a chat that uses it.
  */
 export interface PresetConfig {
+  /**
+   * Provider and model this preset is authored against.
+   *
+   * A preset is not only a prompt shape — sampler values are per-model, and a preset
+   * tuned for one model produces different prose on another. Carrying the model with the
+   * preset means "use this preset" is one choice rather than two the reader has to keep
+   * in sync. Empty means "leave the chat's own provider/model alone", so a preset that
+   * does not care about the model keeps working as a pure prompt overlay.
+   */
+  provider?: string;
+  model?: string;
   /** Replaces the global system prompt. A card's own prompt still wins over this. */
   systemPrompt?: string;
   /** Injected before the history. Part of the cached prefix, so it must be static. */
@@ -52,6 +63,8 @@ export interface PresetConfig {
  * halve the output budget for a chat that attaches it.
  */
 export const DEFAULT_PRESET_CONFIG: PresetConfig = {
+  provider: '',
+  model: '',
   systemPrompt: '',
   preHistoryInstructions: '',
   postHistoryInstructions: '',
@@ -131,6 +144,8 @@ export function parsePresetConfig(raw: string | null | undefined): PresetConfig 
     : [];
 
   return {
+    provider: typeof record.provider === 'string' ? record.provider : '',
+    model: typeof record.model === 'string' ? record.model : '',
     systemPrompt: typeof record.systemPrompt === 'string' ? record.systemPrompt : '',
     preHistoryInstructions:
       typeof record.preHistoryInstructions === 'string' ? record.preHistoryInstructions : '',

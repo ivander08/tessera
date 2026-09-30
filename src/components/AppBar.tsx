@@ -21,9 +21,25 @@ export interface AppBarProps {
   /** Chat-scoped entries, shown above the app-wide ones. */
   scoped?: ReactNode;
   onMenuOpen?: () => void;
+  /**
+   * Where the title links to, or null to leave it plain text.
+   *
+   * The title is the app's most reliable way back: it is in the same place on every
+   * screen and it is what a reader reaches for when they are lost. Defaulting it to the
+   * scene list means every screen has a way home without each one remembering to add
+   * one — the failure that left the reader hunting through the menu.
+   */
+  titleHref?: string | null;
 }
 
-export function AppBar({ lead, title, trailing, scoped, onMenuOpen }: AppBarProps) {
+export function AppBar({
+  lead,
+  title,
+  trailing,
+  scoped,
+  onMenuOpen,
+  titleHref = '/',
+}: AppBarProps) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement | null>(null);
   const location = useLocation();
@@ -55,7 +71,13 @@ export function AppBar({ lead, title, trailing, scoped, onMenuOpen }: AppBarProp
   return (
     <header className="bar">
       {lead}
-      {title}
+      {titleHref && title ? (
+        <Link to={titleHref} className="bar-home" title="All chats">
+          {title}
+        </Link>
+      ) : (
+        title
+      )}
       <div className="bar-spacer" />
       {trailing}
 
@@ -97,6 +119,12 @@ export function AppBar({ lead, title, trailing, scoped, onMenuOpen }: AppBarProp
               </>
             )}
 
+            {/* The way home goes first. Everything else in this menu is a destination,
+                and the one you need most often is the one you came from. */}
+            <MenuLink to="/" label="All chats" />
+            <MenuLink to="/settings" label="Settings" />
+
+            <div className="menu-sep" />
             <div className="menu-label">Library</div>
             <MenuLink to="/characters" label="Characters" />
             <MenuLink to="/personas" label="Personas" />
@@ -106,10 +134,6 @@ export function AppBar({ lead, title, trailing, scoped, onMenuOpen }: AppBarProp
             <div className="menu-label">Make</div>
             <MenuLink to="/forge" label="Forge a character" />
             <MenuLink to="/characters/new" label="Import a card" />
-
-            <div className="menu-sep" />
-            <MenuLink to="/" label="All chats" />
-            <MenuLink to="/settings" label="Settings" />
           </div>
         )}
       </div>
