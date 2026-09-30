@@ -674,13 +674,16 @@ textarea.field {
 
 /* The reader's turn is marked by tone, not by moving the grid. An earlier version
    indented it, which put the reader's portrait in a different column than the
-   character's and read as a misalignment rather than as hierarchy — the portrait rail
-   has to stay straight or the eye loses the column it scans down. */
+   character's and made the rail zigzag — the portrait column has to stay straight or the
+   eye loses the line it scans down.
+   The negative margin and matching padding cancel: the band bleeds into the gutter
+   visually while the grid columns stay exactly where they were. */
 .turn-user {
-  margin: 2px 0;
-  padding-left: 10px;
-  padding-right: 10px;
-  border-radius: 9px;
+  margin-left: -12px;
+  margin-right: -12px;
+  padding-left: 12px;
+  padding-right: 12px;
+  border-radius: 10px;
   background: color-mix(in srgb, var(--surface) 55%, transparent);
 }
 
@@ -689,7 +692,7 @@ textarea.field {
 }
 
 /* A reader's turn follows an assistant turn; the rule between them would double up with
-   the tinted block's own edge. */
+   the tinted band's own edge. */
 .turn-assistant + .turn-user {
   border-top-color: transparent;
 }
