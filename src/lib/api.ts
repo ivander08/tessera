@@ -111,11 +111,20 @@ export async function streamChat(
   chatId: string,
   content: string,
   onFrame: (frame: ChatFrame) => void,
-  options: { mode?: TurnMode; signal?: AbortSignal } = {},
+  options: { mode?: TurnMode; signal?: AbortSignal; targetId?: string | null } = {},
 ): Promise<void> {
   const res = await apiFetch('/api/chat', {
     method: 'POST',
-    body: JSON.stringify({ chatId, content, mode: options.mode ?? 'send' }),
+    body: JSON.stringify({
+      chatId,
+      content,
+      mode: options.mode ?? 'send',
+      // Which message a `regenerate` or `continue` acts on. The server cannot infer it:
+      // after a stopped or failed turn the chat's last row is the user's own message, so
+      // "regenerate the last assistant reply" would be rejected as the wrong role. The
+      // client knows which turn the button was pressed on, so it says so.
+      targetId: options.targetId ?? null,
+    }),
     signal: options.signal,
   });
 

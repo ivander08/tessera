@@ -12,16 +12,37 @@ interface CharacterRow extends CharacterSummary {
 }
 
 /**
+ * The row icons are 30px rather than the 34px default: three of them plus the labelled
+ * action have to sit beside a name on a 390px line, and 4px off each of three buttons is
+ * 12px the name gets to keep.
+ */
+const ICON_BTN = { width: 30, height: 30 } as const;
+
+/** The same 16px, 1.7-stroke grid the transcript's tools use. */
+const STROKE = {
+  width: 16,
+  height: 16,
+  viewBox: '0 0 16 16',
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 1.7,
+  strokeLinecap: 'round' as const,
+  strokeLinejoin: 'round' as const,
+  'aria-hidden': true,
+};
+
+/**
  * The character list.
  *
- * The whole row opens the editor, because editing is the common action and a separate
- * "Edit" button that is one of four is a smaller target on a phone than the row itself.
- * The other actions sit beside it rather than inside it: a button nested in a link is
- * reachable only by whichever handler wins, and on touch that is a coin flip.
+ * The whole row opens the editor, because editing is the common action and an icon is a
+ * smaller target than the row itself. The other actions sit beside it rather than inside
+ * it: a button nested in a link is reachable only by whichever handler wins, and on touch
+ * that is a coin flip.
  *
- * The row wraps rather than shrinks. Four buttons and a name do not fit on one 390px
- * line, and a name ellipsised to nothing so that Delete can sit at the right margin is
- * the wrong trade — the action bar drops to its own line instead.
+ * One labelled action and three icons on one line. Four labelled buttons did not fit at
+ * 390px and wrapped onto a second line under every name, which turned the list into a
+ * wall of chrome. What a row is for is the name, so the name is what gets the width; the
+ * metadata ellipsises and the full text is one tap away in the editor.
  *
  * Deleting a character deletes its chats too, so the confirmation says so by name and
  * count instead of asking "are you sure?" about an unstated thing.
@@ -106,9 +127,14 @@ export default function Characters() {
               </p>
             )}
           </div>
-          <Link to="/characters/new" className="btn">
-            Import a card
-          </Link>
+          <div className="row-actions" style={{ gap: 6 }}>
+            <Link to="/characters/new?blank=1" className="btn primary">
+              New character
+            </Link>
+            <Link to="/characters/new" className="btn quiet">
+              Import a card
+            </Link>
+          </div>
         </div>
 
         {loading && <p className="sheet-sub">Loading…</p>}
@@ -120,12 +146,16 @@ export default function Characters() {
           <div className="empty">
             No characters yet.
             <br />
+            <Link to="/characters/new?blank=1" className="md-link">
+              Write one yourself
+            </Link>
+            ,{' '}
             <Link to="/characters/new" className="md-link">
-              Import a card
-            </Link>{' '}
-            or{' '}
+              import a card
+            </Link>
+            , or{' '}
             <Link to="/forge" className="md-link">
-              write one from a premise
+              let the forge draft one from a premise
             </Link>
             .
           </div>
@@ -136,7 +166,7 @@ export default function Characters() {
             const shown = character.shownName ?? character.name;
             const busy = busyId === character.id;
             return (
-              <div key={character.id} className="row" style={{ flexWrap: 'wrap', rowGap: 10 }}>
+              <div key={character.id} className="row">
                 <Link
                   to={`/characters/${character.id}/edit`}
                   style={{
@@ -167,7 +197,7 @@ export default function Characters() {
                   </div>
                 </Link>
 
-                <div className="row-actions" style={{ marginLeft: 'auto', flexWrap: 'wrap' }}>
+                <div className="row-actions" style={{ marginLeft: 'auto', gap: 6, alignItems: 'center' }}>
                   <button
                     type="button"
                     onClick={() => void startChat(character)}
@@ -176,20 +206,36 @@ export default function Characters() {
                   >
                     New chat
                   </button>
-                  <Link to={`/characters/${character.id}/edit`} className="btn">
-                    Edit
+                  <Link
+                    to={`/characters/${character.id}/edit`}
+                    className="icon-btn"
+                    aria-label={`Edit ${shown}`}
+                    title="Edit"
+                    style={ICON_BTN}
+                  >
+                    <PencilGlyph />
                   </Link>
-                  <button type="button" onClick={() => void fork(character)} disabled={busy} className="btn">
-                    Fork
+                  <button
+                    type="button"
+                    onClick={() => void fork(character)}
+                    disabled={busy}
+                    className="icon-btn"
+                    aria-label={`Fork ${shown}`}
+                    title="Fork"
+                    style={ICON_BTN}
+                  >
+                    <ForkGlyph />
                   </button>
                   <button
                     type="button"
                     onClick={() => void remove(character)}
                     disabled={busy}
-                    className="btn danger"
-                    style={{ color: 'var(--danger)' }}
+                    className="icon-btn"
+                    aria-label={`Delete ${shown}`}
+                    title="Delete"
+                    style={{ ...ICON_BTN, color: 'var(--danger)' }}
                   >
-                    Delete
+                    <TrashGlyph />
                   </button>
                 </div>
               </div>
@@ -198,5 +244,34 @@ export default function Characters() {
         </div>
       </main>
     </>
+  );
+}
+
+function PencilGlyph() {
+  return (
+    <svg {...STROKE}>
+      <path d="M2.8 13.2l.7-2.9 7-7a1.6 1.6 0 0 1 2.2 2.2l-7 7z" />
+      <path d="M9.6 4.4l2 2" />
+    </svg>
+  );
+}
+
+function ForkGlyph() {
+  return (
+    <svg {...STROKE}>
+      <rect x="5.75" y="5.75" width="7.5" height="7.5" rx="1.5" />
+      <path d="M10.25 5.75V4.5A1.5 1.5 0 0 0 8.75 3h-4.5A1.5 1.5 0 0 0 2.75 4.5v4.5a1.5 1.5 0 0 0 1.5 1.5h1.25" />
+    </svg>
+  );
+}
+
+function TrashGlyph() {
+  return (
+    <svg {...STROKE}>
+      <path d="M2.8 4.4h10.4" />
+      <path d="M6.4 4.4V3.2a.9.9 0 0 1 .9-.9h1.4a.9.9 0 0 1 .9.9v1.2" />
+      <path d="M4.2 4.4l.7 8.2a1.3 1.3 0 0 0 1.3 1.2h3.6a1.3 1.3 0 0 0 1.3-1.2l.7-8.2" />
+      <path d="M6.6 6.9v4.6M9.4 6.9v4.6" />
+    </svg>
   );
 }

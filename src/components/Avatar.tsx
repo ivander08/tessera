@@ -39,6 +39,9 @@ async function loadAvatar(url: string): Promise<string | null> {
       });
       if (!res.ok) return null;
       const blob = await res.blob();
+      // A zero-byte body is not an image. `createObjectURL` accepts it happily and the
+      // `<img>` then renders nothing at all, which is worse than the initial fallback.
+      if (blob.size === 0) return null;
       const objectUrl = URL.createObjectURL(blob);
       cache.set(url, objectUrl);
       return objectUrl;

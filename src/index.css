@@ -64,10 +64,13 @@
   box-sizing: border-box;
 }
 
+/* `min-height`, never `height`. A fixed 100% box is exactly one viewport tall, and a
+   sticky element is confined to its containing block — so the titlebar and the composer
+   would stop sticking the moment the transcript grew past the first screen. */
 html,
 body,
 #root {
-  height: 100%;
+  min-height: 100%;
 }
 
 body {
@@ -318,6 +321,13 @@ textarea.field {
   border: 1px solid var(--line-strong);
   border-radius: 10px;
   box-shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.6), var(--shadow);
+  /* The menu has three growing sections — personas, presets, and the app-wide links.
+     Capping the whole thing rather than only the lists is what keeps the last entry
+     reachable: a menu taller than the screen has no scrolling ancestor, so its bottom is
+     simply unreachable. `--bar` is the titlebar's height, which the menu sits under. */
+  max-height: calc(100dvh - 72px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .menu-item {
@@ -358,6 +368,156 @@ textarea.field {
   background: var(--line);
 }
 
+/* A menu section that can outgrow the screen. A hundred personas must not push the
+   rest of the menu out of reach, so the list scrolls inside a bounded box. */
+.menu-scroll {
+  max-height: min(46vh, 340px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* One preset with its edit affordance. The row itself stays the click target for
+   choosing; the pencil is a separate hit area so choosing and editing cannot be
+   confused for each other. */
+.menu-row {
+  display: flex;
+  align-items: center;
+}
+
+.menu-row > .menu-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.menu-edit {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  margin-right: 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+
+.menu-edit:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 9%, transparent);
+}
+
+/* ---------------------------------------------------------------- sheet over */
+
+/* A task that would otherwise mean leaving the screen you are on — editing the preset
+   mid-scene, adjusting the type you are reading. */
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  /* Above the titlebar (20) and the menu (30): a sheet opened from the menu must cover
+     the menu, not appear behind it. */
+  z-index: 60;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.sheet-scrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  background: var(--scrim);
+  backdrop-filter: blur(2px);
+  cursor: pointer;
+  animation: scrim-in 160ms ease both;
+}
+
+.sheet-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(720px, 100%);
+  max-height: 88vh;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-bottom: 0;
+  border-radius: 14px 14px 0 0;
+  box-shadow: 0 -18px 48px -12px rgba(0, 0, 0, 0.6);
+  animation: sheet-in 200ms cubic-bezier(0.22, 0.68, 0.36, 1) both;
+}
+
+.sheet-panel-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 15px 16px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sheet-panel-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.sheet-panel-sub {
+  margin: 5px 0 0;
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  color: var(--ink-faint);
+}
+
+.sheet-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+}
+
+/* On a wide screen the sheet is a centred panel rather than a bottom drawer, because
+   there is no thumb-reach argument at 1440px and a full-width drawer reads as a page. */
+@media (min-width: 760px) {
+  .sheet-backdrop {
+    align-items: center;
+    padding: 40px 20px;
+  }
+
+  .sheet-panel {
+    max-height: 82vh;
+    border-bottom: 1px solid var(--line-strong);
+    border-radius: 14px;
+  }
+}
+
+@keyframes scrim-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    transform: translateY(14px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sheet-scrim,
+  .sheet-panel {
+    animation: none;
+  }
+}
+
 /* ---------------------------------------------------------------- transcript */
 
 .transcript {
@@ -373,11 +533,35 @@ textarea.field {
   display: grid;
   grid-template-columns: var(--avatar) 1fr;
   gap: 12px;
-  padding: 14px 0;
+  padding: 15px 0;
+}
+
+/* The reader's turn is indented and tinted, so a long scene can be skimmed by its
+   alternation alone: the character owns the left margin, the reader answers inset from
+   it. Colour is not doing this work — position is, which survives being read in
+   greyscale or by someone who cannot distinguish the two metals. */
+.turn-user {
+  padding-left: 18px;
 }
 
 .turn + .turn {
   border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+}
+
+/* The opening of a scene gets a drop cap. It is the one flourish in the whole
+   interface, spent on the first thing the reader sees, and it is what makes the first
+   screen read as a page of prose rather than a log that has not scrolled yet.
+   The class is applied by `Turn` only when the prose actually starts with a letter:
+   CSS cannot see the character, and a drop cap on an em-dash or a quote is a floating
+   punctuation mark. */
+.prose.drop-cap > .md-p:first-child::first-letter {
+  float: left;
+  font-family: var(--font-prose);
+  font-size: 3.1em;
+  line-height: 0.82;
+  font-weight: 400;
+  color: var(--brass);
+  padding: 0.06em 0.1em 0 0;
 }
 
 .turn-avatar {
@@ -394,6 +578,7 @@ textarea.field {
   color: var(--ink-dim);
   user-select: none;
   flex-shrink: 0;
+  margin-top: 2px;
 }
 
 .turn-avatar img {
@@ -407,12 +592,45 @@ textarea.field {
   min-width: 0;
 }
 
+/* A turn arriving. New prose fades up rather than appearing, which is what makes a
+   reply feel like it was written rather than swapped in — and the transform is small
+   enough that it never fights the scroll position. Only turns added after the first
+   paint animate: re-running this on every navigation would make the whole transcript
+   slide on every route change. */
+@keyframes turn-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.turn[data-streaming],
+.turn[data-thinking],
+.turn:last-of-type {
+  animation: turn-in 260ms cubic-bezier(0.22, 0.68, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .turn[data-streaming],
+  .turn[data-thinking],
+  .turn:last-of-type {
+    animation: none;
+  }
+}
+
+/* The speaker's name and the turn's controls share a line. The name carries a hairline
+   rule out to the right margin, which is the only divider between turns and does the
+   work a border would do at a fraction of the weight. */
 .turn-head {
   display: flex;
   align-items: center;
   gap: 10px;
   min-height: 24px;
-  margin-bottom: 3px;
+  margin-bottom: 4px;
 }
 
 .turn-speaker {
@@ -422,10 +640,11 @@ textarea.field {
   letter-spacing: 0.11em;
   text-transform: uppercase;
   color: var(--brass);
+  flex-shrink: 0;
 }
 
 .turn-user .turn-speaker {
-  color: var(--verdigris);
+  color: var(--reader, var(--verdigris));
 }
 
 .turn-tools {
@@ -498,9 +717,13 @@ textarea.field {
 
 /* ---------------------------------------------------------------- markdown */
 
+/* Emphasis: the narrator's stage directions.
+   Mixed from `--ink` toward the reader's colour by the theme's emphasis slider, so
+   "these italics are too loud" is one control rather than a CSS exercise. The fallback
+   keeps the stylesheet correct when the theme has not been applied yet. */
 .md-em {
   font-style: italic;
-  color: color-mix(in srgb, var(--ink) 82%, var(--ink-dim));
+  color: var(--em, color-mix(in srgb, var(--ink) 82%, var(--ink-dim)));
 }
 
 .md-strong {
@@ -682,9 +905,102 @@ textarea.field {
   }
 }
 
+/* Composing, before the first token. Three dots that rise in sequence — the shape of
+   someone gathering a sentence rather than a machine reporting progress. The colour is
+   inherited from the turn's speaker, so the wait belongs to the character. */
+.thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 1.6em;
+}
+
+.thinking i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.32;
+  animation: think 1.25s ease-in-out infinite;
+}
+
+.thinking i:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.thinking i:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+@keyframes think {
+  0%,
+  70%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.28;
+  }
+  32% {
+    transform: translateY(-4px);
+    opacity: 0.9;
+  }
+}
+
+.turn-assistant[data-thinking] .thinking {
+  color: var(--brass);
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .caret {
+  .caret,
+  .thinking i {
     animation: none;
+  }
+
+  .thinking i {
+    opacity: 0.55;
+  }
+}
+
+/* The scene chip: where and when the story currently stands, one tap from the document
+   that records it. Truncates rather than wraps — the titlebar has one line. */
+.scene-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 34vw;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  color: var(--ink-dim);
+  font-size: var(--text-xs);
+  text-decoration: none;
+  transition: border-color 130ms ease, color 130ms ease;
+}
+
+.scene-chip:hover {
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.scene-chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scene-chip svg {
+  flex-shrink: 0;
+  color: var(--brass);
+}
+
+@media (max-width: 560px) {
+  .scene-chip-text {
+    display: none;
+  }
+
+  .scene-chip {
+    padding: 0 8px;
   }
 }
 
@@ -697,17 +1013,35 @@ textarea.field {
   position: sticky;
   bottom: 0;
   z-index: 15;
-  padding: 10px 16px;
-  padding-bottom: max(10px, env(safe-area-inset-bottom));
-  background: color-mix(in srgb, var(--ground) 90%, transparent);
-  backdrop-filter: blur(12px);
+  padding: 12px 16px;
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+  background: color-mix(in srgb, var(--ground) 92%, transparent);
+  backdrop-filter: blur(14px);
   border-top: 1px solid var(--line);
+}
+
+/* The rule that fades in from the edges. A full-width hard border across the bottom of a
+   reading column cuts the page in half; a rule that dissolves reads as the page ending
+   rather than being truncated. */
+.composer::before {
+  content: "";
+  position: absolute;
+  inset: -1px 0 auto 0;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--line-strong) 22%,
+    var(--line-strong) 78%,
+    transparent
+  );
+  border-top: 1px solid transparent;
 }
 
 .composer-inner {
   display: flex;
   align-items: flex-end;
-  gap: 6px;
+  gap: 8px;
   max-width: calc(var(--measure) + 6rem);
   margin: 0 auto;
 }
@@ -715,33 +1049,158 @@ textarea.field {
 .composer-actions {
   display: flex;
   gap: 2px;
-  padding-bottom: 1px;
+  padding-bottom: 2px;
 }
 
 .composer-input {
   flex: 1;
   min-width: 0;
-  min-height: 38px;
+  min-height: 40px;
   max-height: 42vh;
-  padding: 9px 12px;
+  padding: 10px 14px;
   background: var(--surface);
   color: var(--ink);
   border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
+  border-radius: 10px;
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   line-height: 1.45;
   resize: none;
   overflow-y: auto;
+  transition: border-color 130ms ease, box-shadow 130ms ease;
 }
 
 .composer-input:focus {
   outline: none;
   border-color: var(--brass);
+  /* A soft ring rather than a hard outline: the field is the one thing you look at when
+     typing, and it should read as lit rather than as selected. */
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brass) 14%, transparent);
 }
 
 .composer-input::placeholder {
   color: var(--ink-faint);
+}
+
+.composer .btn.primary {
+  min-height: 40px;
+  border-radius: 10px;
+  padding: 0 18px;
+}
+
+/* ---------------------------------------------------------------- the shelf */
+
+/* The home list. Each scene is taller and roomier than a settings row: the portrait is
+   the anchor, the last line written is the substance, and the time is the column you
+   scan. Capped at a readable width so a maximised window does not stretch a two-line
+   preview across 2000px. */
+.shelf {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 10px 16px 64px;
+}
+
+.shelf-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 14px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  text-decoration: none;
+  color: inherit;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.shelf-row:hover {
+  background: var(--surface);
+  border-color: var(--line);
+}
+
+.shelf-row .chip {
+  width: 46px;
+  height: 46px;
+  font-size: var(--text-base);
+}
+
+/* The portrait sits on the first line of text, not centred against two lines of
+   preview, so a short preview does not push it out of alignment with the name. */
+.shelf-row .chip,
+.shelf-row .turn-avatar {
+  margin-top: 2px;
+}
+
+.shelf-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.shelf-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.shelf-preview {
+  margin: 5px 0 0;
+  font-family: var(--font-prose);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  color: var(--ink-dim);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.shelf-time {
+  flex-shrink: 0;
+  color: var(--ink-faint);
+}
+
+/* The shelf arrives rather than appearing. A short stagger, capped so a long list does
+   not take a second to finish painting — after the sixth row they all share one delay. */
+@keyframes shelf-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.shelf-row {
+  animation: shelf-in 300ms cubic-bezier(0.22, 0.68, 0.36, 1) both;
+}
+
+.shelf-row:nth-child(1) { animation-delay: 0ms; }
+.shelf-row:nth-child(2) { animation-delay: 28ms; }
+.shelf-row:nth-child(3) { animation-delay: 56ms; }
+.shelf-row:nth-child(4) { animation-delay: 84ms; }
+.shelf-row:nth-child(5) { animation-delay: 112ms; }
+.shelf-row:nth-child(n + 6) { animation-delay: 140ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  .shelf-row {
+    animation: none;
+  }
+}
+
+/* A hairline that fades out, used as the rule under a screen's heading. */
+.rule-fade {
+  height: 1px;
+  border: 0;
+  margin: 0;
+  background: linear-gradient(
+    to right,
+    var(--line-strong),
+    color-mix(in srgb, var(--line) 30%, transparent) 70%,
+    transparent
+  );
 }
 
 /* ---------------------------------------------------------------- lists */

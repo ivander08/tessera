@@ -66,10 +66,12 @@ export default function Setup() {
         </div>
 
         <form onSubmit={submit} className="panel panel-pad">
-          <label className="block">
-            <span className="form-label">
-              <span>Access token</span>
-              <span className="form-hint">the value you set as TESSERA_TOKEN</span>
+          <label className="form-row" style={{ marginTop: 0 }}>
+            <span className="form-label" style={{ display: 'block', marginBottom: 8 }}>
+              <span style={{ display: 'block' }}>Access token</span>
+              <span className="form-hint" style={{ display: 'block', marginTop: 4 }}>
+                the value you set as TESSERA_TOKEN
+              </span>
             </span>
             <input
               type="password"
@@ -84,7 +86,7 @@ export default function Setup() {
           </label>
 
           {error && (
-            <div className="note danger" style={{ marginTop: 12 }}>
+            <div className="note danger" style={{ marginTop: 16 }}>
               {error === 'unauthorized'
                 ? 'That token does not match the one the Worker expects. Check for a trailing space, then try again.'
                 : error}
@@ -94,14 +96,14 @@ export default function Setup() {
           <button
             type="submit"
             className="btn primary"
-            style={{ width: '100%', marginTop: 14, minHeight: 40 }}
+            style={{ width: '100%', marginTop: 20, minHeight: 40 }}
             disabled={busy || value.trim().length === 0}
           >
             {busy ? 'Checking…' : 'Unlock'}
           </button>
         </form>
 
-        <p className="form-hint" style={{ marginTop: 14, lineHeight: 1.6 }}>
+        <p className="form-hint" style={{ marginTop: 18, lineHeight: 1.6 }}>
           There is no account. The token is checked against the Worker on every request and kept
           in this browser only.
         </p>

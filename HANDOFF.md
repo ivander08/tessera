@@ -55,6 +55,7 @@ is the check the plan calls the most important one in the project, and it passes
 | Prompt assembler, sawtooth windowing, prefix guard | done — 90% cache at turn 40 |
 | SSE parser, provider adapters (OpenRouter, Kenai) | done |
 | Chat: swipes, edit, delete, regenerate, impersonate, continue | done |
+| Branching: regenerating an old reply forks the scene; swiping back restores it | done — `branch.ts` + migration 0005 |
 | Markdown rendering (CommonMark, `<details>`, XSS-safe) | done |
 | Theme system (tokens as data, light/dark, custom CSS) | done |
 | Macros (`{{char}}`/`{{user}}` head-safe, dynamic tail-only) | done |
@@ -72,15 +73,39 @@ is the check the plan calls the most important one in the project, and it passes
 
 - **`bun run build` strips `VITE_API_BASE` from `dist/`.** Running it after `build:native`
   and then `cap sync` packages a bundle that cannot reach the API. `src/lib/native/bundle.test.ts`
-  guards this; it caught me once.
+  guards it; it caught me once.
 - **`wrangler dev` does not reload `.dev.vars`.** Restart it after changing the token.
-- **Alternatives get late `seq` values.** Anything ordering messages must order by the
-  swipe group's *minimum* seq, or an edited early message jumps to the end.
+- **The transcript is a tree, not a list.** `messages.parent_id` is the structure and
+  `worker/src/branch.ts#walkPath` is the only thing that decides what is on screen: follow
+  the ACTIVE child of each position, stop when a position has none. Consequences worth
+  knowing before touching messages:
+  - Two rows are versions of one position exactly when they share a parent. Nothing keys
+    on `swipe_group` any more — it is left in the schema, unread.
+  - Regenerating an old reply does NOT rewrite the turns after it. The new version becomes
+    the active child, so the old continuation leaves the path and comes back when you swipe
+    to the old version. Never "delete the rows after X" — that is the behaviour this
+    replaced, and it is unrecoverable.
+  - A `send` writes TWO rows in a chain: the user message is parented to the path tail and
+    the reply is parented to the user message. Parenting both to the tail makes them
+    siblings, and the walk then drops the reader's own line. `branch.test.ts` covers it.
+  - A row's `seq` strictly increases along a path, which is why the prompt cut for `send`
+    can filter on it.
+- **A D1 BLOB does not come back as an `ArrayBuffer`.** It arrives as a plain array of
+  byte numbers, and `new Response(numberArray)` is not a `BodyInit` — it serializes to
+  nothing, so the avatar endpoint answered `200 image/png` with a zero-byte body while the
+  bytes sat intact in the table. `characters.ts#asBytes` coerces; do not trust the generic
+  on `.first<T>()` for a blob column.
+- **`html`/`body`/`#root` must stay `min-height: 100%`.** With `height: 100%` the root box
+  is exactly one viewport tall, and a sticky element is confined to its containing block —
+  so the titlebar and composer silently stop sticking after the first screen of scroll.
 - **`js-tiktoken` cannot go in the Worker** (2.3 MB vocabulary, exceeds startup CPU).
   Use `src/lib/tokenEstimate.ts` there.
 - **Kenari buffers SSE at its gateway** — verified across five models. So a regression in
   our own streaming is invisible from the client. `worker/src/chat.streaming.test.ts`
   pins it against a deliberately slow upstream.
+- **A `position: fixed` sheet must be portalled.** The chat menu scrolls and is absolutely
+  positioned, so a dialog declared inside it is positioned against the menu and lands
+  off-screen. `Modal` renders through `createPortal` to `document.body`.
 
 ## Not done
 

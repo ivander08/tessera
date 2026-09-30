@@ -117,57 +117,74 @@ export default function Settings() {
       <section className="section panel panel-pad">
         <h2 className="eyebrow">Provider keys</h2>
         {PROVIDERS.map((providerId) => (
-          <div key={providerId} className="flex items-center gap-2">
-            <span className="w-24 font-mono text-sm">{providerId}</span>
-            <input
-              type="password"
-              value={keyDraft[providerId] ?? ''}
-              onChange={(event) =>
-                setKeyDraft((current) => ({ ...current, [providerId]: event.target.value }))
-              }
-              placeholder={keyed.has(providerId) ? 'stored — replace' : 'not set'}
-              className="field" style={{ fontFamily: 'var(--font-data)' }}
-            />
-            <button
-              type="button"
-              onClick={() => void saveKey(providerId)}
-              className="btn"
-            >
-              Save
-            </button>
+          <div key={providerId} className="form-row">
+            <label className="form-label" htmlFor={`provider-key-${providerId}`}>
+              <span className="font-mono">{providerId}</span>
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                id={`provider-key-${providerId}`}
+                type="password"
+                value={keyDraft[providerId] ?? ''}
+                onChange={(event) =>
+                  setKeyDraft((current) => ({ ...current, [providerId]: event.target.value }))
+                }
+                placeholder={keyed.has(providerId) ? 'stored — replace' : 'not set'}
+                className="field" style={{ fontFamily: 'var(--font-data)' }}
+              />
+              <button
+                type="button"
+                onClick={() => void saveKey(providerId)}
+                className="btn"
+              >
+                Save
+              </button>
+            </div>
           </div>
         ))}
       </section>
 
       <section className="section panel panel-pad">
         <h2 className="eyebrow">Model</h2>
-        <div className="flex gap-2">
-          <select
-            value={provider}
-            onChange={(event) => setForm({ ...form, provider: event.target.value, model: '' })}
-            className="field"
-          >
-            <option value="">— provider —</option>
-            {PROVIDERS.map((providerId) => (
-              <option key={providerId} value={providerId}>
-                {providerId}
-              </option>
-            ))}
-          </select>
+        <div className="field-list two">
+          <label className="block" htmlFor="settings-provider">
+            <span className="form-label">
+              <span>Provider</span>
+            </span>
+            <select
+              id="settings-provider"
+              value={provider}
+              onChange={(event) => setForm({ ...form, provider: event.target.value, model: '' })}
+              className="field"
+            >
+              <option value="">— provider —</option>
+              {PROVIDERS.map((providerId) => (
+                <option key={providerId} value={providerId}>
+                  {providerId}
+                </option>
+              ))}
+            </select>
+          </label>
 
-          <select
-            value={model}
-            onChange={(event) => setForm({ ...form, model: event.target.value })}
-            disabled={modelList.length === 0}
-            className="field"
-          >
-            <option value="">— model —</option>
-            {modelList.map((entry) => (
-              <option key={entry.id} value={entry.id}>
-                {entry.name ? `${entry.name} (${entry.id})` : entry.id}
-              </option>
-            ))}
-          </select>
+          <label className="block" htmlFor="settings-model">
+            <span className="form-label">
+              <span>Model</span>
+            </span>
+            <select
+              id="settings-model"
+              value={model}
+              onChange={(event) => setForm({ ...form, model: event.target.value })}
+              disabled={modelList.length === 0}
+              className="field"
+            >
+              <option value="">— model —</option>
+              {modelList.map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.name ? `${entry.name} (${entry.id})` : entry.id}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
         {models.error && <p className="note warn">{models.error}</p>}
         <p className="form-hint">
@@ -200,7 +217,7 @@ export default function Settings() {
             className="field"
           />
         </Field>
-        <div className="flex gap-3">
+        <div className="field-list two items-end">
           <Field label="Max output tokens">
             <input
               value={form.maxTokens ?? ''}
@@ -271,8 +288,10 @@ function Frame({ children }: { children: React.ReactNode }) {
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <label className="block space-y-1">
-      <span className="form-hint">{label}</span>
+    <label className="form-row">
+      <span className="form-label">
+        <span>{label}</span>
+      </span>
       {children}
     </label>
   );

@@ -6,7 +6,8 @@ import type { NormalizedUsage, Provider } from './providers/types';
 import { badRequest, notFound, readJson } from './http';
 import { buildPrompt, send } from './prompt';
 import { persistAssistant, persistUserMessage } from './persist';
-import { addAlternativeRow, lastActiveMessage } from './messages';
+import { addAlternativeRow, lastActiveMessage, loadMessage, type MessageRow } from './messages';
+import { tailId } from './branch';
 import { parseSse } from '../../src/lib/sse';
 import { estimateChatTokens } from '../../src/lib/tokenEstimate';
 import { updateState } from './state/update';
@@ -33,6 +34,8 @@ interface TurnBody {
   chatId?: string;
   content?: string;
   mode?: TurnMode;
+  /** The message a `regenerate` or `continue` acts on. See `resolveTarget`. */
+  targetId?: string | null;
 }
 
 export async function handleTurn(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -52,7 +55,7 @@ export async function handleTurn(req: Request, env: Env, ctx: ExecutionContext):
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
-        await runTurn(controller, env, ctx, chat, mode, body.content ?? '');
+        await runTurn(controller, env, ctx, chat, mode, body.content ?? '', body.targetId ?? null);
       } catch (error) {
         try {
           send(controller, { type: 'error', message: messageOf(error), code: 'internal' });
@@ -86,6 +89,7 @@ async function runTurn(
   chat: ChatRow,
   mode: TurnMode,
   content: string,
+  requestedTargetId: string | null,
 ): Promise<void> {
   // Preset layered over global settings: a preset exists to override the defaults, so
   // it wins for anything it defines.
@@ -101,7 +105,20 @@ async function runTurn(
   }
 
   // Resolve what this turn attaches to, and where its output goes.
-  const target = mode === 'send' ? null : await lastActiveMessage(env, chat.id);
+  //
+  // The client names the message for the modes that act on one, and that name wins. It
+  // is the only side that knows which turn the button was pressed on: after a stopped or
+  // failed turn the chat's last row is the user's own message, so inferring "the last
+  // message" would refuse to redo a reply that is plainly on screen.
+  //
+  // The id is verified to belong to this chat rather than trusted, so a stale or forged
+  // one cannot reach into another conversation.
+  let target: MessageRow | null = null;
+  if (mode !== 'send') {
+    target = requestedTargetId
+      ? await loadMessage(env, chat.id, requestedTargetId)
+      : await lastActiveMessage(env, chat.id);
+  }
   if (mode !== 'send' && !target) {
     return fail(controller, 'There is no message to work from yet.', 'empty_chat');
   }
@@ -112,10 +129,27 @@ async function runTurn(
     return fail(controller, 'The last message is not one of mine to continue.', 'wrong_role');
   }
 
+  // Where a new row attaches.
+  //
+  //  - `send` answers the end of the visible path, which is the newest thing the reader
+  //    can see. Using the newest ROW would be wrong once the chat branches: the newest
+  //    row might be an abandoned branch, and the new turn would vanish into it.
+  //  - `regenerate` and `continue` keep the target's own parent, because they produce
+  //    another version of that position rather than a step after it.
+  const parentId =
+    mode === 'send' ? await tailId(env, chat.id) : (target?.parent_id ?? null);
+
   // For `send`, the user message is persisted BEFORE the provider is called, so a crash
   // costs a reply and never the user's own words. The other modes add no user text, so
   // there is nothing to lose and nothing to persist up front.
-  const userSeq = mode === 'send' ? await persistUserMessage(env, chat.id, content) : null;
+  const user = mode === 'send' ? await persistUserMessage(env, chat.id, content, parentId) : null;
+  const userSeq = user?.seq ?? null;
+
+  // The reply answers the reader's message when there is one, and the target's parent
+  // otherwise. Parenting a `send` reply to `parentId` would make it a sibling of the
+  // message it answers: two active children of one parent, and the walk would show the
+  // reply while dropping the reader's own line.
+  const replyParentId = mode === 'send' ? (user?.id ?? parentId) : parentId;
 
   const prompt = await buildPrompt(env, chat, settings, {
     mode,
@@ -163,11 +197,17 @@ async function runTurn(
   // Where the text lands depends on the mode. `regenerate` and `continue` extend an
   // existing message's swipe group, so the conversation keeps exactly one active row per
   // position and swiping back recovers the previous attempt.
+  //
+  // When `regenerate` targets a message that already has a continuation, that
+  // continuation is not touched: the new alternative becomes the active child, so the
+  // path walk stops at it and the old branch drops out of the transcript. Swiping back
+  // makes the old row active again and its continuation returns with it.
   const messageId =
     mode === 'regenerate' || mode === 'continue'
       ? await addAlternativeRow(env, chat.id, target!.id, assistantText)
       : await persistAssistant(env, chat.id, assistantText, usage, costUsd, {
           role: mode === 'impersonate' ? 'user' : 'assistant',
+          parentId: replyParentId,
         });
 
   send(controller, {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { applyTheme, DEFAULT_THEME, type Theme } from '../lib/theme';
+import { applyTheme, DEFAULT_THEME, resolveMode, type Theme } from '../lib/theme';
 
 /**
  * Theme controls.
@@ -103,12 +103,45 @@ export function ThemeEditor({
         onChange={(avatarSize) => update({ avatarSize })}
       />
 
+      <Slider
+        label="Narration contrast"
+        value={preview.emphasis}
+        min={0}
+        max={100}
+        step={2}
+        format={(v) => (v >= 100 ? 'full' : v <= 0 ? 'plain' : `${v}%`)}
+        onChange={(emphasis) => update({ emphasis })}
+      />
+
+      <Row label="Character colour">
+        <div className="flex items-center gap-2">
+          <input
+            type="color"
+            aria-label="Character colour"
+            value={preview.accent || (resolveMode(preview, true) === 'dark' ? '#C2A36B' : '#7E6224')}
+            onChange={(event) => update({ accent: event.target.value })}
+            className="h-9 w-12 shrink-0 cursor-pointer rounded border border-[var(--line-strong)] bg-transparent"
+          />
+          <input
+            className="field font-mono text-[var(--text-xs)]"
+            value={preview.accent}
+            placeholder="theme default"
+            onChange={(event) => update({ accent: event.target.value })}
+          />
+          {preview.accent && (
+            <button type="button" className="btn quiet" onClick={() => update({ accent: '' })}>
+              Clear
+            </button>
+          )}
+        </div>
+      </Row>
+
       <Row label="Custom CSS">
         <textarea
           className="field font-mono text-[var(--text-xs)]"
           rows={3}
           value={preview.customCss}
-          placeholder=".msg-content { letter-spacing: 0.01em; }"
+          placeholder=".md-em { letter-spacing: 0.01em; }"
           onChange={(event) => update({ customCss: event.target.value })}
         />
       </Row>
@@ -116,7 +149,8 @@ export function ThemeEditor({
       <p className="text-[var(--text-xs)] text-[var(--ink-faint)]">
         Custom CSS is applied last, so it overrides anything above. Every colour and size is a
         CSS variable on <code className="md-code">:root</code> — for example{' '}
-        <code className="md-code">--accent</code>, <code className="md-code">--surface</code>.
+        <code className="md-code">--brass</code>, <code className="md-code">--surface</code>,{' '}
+        <code className="md-code">--em</code>.
       </p>
     </section>
   );

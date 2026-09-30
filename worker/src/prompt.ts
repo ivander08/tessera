@@ -13,18 +13,11 @@ import { dynamicMacrosIn, substituteHead, substituteTail } from '../../src/lib/p
 import { renderStateBlock } from '../../src/lib/prompt/stateBlock';
 import { recall } from './memory/recall';
 import { loadState } from './state/update';
+import { loadBranchRows, walkPath } from './branch';
 import { asNumber } from '../../src/lib/json';
-import type { Role } from '../../src/lib/prompt/types';
 import type { Frame } from './frame';
 
 export { type Frame };
-
-interface HistoryRow {
-  seq: number;
-  role: Role;
-  content: string;
-  content_tokens: number | null;
-}
 
 export function send(
   controller: ReadableStreamDefaultController<Uint8Array>,
@@ -60,46 +53,33 @@ export async function buildPrompt(
   const card = JSON.parse(character.card_json) as CharacterCardJson;
   const personaRow = chat.persona_id ? await getPersona(env, chat.persona_id) : null;
 
-  // Only ACTIVE rows are sent. A swiped-away alternative is still in the table — that is
-  // what makes swiping back free — but it is not part of the conversation the model sees.
+  // The history is the VISIBLE PATH through the conversation tree, not every active row.
   //
-  // Ordered by the group's FIRST seq, not the row's own: an alternative appended to an
-  // early position carries a late seq, so ordering by `seq` would feed the model an
-  // edited opening greeting at the end of the history. The group minimum is where the
-  // position sits in the conversation and never changes.
+  // Those were the same thing while a chat was a flat list. With branching they diverge:
+  // regenerating an early reply leaves the old continuation in the table, inactive and
+  // off the path, so a flat filter would feed the model a scene the reader can no longer
+  // see — and worse, one containing two different versions of the same turn.
+  //
+  // `walkPath` follows the active alternative at each position, so what the model reads
+  // is exactly what is on screen.
   //
   // For `send`, the just-persisted user message is excluded from history and passed in
   // as the tail instead. Inferring it from the last row would turn any orphan user row
   // (from a turn that failed before the provider answered) into two consecutive user
   // turns, which providers reject.
-  const positionExpr = `COALESCE(
-    (SELECT MIN(m2.seq) FROM messages m2
-      WHERE m2.chat_id = messages.chat_id
-        AND COALESCE(m2.swipe_group, m2.id) = COALESCE(messages.swipe_group, messages.id)),
-    messages.seq
-  )`;
+  const path = walkPath(await loadBranchRows(env, chat.id));
 
-  // The cut is by POSITION, not by the row's own seq. An edited message carries a late
-  // seq, so filtering `seq < userSeq` would drop it from history entirely — the model
-  // would lose a message the reader can see.
-  const { results } =
-    options.userSeq === null
-      ? await env.DB.prepare(
-          `SELECT seq, role, content, content_tokens FROM messages
-            WHERE chat_id = ? AND active = 1 ORDER BY ${positionExpr}`,
-        )
-          .bind(chat.id)
-          .all<HistoryRow>()
-      : await env.DB.prepare(
-          `SELECT seq, role, content, content_tokens FROM messages
-            WHERE chat_id = ? AND active = 1
-              AND ${positionExpr} < (
-                SELECT ${positionExpr} FROM messages WHERE chat_id = ? AND seq = ?
-              )
-            ORDER BY ${positionExpr}`,
-        )
-          .bind(chat.id, chat.id, options.userSeq)
-          .all<HistoryRow>();
+  // The cut is by the row's own seq: along a path, seq strictly increases, so everything
+  // written before the new user message is history and the message itself is not.
+  const cutoff = options.userSeq === null ? null : options.userSeq;
+  const results = (cutoff === null ? path : path.filter((row) => row.seq < cutoff)).map(
+    (row) => ({
+      seq: row.seq,
+      role: row.role,
+      content: row.content,
+      content_tokens: row.content_tokens,
+    }),
+  );
 
   // The budget is expressed in real prompt tokens, but `content_tokens` is a local
   // estimate with a per-model bias. Applying the stored factor keeps the budget honest

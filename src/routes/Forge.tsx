@@ -84,7 +84,9 @@ export default function Forge() {
       <AppBar title={<span className="bar-title">Forge</span>} />
 
       <main className="sheet">
-      <div className="tabs" role="tablist">
+      {/* The tab strip is a control, not a heading — without this gap the first field of
+          the selected tool sits flush against it and reads as part of the tabs. */}
+      <div className="tabs" role="tablist" style={{ marginBottom: 18 }}>
         {TABS.map((tab) => (
           <button
             key={tab.id}
@@ -315,8 +317,10 @@ function DraftTool({
 
   return (
     <section className="space-y-4">
-      <label className="block space-y-1">
-        <span className="form-label">One-line premise</span>
+      <label className="block">
+        <span className="form-label">
+          <span>One-line premise</span>
+        </span>
         <textarea
           className="field"
           rows={2}
@@ -565,7 +569,7 @@ function CritiqueTool({ cards }: { cards: ForgeCard[] }) {
       {problem && <p className="note danger">{problem}</p>}
 
       {picked && (
-        <section className="card space-y-2 border-[var(--danger)] p-3">
+        <section className="panel panel-pad space-y-2" style={{ borderColor: 'var(--danger)' }}>
           <h2 className="eyebrow">
             Instructions smuggled into description or personality
             {localBusy ? '' : ` — ${smuggled.length}`}
@@ -613,7 +617,7 @@ function CritiqueTool({ cards }: { cards: ForgeCard[] }) {
           <h2 className="text-[var(--text-sm)] font-semibold uppercase tracking-wide text-[var(--ink-dim)]">
             Critique
           </h2>
-          <p className="card p-3 text-[var(--text-sm)] whitespace-pre-wrap">{result.critique}</p>
+          <p className="panel panel-pad text-[var(--text-sm)] whitespace-pre-wrap">{result.critique}</p>
         </section>
       )}
 

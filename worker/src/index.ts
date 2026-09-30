@@ -33,6 +33,8 @@ import {
   updatePreset,
 } from './presets';
 import { clearState, getState, patchState } from './state/api';
+import { loadBranchRows, walkPath } from './branch';
+import type { BranchRow } from './branch';
 import { substituteHead } from '../../src/lib/prompt/macros';
 import {
   forgeCards,
@@ -396,58 +398,45 @@ async function listMessages(env: Env, chatId: string): Promise<Response> {
   const character = chat.character_id ? await getCharacter(env, chat.character_id) : null;
   const persona = chat.persona_id ? await loadPersonaRow(env, chat.persona_id) : null;
 
-  // Every row, active or not: the reader sees only the active one per position, but the
-  // client needs the alternatives to render swipe arrows and to swipe back without a
-  // round trip per direction.
-  //
-  // Ordering is by the group's FIRST seq, not the row's own. An alternative appended to
-  // an early position gets a late seq — that is what append-only means — so ordering by
-  // `seq` directly would move the opening greeting to the end of the transcript the
-  // first time it was edited. The group's minimum seq is where that position lives in
-  // the conversation, and it never changes.
-  const { results } = await env.DB.prepare(
-    `SELECT seq, id, role, content, content_tokens, prompt_tokens, completion_tokens,
-            cached_tokens, cost_usd, active, swipe_group, created_at,
-            COALESCE(
-              (SELECT MIN(m2.seq) FROM messages m2
-                WHERE m2.chat_id = messages.chat_id
-                  AND COALESCE(m2.swipe_group, m2.id) = COALESCE(messages.swipe_group, messages.id)),
-              messages.seq
-            ) AS position
-       FROM messages WHERE chat_id = ? ORDER BY position, seq`,
-  )
-    .bind(chatId)
-    .all<{
-      seq: number;
-      id: string;
-      role: string;
-      content: string;
-      active: number;
-      swipe_group: string | null;
-      position: number;
-    }>();
+  const rows = await loadBranchRows(env, chatId);
+  const path = walkPath(rows);
 
-  // Group the alternatives so the client does not have to reconstruct the grouping, and
-  // so "3 of 5" is answerable without a second pass over the array.
-  const groups = new Map<string, Array<{ id: string; content: string; seq: number }>>();
-  for (const row of results) {
-    const key = row.swipe_group ?? row.id;
-    const list = groups.get(key) ?? [];
-    list.push({ id: row.id, content: row.content, seq: row.seq });
-    groups.set(key, list);
+  // Alternatives per position, so the client can render swipe arrows and swipe back
+  // without a round trip per direction. Siblings share a parent, which is what makes a
+  // position a position rather than a sequence.
+  const siblings = new Map<string | null, BranchRow[]>();
+  for (const row of rows) {
+    const key = row.parent_id ?? null;
+    const list = siblings.get(key);
+    if (list) list.push(row);
+    else siblings.set(key, [row]);
   }
 
-  const messages = results
-    .filter((row) => row.active === 1)
-    .map((row) => {
-      const key = row.swipe_group ?? row.id;
-      const alternatives = groups.get(key) ?? [];
-      return {
-        ...row,
-        swipes: alternatives.map((entry) => entry.id),
-        swipeIndex: alternatives.findIndex((entry) => entry.id === row.id),
-      };
-    });
+  // Only the active chain is returned as the transcript. An abandoned branch is still in
+  // the table — that is what makes swiping back lossless — but it is not part of the
+  // scene the reader is in.
+  //
+  // `swipes` lists every version of a position, which is every row sharing a parent.
+  // That includes versions whose own continuation is currently hidden: swiping to one
+  // makes it active, and its continuation becomes reachable again with it.
+  const messages = path.map((row) => {
+    const alternatives = siblings.get(row.parent_id ?? null) ?? [];
+    return {
+      seq: row.seq,
+      id: row.id,
+      role: row.role,
+      content: row.content,
+      content_tokens: row.content_tokens,
+      prompt_tokens: row.prompt_tokens,
+      completion_tokens: row.completion_tokens,
+      cached_tokens: row.cached_tokens,
+      cost_usd: row.cost_usd,
+      active: row.active,
+      created_at: row.created_at,
+      swipes: alternatives.map((entry) => entry.id),
+      swipeIndex: alternatives.findIndex((entry) => entry.id === row.id),
+    };
+  });
 
   return json({
     chat,

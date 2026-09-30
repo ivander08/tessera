@@ -59,8 +59,8 @@ export function KnobEditor({
   const enabledCount = KNOBS.filter((knob) => support(knob.key).enabled).length;
 
   return (
-    <div>
-      <p className="form-hint" style={{ marginBottom: 10 }}>
+    <div className="section">
+      <p className="form-hint" style={{ marginBottom: 14 }}>
         {provider && model
           ? `${enabledCount} of ${KNOBS.length} apply to ${model}.`
           : 'Choose a provider and model to see which knobs apply.'}
@@ -92,7 +92,11 @@ export function KnobEditor({
               {/* The reason is rendered, not tooltipped. A disabled control with no
                   visible explanation is the exact complaint this rule exists to answer. */}
               {!enabled && (
-                <span id={`knob-${knob.key}-why`} className="form-hint" style={{ display: 'block' }}>
+                <span
+                  id={`knob-${knob.key}-why`}
+                  className="form-hint"
+                  style={{ display: 'block', marginTop: 5 }}
+                >
                   {reason}
                 </span>
               )}

@@ -44,6 +44,22 @@ export interface Theme {
   messageLayout: 'flat' | 'bubble';
   /** Widest the prose column is allowed to get, in ch. Long lines are hard to read. */
   measure: number;
+  /**
+   * How strongly the reader's voice is tinted, 0–100.
+   *
+   * A colour picker would be the obvious control, but the honest question a reader asks
+   * of narration is "is this too loud", not "which hex" — and a slider cannot produce an
+   * unreadable combination against either ground. 0 is plain ink, 100 is full verdigris.
+   */
+  emphasis: number;
+  /**
+   * Overrides the character's colour, as a hex string, or empty to use the theme's brass.
+   *
+   * Per-theme rather than a global accent because the right brass for a warm dark ground
+   * is wrong on parchment — a single value that looks deliberate in one mode looks muddy
+   * in the other.
+   */
+  accent: string;
   /** User CSS, appended last so it can override anything above it. */
   customCss: string;
 }
@@ -55,6 +71,8 @@ export const DEFAULT_THEME: Theme = {
   avatarSize: 34,
   messageLayout: 'flat',
   measure: 68,
+  emphasis: 82,
+  accent: '',
   customCss: '',
 };
 
@@ -128,11 +146,23 @@ export function resolveMode(theme: Theme, prefersDark: boolean): 'dark' | 'light
  * their old size.
  */
 export function themeTokens(theme: Theme, prefersDark: boolean): Record<string, string> {
-  const palette = resolveMode(theme, prefersDark) === 'dark' ? DARK : LIGHT;
+  const dark = resolveMode(theme, prefersDark) === 'dark';
+  const palette = dark ? DARK : LIGHT;
   const scale = theme.fontScale;
+
+  // The reader's voice, tinted by `emphasis`. Mixing toward the metal rather than
+  // swapping to it keeps every value readable: at 0 it is plain ink, at 100 it is the
+  // theme's verdigris, and nothing in between can land on a colour that fails contrast.
+  const emphasis = clamp(theme.emphasis, 0, 100);
+  const reader = `color-mix(in srgb, ${dark ? 'var(--verdigris)' : 'var(--verdigris)'} ${emphasis}%, var(--ink))`;
+
+  // The character's colour. A user override wins over the palette's own brass, so a
+  // reader who wants a different speaker colour is not forced to write custom CSS for it.
+  const accent = /^#[0-9a-f]{3,8}$/i.test(theme.accent.trim()) ? theme.accent.trim() : palette['--brass'];
 
   return {
     ...palette,
+    '--brass': accent,
     // The serif stack: Georgia first because it is present and genuinely good on both
     // Windows and macOS, and its old-style figures suit prose.
     '--font-prose': "Georgia, 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', serif",
@@ -150,6 +180,10 @@ export function themeTokens(theme: Theme, prefersDark: boolean): Record<string, 
     '--avatar': `${theme.avatarSize}px`,
     '--gap': `${(8 * scale).toFixed(2)}px`,
     '--radius': '7px',
+    // Consumed by `.turn-user .turn-speaker` and `.md-em`, which is what the reader
+    // actually points at when they say the italics are too loud.
+    '--reader': reader,
+    '--em': `color-mix(in srgb, var(--ink) ${emphasis}%, var(--ink-dim))`,
   };
 }
 
@@ -200,6 +234,8 @@ export function parseTheme(raw: string | null | undefined): Theme {
       avatarSize: clamp(Number(parsed.avatarSize ?? 34), 0, 64),
       messageLayout: parsed.messageLayout === 'bubble' ? 'bubble' : 'flat',
       measure: clamp(Number(parsed.measure ?? 68), 45, 100),
+      emphasis: clamp(Number(parsed.emphasis ?? 82), 0, 100),
+      accent: typeof parsed.accent === 'string' ? parsed.accent : '',
       customCss: typeof parsed.customCss === 'string' ? parsed.customCss : '',
     };
   } catch {

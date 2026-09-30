@@ -106,7 +106,7 @@ export function PresetEditor({
   }
 
   return (
-    <section className="card space-y-4 p-3">
+    <section className="panel panel-pad space-y-4">
       <label className="block space-y-1">
         <span className="text-[var(--text-xs)] text-[var(--ink-dim)]">Name</span>
         <input className="field" value={name} onChange={(event) => setName(event.target.value)} />

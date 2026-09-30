@@ -79,7 +79,17 @@ export function AppBar({ lead, title, trailing, scoped, onMenuOpen }: AppBarProp
         </button>
 
         {open && (
-          <div className="menu" role="menu">
+          <div className="menu" role="menu" onClick={(event) => {
+            // The menu is a list of things to do, and every one of them changes what is
+            // on screen — a link navigates, an action opens a sheet or writes a setting.
+            // Leaving it open over the result is the "menu that will not go away" feel.
+            //
+            // The pencil opts out: it opens the preset editor, which is owned by the menu
+            // subtree and would be unmounted by closing it.
+            const target = event.target as HTMLElement;
+            if (target.closest('[data-menu-keep]')) return;
+            if (target.closest('button, a')) setOpen(false);
+          }}>
             {scoped && (
               <>
                 {scoped}

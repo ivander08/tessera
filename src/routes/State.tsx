@@ -59,7 +59,7 @@ const ALL_FIELDS: Field[] = GROUPS.flatMap((group) => group.fields);
  * Edits are sent as a patch, so clearing a field and leaving it alone are distinct
  * operations rather than the same one.
  */
-export default function State() {
+export default function State({ embedded = false }: { embedded?: boolean } = {}) {
   const { id = '' } = useParams();
   const { data, error, loading, reload } = useAsync(
     () => apiJson<StatePayload>(`/api/state/${encodeURIComponent(id)}`),
@@ -135,34 +135,38 @@ export default function State() {
     }
   }
 
-  return (
+  // Embedded in the chat's side panel, the screen keeps its content and loses its
+  // chrome: the panel already has a title bar and a close button, and a second AppBar
+  // inside a dialog would be a frame inside a frame.
+  const body = (
     <>
-      <AppBar
-        lead={<BackLink to={`/chat/${id}`} label="Back to chat" />}
-        title={<span className="bar-title">World state</span>}
-      />
+      {loading && <p className="sheet-sub">Loading…</p>}
+      {error && <div className="note danger">{error}</div>}
 
-      <main className="sheet">
-        {loading && <p className="sheet-sub">Loading…</p>}
-        {error && <div className="note danger">{error}</div>}
+      {data && (
+        <>
+          {!embedded && (
+            <div className="sheet-head">
+              <div>
+                <h1 className="title">World state</h1>
+                <p className="sheet-sub">
+                  This is what the narrator believes next turn. A wrong value here is not
+                  cosmetic — it shapes the writing until it is corrected.
+                </p>
+              </div>
+            </div>
+          )}
 
-        {data && (
-          <>
-            <p className="sheet-sub" style={{ marginTop: 0 }}>
-              This is what the narrator believes next turn. A wrong value here is not cosmetic —
-              it shapes the writing until it is corrected.
-            </p>
-
-            <p className="data" style={{ marginTop: 10 }}>
-              {data.updatedAt
-                ? `last written ${new Date(data.updatedAt).toLocaleString()}`
-                : 'never written — the engine runs after a completed turn'}
+          <p className="data" style={{ margin: 0 }}>
+            {data.updatedAt
+              ? `last written ${new Date(data.updatedAt).toLocaleString()}`
+              : 'never written — the engine runs after a completed turn'}
               {' · '}
               {data.tokens} tokens in the prompt tail
             </p>
 
             {Object.keys(state).length === 0 && (
-              <div className="note" style={{ marginTop: 16 }}>
+              <div className="note" style={{ marginTop: 20 }}>
                 Nothing recorded yet. The engine proposes changes after each completed turn, so an
                 empty document on a fresh chat is correct. If it stays empty after several turns,
                 the cheap model is not configured or is failing.
@@ -213,7 +217,7 @@ export default function State() {
                     </div>
                   ))}
                 </div>
-                <p className="form-hint" style={{ marginTop: 6 }}>
+                <p className="form-hint" style={{ marginTop: 8 }}>
                   Maintained per character by the engine. Edit them by describing the change in
                   the chat rather than here.
                 </p>
@@ -230,24 +234,41 @@ export default function State() {
                   {data.rendered || '(nothing — the block is omitted entirely when empty)'}
                 </pre>
               </div>
-              <p className="form-hint" style={{ marginTop: 6 }}>
+              <p className="form-hint" style={{ marginTop: 8 }}>
                 Rendered into the prompt tail, after the cached prefix, so changing it never costs
                 a cache miss.
               </p>
             </section>
 
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 24 }}>
-              <button type="button" className="btn primary" onClick={() => void save()} disabled={busy}>
-                Save changes
-              </button>
-              <button type="button" className="btn danger" onClick={() => void clearAll()} disabled={busy}>
-                Clear everything
-              </button>
-              {status && <span className="form-hint">{status}</span>}
+            <div style={{ marginTop: 30 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <button type="button" className="btn primary" onClick={() => void save()} disabled={busy}>
+                  Save changes
+                </button>
+                <button type="button" className="btn danger" onClick={() => void clearAll()} disabled={busy}>
+                  Clear everything
+                </button>
+              </div>
+              {status && (
+                <p className="form-hint" style={{ marginTop: 10 }}>
+                  {status}
+                </p>
+              )}
             </div>
           </>
         )}
-      </main>
+    </>
+  );
+
+  if (embedded) return body;
+
+  return (
+    <>
+      <AppBar
+        lead={<BackLink to={`/chat/${id}`} label="Back to chat" />}
+        title={<span className="bar-title">World state</span>}
+      />
+      <main className="sheet">{body}</main>
     </>
   );
 }

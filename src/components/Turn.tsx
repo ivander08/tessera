@@ -30,6 +30,10 @@ export interface TurnProps {
   avatar?: string | null;
   layout?: 'flat' | 'bubble';
   streaming?: boolean;
+  /** Request sent, no text back yet: the speaker is composing. */
+  thinking?: boolean;
+  /** Set a drop cap on the first paragraph. Only the opening turn of a scene gets one. */
+  dropCap?: boolean;
   busy?: boolean;
   editing?: boolean;
   onEditStart?: () => void;
@@ -45,6 +49,8 @@ export function Turn({
   avatar,
   layout = 'flat',
   streaming = false,
+  thinking = false,
+  dropCap = false,
   editing = false,
   onEditStart,
   onEditCancel,
@@ -54,11 +60,23 @@ export function Turn({
 }: TurnProps) {
   const isUser = message.role === 'user';
 
+  // A drop cap only makes sense on prose that opens with a letter. Cards routinely open
+  // with `*action beats*`, em-dashes or quotes, and a floated punctuation mark is just a
+  // stray glyph in the margin.
+  //
+  // The leading markdown is stripped before testing, because `::first-letter` matches the
+  // first letter of the RENDERED line — `*Quill looks up.*` renders as "Quill looks up."
+  // inside an `<em>`, so the cap lands on the Q. Testing the raw source would refuse
+  // every card that opens with an action beat, which is most of them.
+  const opening = message.content.trimStart().replace(/^[*_`~\-—–"'(<\s]+/, '');
+  const cap = dropCap && /^[\p{L}\p{N}]/u.test(opening) ? ' drop-cap' : '';
+
   return (
     <article
       className={`turn ${isUser ? 'turn-user' : 'turn-assistant'} ${layout === 'bubble' ? 'turn-bubbled' : ''}`}
       data-message-id={message.id}
       data-streaming={streaming || undefined}
+      data-thinking={thinking || undefined}
     >
       <Avatar src={avatar} name={name} className="turn-avatar" />
 
@@ -74,9 +92,20 @@ export function Turn({
             onCancel={() => onEditCancel?.()}
             onSave={(content) => onEditSave?.(content)}
           />
+        ) : thinking ? (
+          // Before the first token there is nothing to read, so the wait itself is drawn.
+          // The ellipsis is styled in the speaker's own colour, which is what ties it to
+          // the character rather than to a generic spinner.
+          <div className="prose">
+            <span className="thinking" aria-label={`${name} is writing`}>
+              <i />
+              <i />
+              <i />
+            </span>
+          </div>
         ) : (
           <div
-            className="prose"
+            className={`prose${cap}`}
             onDoubleClick={onEditStart}
             onClick={(event) => {
               // A phone has no double-click, so a single tap starts editing there.
@@ -161,24 +190,20 @@ function TurnEditor({
 }
 
 /**
- * Per-turn accounting, shown only when the provider reported it.
+ * Per-turn accounting.
  *
- * Quiet by design: a transcript that leads with numbers reads like a billing screen. The
- * cache figure is the one worth surfacing, because it is the whole point of the app.
+ * The cache figure lives in the chat menu rather than under every reply: a percentage
+ * pinned to the end of each turn reads as a billing screen, and it is not something you
+ * act on mid-scene. What stays here is the cost, and only when the provider actually
+ * reported one — which is also the only case where it is information rather than noise.
  */
 function TurnMeta({ message }: { message: TurnView }) {
-  const { prompt_tokens: prompt, cached_tokens: cached, cost_usd: cost } = message;
-  if (prompt == null || cached == null) return null;
-
-  const percent = prompt > 0 ? Math.round((cached / prompt) * 100) : 0;
-  const tone = percent >= 80 ? 'cache-good' : percent >= 40 ? 'cache-warm' : undefined;
+  const { cost_usd: cost } = message;
+  if (cost == null) return null;
 
   return (
     <div className="turn-meta">
-      <span className={tone} title={`${cached} of ${prompt} prompt tokens served from cache`}>
-        {percent}% cached
-      </span>
-      {cost != null && <span>${cost.toFixed(4)}</span>}
+      <span>${cost.toFixed(4)}</span>
     </div>
   );
 }

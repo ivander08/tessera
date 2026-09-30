@@ -41,7 +41,7 @@ interface MemoryPayload {
   facts: FactEntry[];
 }
 
-export default function Memory() {
+export default function Memory({ embedded = false }: { embedded?: boolean } = {}) {
   const { id = '' } = useParams();
   const { data, error, loading, reload } = useAsync(
     () => apiJson<MemoryPayload>(`/api/chats/${encodeURIComponent(id)}/memory`),
@@ -64,26 +64,23 @@ export default function Memory() {
   const scenes = data?.summaries.filter((entry) => entry.tier === 'scene') ?? [];
   const arcs = data?.summaries.filter((entry) => entry.tier === 'arc') ?? [];
 
-  return (
+  const body = (
     <>
-      <AppBar
-        lead={<BackLink to={`/chat/${encodeURIComponent(id)}`} label="Back to chat" />}
-        title={<span className="bar-title">Memory</span>}
-      />
-
-      <div className="sheet">
+      {!embedded && (
         <div className="sheet-head">
           <div>
             <h1 className="title">Memory</h1>
             <p className="sheet-sub">
-              What this chat carries forward: the facts it always knows, and summaries of the
-              scenes behind it. Correcting an entry here changes only the memory — the
-              transcript it came from is never rewritten.
+              What the narrator remembers from earlier in this chat, and the facts it has
+              committed to. Scenes and arcs are summaries; facts are single statements that
+              are still true. This is what gets recalled into the prompt tail when it is
+              relevant — it never enters the cached prefix.
             </p>
           </div>
         </div>
+      )}
 
-        {loading && <p className="sheet-sub">Loading…</p>}
+      {loading && <p className="sheet-sub">Loading…</p>}
         {error && <div className="note danger">{error}</div>}
         {actionError && <div className="note danger">{actionError}</div>}
 
@@ -93,7 +90,6 @@ export default function Memory() {
               <span className="eyebrow">
                 Facts <span className="data">{data.facts.length}</span>
               </span>
-
               <NewFact chatId={id} onCreated={() => reload()} onError={setActionError} />
 
               {data.facts.length === 0 ? (
@@ -196,20 +192,31 @@ export default function Memory() {
             </section>
           </>
         )}
-      </div>
+    </>
+  );
+
+  if (embedded) return body;
+
+  return (
+    <>
+      <AppBar
+        lead={<BackLink to={`/chat/${encodeURIComponent(id)}`} label="Back to chat" />}
+        title={<span className="bar-title">Memory</span>}
+      />
+      <div className="sheet">{body}</div>
     </>
   );
 }
 
 /** The actions a row's text sits under. Wraps rather than squeezing the text column. */
 function RowActions({ children }: { children: React.ReactNode }) {
-  return <div className="flex flex-wrap gap-2 mt-2">{children}</div>;
+  return <div className="flex flex-wrap gap-2" style={{ marginTop: 10 }}>{children}</div>;
 }
 
 /** One line of provenance: who a fact is about, and what happened to it. */
 function Provenance({ children }: { children: React.ReactNode }) {
   return (
-    <p className="data" style={{ margin: '5px 0 0' }}>
+    <p className="data" style={{ margin: '6px 0 0' }}>
       {children}
     </p>
   );
@@ -237,13 +244,13 @@ function FactRow({
 
   return (
     <li
-      className={`p-3 ${bordered ? 'border-t border-line' : ''}`}
+      className={`p-4 ${bordered ? 'border-t border-line' : ''}`}
       // Superseded facts stay in the list — the history is the point — but they are
       // dimmed so the ones still in force read first.
       style={superseded ? { opacity: 0.55 } : undefined}
     >
       {editing ? (
-        <div className="space-y-2">
+        <div className="space-y-3">
           <textarea
             className="field"
             rows={3}
@@ -277,7 +284,7 @@ function FactRow({
       ) : (
         <>
           {(pinned || superseded) && (
-            <div className="flex flex-wrap items-center gap-2 mb-2">
+            <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: 8 }}>
               {pinned && (
                 <span className="tag brass" title="Recalled into every prompt">
                   pinned
@@ -369,9 +376,9 @@ function SummaryRow({
   const [draft, setDraft] = useState(entry.content);
 
   return (
-    <li className={`p-3 ${bordered ? 'border-t border-line' : ''}`}>
+    <li className={`p-4 ${bordered ? 'border-t border-line' : ''}`}>
       {editing ? (
-        <div className="space-y-2">
+        <div className="space-y-3">
           <textarea
             className="field"
             rows={6}
@@ -463,7 +470,11 @@ function NewFact({
   }
 
   return (
-    <form onSubmit={submit} className="flex gap-2" style={{ marginBottom: 10 }}>
+    <form
+      onSubmit={submit}
+      className="flex gap-2"
+      style={{ marginBottom: 14, alignItems: 'center' }}
+    >
       <input
         value={draft}
         onChange={(event) => setDraft(event.target.value)}

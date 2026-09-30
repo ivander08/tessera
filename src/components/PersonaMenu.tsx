@@ -9,6 +9,10 @@ import { MenuAction, MenuLabel } from './AppBar';
  * A persona is what `{{user}}` resolves to. With none set, that placeholder is left
  * visible in card text rather than guessed at, so the choice belongs where the writing
  * happens — not buried in a settings page you would have to leave the scene to reach.
+ *
+ * The list scrolls rather than growing without bound. A menu that renders a hundred
+ * personas runs off the bottom of the screen and puts "No persona" out of reach, which
+ * is the failure the reader reported.
  */
 interface PersonaRow {
   id: string;
@@ -60,14 +64,16 @@ export function PersonaMenu({
         />
       )}
 
-      {rows.map((persona) => (
-        <MenuAction
-          key={persona.id}
-          label={persona.name}
-          hint={active === persona.id ? '✓' : undefined}
-          onClick={() => void choose(persona.id)}
-        />
-      ))}
+      <div className="menu-scroll">
+        {rows.map((persona) => (
+          <MenuAction
+            key={persona.id}
+            label={persona.name}
+            hint={active === persona.id ? '✓' : undefined}
+            onClick={() => void choose(persona.id)}
+          />
+        ))}
+      </div>
 
       {active && <MenuAction label="No persona" onClick={() => void choose(null)} />}
     </>

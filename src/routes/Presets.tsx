@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AppBar } from '../components/AppBar';
 import { apiJson } from '../lib/api';
 import { messageOf, useAsync } from '../lib/hooks';
@@ -25,7 +25,8 @@ interface ImportResult {
  * A preset is a file the user got from somewhere else — SillyTavern's preset manager, a
  * community chat-completion preset, the Freaky Frankenstein archive — so this screen has
  * two jobs beyond listing: get the file in without a round trip for an obvious mistake,
- * and report what the import refused to carry.
+ * and report what the import refused to carry. A preset can also be started blank — the
+ * file is the usual way in, not the only one.
  *
  * That second job is the honest-knobs rule and it is why the import result is shown
  * rather than dismissed. A preset that declares `tfs_z` has a knob the provider will
@@ -39,6 +40,7 @@ export default function Presets() {
   );
 
   const [importing, setImporting] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [ff5, setFf5] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -46,6 +48,13 @@ export default function Presets() {
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
+
+  // The editor sits below the import zone, so on a phone it opens off-screen. Without
+  // this the user taps Edit or New preset and the screen appears not to have changed.
+  useEffect(() => {
+    if (editing) editorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [editing]);
 
   async function importFile(file: File) {
     setStatus(null);
@@ -101,6 +110,32 @@ export default function Presets() {
     }
   }
 
+  /**
+   * A preset with nothing in it, created through the import endpoint.
+   *
+   * The importer is the only door in, so the body is the smallest file it will accept:
+   * an empty object is rejected as belonging to neither namespace, and an empty `prompts`
+   * list is what makes this a chat-completion preset with no knobs, no prompts and no
+   * regexes. The editor then supplies the defaults on the first save.
+   */
+  async function createBlank() {
+    setStatus(null);
+    setResult(null);
+    setCreating(true);
+    try {
+      const created = await apiJson<ImportResult>('/api/presets', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'New preset', json: { prompts: [] } }),
+      });
+      reload();
+      await openEditor(created.id);
+    } catch (cause) {
+      setStatus(messageOf(cause));
+    } finally {
+      setCreating(false);
+    }
+  }
+
   async function duplicate(id: string) {
     setStatus(null);
     setBusy(true);
@@ -148,7 +183,7 @@ export default function Presets() {
         available in every chat.
       </p>
 
-      <section className="space-y-2">
+      <section className="space-y-3">
         <div
           onDragOver={(event) => {
             event.preventDefault();
@@ -161,21 +196,34 @@ export default function Presets() {
             const file = event.dataTransfer.files[0];
             if (file) void importFile(file);
           }}
-          className={`empty flex flex-col items-center gap-2 ${
+          className={`empty flex flex-col items-center gap-3 ${
             dragging ? 'border-[var(--brass)]' : ''
           }`}
         >
-          <p className="sheet-sub">
-            Drop a SillyTavern preset here, or
+          <p className="sheet-sub" style={{ marginTop: 0 }}>
+            Drop a SillyTavern preset here
           </p>
-          <button
-            type="button"
-            className="btn primary min-h-10"
-            onClick={() => fileInput.current?.click()}
-            disabled={importing}
-          >
-            {importing ? 'Importing…' : 'Choose a file'}
-          </button>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <button
+              type="button"
+              className="btn min-h-10"
+              onClick={() => fileInput.current?.click()}
+              disabled={importing || creating}
+            >
+              {importing ? 'Importing…' : 'Choose a file'}
+            </button>
+            {/* A preset can be written from scratch, so a file is the common way in
+                rather than the only one. Import is the one door into the table, so a
+                blank preset goes through it like any other. */}
+            <button
+              type="button"
+              className="btn primary min-h-10"
+              onClick={() => void createBlank()}
+              disabled={creating || importing}
+            >
+              {creating ? 'Creating…' : 'New preset'}
+            </button>
+          </div>
           <input
             ref={fileInput}
             type="file"
@@ -190,21 +238,26 @@ export default function Presets() {
           />
         </div>
 
-        <label className="flex min-h-10 items-center gap-3">
-          <input
-            type="checkbox"
-            checked={ff5}
-            onChange={(event) => setFf5(event.target.checked)}
-            className="h-5 w-5 shrink-0 accent-[var(--brass)]"
-          />
-          <span className="text-[var(--text-sm)]">
-            This is a Freaky Frankenstein archive
-          </span>
-        </label>
-        <p className="text-[var(--text-xs)] text-[var(--ink-faint)]">
-          An FF5 file is byte-for-byte a chat-completion preset, so nothing in it says so.
-          Ticking this keeps its prompts and its regex pack together.
-        </p>
+        {/* The hint is a separate line rather than running on from the label: inline, the
+            two read as one sentence and the explanation looks like the checkbox's name. */}
+        <div>
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={ff5}
+              onChange={(event) => setFf5(event.target.checked)}
+              className="h-5 w-5 shrink-0 accent-[var(--brass)]"
+            />
+            <span className="text-[var(--text-sm)] text-[var(--ink)]">
+              This file is an FF5 bundle
+            </span>
+          </label>
+          {/* Indented to the label text, so the two read as one control. */}
+          <p className="form-hint" style={{ margin: '7px 0 0 32px' }}>
+            FF5 files are ordinary chat-completion presets with a regex pack attached. Tick
+            this to keep the prompts and the regexes together.
+          </p>
+        </div>
       </section>
 
       {status && <div className="note danger">{status}</div>}
@@ -212,18 +265,20 @@ export default function Presets() {
       {result && <ImportReport result={result} onDismiss={() => setResult(null)} />}
 
       {editing && (
-        <PresetEditor
-          // Keyed by id so opening a second preset remounts rather than reusing the
-          // first one's draft state — the fields below hold local copies of the values.
-          key={editing.id}
-          preset={editing}
-          onSaved={() => {
-            setEditing(null);
-            setStatus('Saved. Chats using this preset pick it up next turn.');
-            reload();
-          }}
-          onCancel={() => setEditing(null)}
-        />
+        <div ref={editorRef} style={{ scrollMarginTop: 14 }}>
+          <PresetEditor
+            // Keyed by id so opening a second preset remounts rather than reusing the
+            // first one's draft state — the fields below hold local copies of the values.
+            key={editing.id}
+            preset={editing}
+            onSaved={() => {
+              setEditing(null);
+              setStatus('Saved. Chats using this preset pick it up next turn.');
+              reload();
+            }}
+            onCancel={() => setEditing(null)}
+          />
+        </div>
       )}
 
       {loading && <p className="sheet-sub">Loading…</p>}
@@ -231,18 +286,20 @@ export default function Presets() {
 
       {data && data.length === 0 && (
         <p className="sheet-sub">
-          Nothing imported yet. A preset overrides the sampler, prompt and stop-string
-          settings for the chats that use it.
+          No presets yet. A preset overrides the sampler, prompt and stop-string settings
+          for the chats that use it.
         </p>
       )}
 
-      <div>
+      <div className="section">
         {data?.map((preset) => (
-          <div key={preset.id} className="panel panel-pad" style={{ marginBottom: 10 }}>
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
-              <div className="min-w-0">
+          <div key={preset.id} className="panel panel-pad" style={{ marginBottom: 12 }}>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
+              <div className="min-w-0 flex-1">
                 <p className="row-title">{preset.name}</p>
-                <p className="row-sub">
+                {/* Wrapped rather than ellipsised: the line carries five facts and the
+                    last one is the one that tells you what is inside the preset. */}
+                <p className="row-sub" style={{ marginTop: 7, whiteSpace: 'normal' }}>
                   <span className={`tag ${preset.kind === 'textgen' ? 'brass' : preset.kind === 'chat' ? 'verdigris' : ''}`}>
                     {preset.kind}
                   </span>{' '}
@@ -251,7 +308,7 @@ export default function Presets() {
                   {preset.has_prompts === 1 && ' · prompts'}
                   {preset.has_config === 1 && ' · config'}
                 </p>
-                <p className="form-hint">
+                <p className="form-hint" style={{ marginTop: 7 }}>
                   imported {new Date(preset.created_at).toLocaleDateString()}
                   {preset.updated_at > preset.created_at &&
                     ` · edited ${new Date(preset.updated_at).toLocaleDateString()}`}
@@ -259,9 +316,10 @@ export default function Presets() {
               </div>
               {/* Below the metadata on a phone, beside it on a wider screen: three
                   buttons plus the name do not fit across 390px, and squeezing them
-                  truncates the one thing the row exists to show. */}
-              <div className="row-actions">
-                <button type="button" className="btn quiet" onClick={() => void openEditor(preset.id)}>
+                  truncates the one thing the row exists to show. The rule keeps the
+                  stacked buttons from reading as a fourth line of metadata. */}
+              <div className="row-actions border-t border-[var(--line)] pt-3 sm:border-t-0 sm:pt-0" style={{ gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                <button type="button" className="btn" onClick={() => void openEditor(preset.id)}>
                   Edit
                 </button>
                 <button
@@ -301,7 +359,7 @@ function ImportReport({ result, onDismiss }: { result: ImportResult; onDismiss: 
   const knobs = Object.keys(result.knobs).length;
 
   return (
-    <section className="card space-y-2 p-3">
+    <section className="panel panel-pad space-y-2">
       <div className="flex items-start justify-between gap-3">
         <p className="text-[var(--text-sm)]">
           Imported <span className="font-medium">{result.name}</span> as {result.kind} — {knobs}{' '}

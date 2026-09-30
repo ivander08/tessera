@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { CardParseError, parseCardFile } from '../lib/cards/import';
 import type { ParsedCard } from '../lib/cards/types';
 import { loadTokenCounter } from '../lib/tokenizerClient';
@@ -44,8 +44,48 @@ const GROUPS: Array<{ title: string; hint: string; fields: Array<keyof ParsedCar
   { title: 'Meta', hint: 'never sent', fields: ['creatorNotes'] },
 ];
 
+/**
+ * A card written from nothing rather than parsed from a file.
+ *
+ * Every field is present and empty, which is what the editor and `POST /api/characters`
+ * both expect: `createCharacter` reads the whole mapped card, and a field left off would
+ * be stored as `undefined` and read back as a missing key. `sourceFormat` is `ccv2`
+ * because that is what the app writes when it exports — a card authored here is not a
+ * conversion of anything.
+ *
+ * `raw` and `avatarHint` are null rather than an empty object or string: they mean "this
+ * card had a source file and it is this", and this one did not.
+ */
+function blankCard(): ParsedCard {
+  return {
+    name: '',
+    description: '',
+    personality: '',
+    scenario: '',
+    firstMes: '',
+    mesExample: '',
+    systemPrompt: '',
+    postHistoryInstructions: '',
+    alternateGreetings: [],
+    creatorNotes: '',
+    tags: [],
+    characterBook: null,
+    sourceFormat: 'ccv2',
+    avatarHint: null,
+    raw: null,
+  };
+}
+
 export default function CharacterNew() {
-  const [card, setCard] = useState<ParsedCard | null>(null);
+  const [params, setParams] = useSearchParams();
+
+  // `?blank=1` opens the screen as a blank card to write rather than a file to import.
+  // Whether the card was authored here is a fact about the card itself — an imported one
+  // always carries the parsed source in `raw`, a blank one has nothing to carry — so the
+  // mode is derived from that rather than tracked in a second state that could drift.
+  const [card, setCard] = useState<ParsedCard | null>(() =>
+    params.get('blank') === '1' ? blankCard() : null,
+  );
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -65,7 +105,17 @@ export default function CharacterNew() {
     };
   }, []);
 
+  /**
+   * Keeps the URL honest about which mode the screen is in. Without it, picking a file
+   * from blank mode would leave `?blank=1` behind, and a reload would throw the parsed
+   * card away and open an empty one.
+   */
+  function clearBlankParam() {
+    if (params.has('blank')) setParams({}, { replace: true });
+  }
+
   async function load(file: File) {
+    clearBlankParam();
     setError(null);
     setAvatar(null);
     try {
@@ -80,6 +130,18 @@ export default function CharacterNew() {
       setCard(null);
       setError(cause instanceof CardParseError ? cause.message : messageOf(cause));
     }
+  }
+
+  /**
+   * Drop the card and go back to the file importer. The query is cleared with it so a
+   * reload lands where the screen actually is rather than resurrecting the blank card
+   * that was just abandoned.
+   */
+  function startFromFile() {
+    setCard(null);
+    setAvatar(null);
+    setError(null);
+    clearBlankParam();
   }
 
   async function save() {
@@ -202,33 +264,45 @@ export default function CharacterNew() {
     setCard((current) => (current ? { ...current, [field]: text } : current));
   }
 
+  // An imported card always carries the object it was parsed from; a card written here
+  // has no source to carry, so `raw` is null. That is the whole difference between the
+  // two modes, and reading it off the card means there is no second flag to fall out of
+  // step with what is on screen.
+  const authored = card.raw === null;
+
   return (
     <>
       <AppBar
         lead={<BackLink to="/characters" label="Characters" />}
-        title={<span className="bar-title">{value('name') || 'Import a card'}</span>}
+        title={
+          <span className="bar-title">
+            {value('name') || (authored ? 'New character' : 'Import a card')}
+          </span>
+        }
       />
 
       <main className="sheet">
-        <div className="sheet-head">
+        <div className="sheet-head" style={{ flexWrap: 'wrap', rowGap: 12 }}>
           <div>
-            <h1 className="title">{value('name') || 'Untitled card'}</h1>
+            <h1 className="title">
+              {value('name') || (authored ? 'New character' : 'Untitled card')}
+            </h1>
             <p className="sheet-sub">
-              source format <span className="data">{card.sourceFormat}</span> · avatar{' '}
-              {avatar ? 'extracted from the card' : 'none'}
+              {authored ? (
+                <>
+                  written here · source format <span className="data">{card.sourceFormat}</span>
+                </>
+              ) : (
+                <>
+                  source format <span className="data">{card.sourceFormat}</span> · avatar{' '}
+                  {avatar ? 'extracted from the card' : 'none'}
+                </>
+              )}
             </p>
           </div>
-          <div className="row-actions">
-            <button
-              type="button"
-              className="btn quiet"
-              onClick={() => {
-                setCard(null);
-                setAvatar(null);
-                setError(null);
-              }}
-            >
-              Choose another file
+          <div className="row-actions" style={{ gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <button type="button" className="btn quiet" onClick={startFromFile}>
+              {authored ? 'Start from a file instead' : 'Choose another file'}
             </button>
             <button
               type="button"
@@ -295,7 +369,11 @@ export default function CharacterNew() {
                     </span>
                   </span>
                   <span className="form-hint" style={{ display: 'block', marginBottom: 5 }}>
-                    {card.tags.length > 0 ? card.tags.join(', ') : 'none on this card'}
+                    {card.tags.length > 0
+                      ? card.tags.join(', ')
+                      : authored
+                        ? 'none yet'
+                        : 'none on this card'}
                   </span>
                 </div>
                 <div className="form-row">
@@ -304,8 +382,9 @@ export default function CharacterNew() {
                     <span className="data">{card.alternateGreetings.length}</span>
                   </span>
                   <span className="form-hint" style={{ display: 'block' }}>
-                    each is a separate opening; they carry over as they arrived, and the edit
-                    screen is where they are changed
+                    {authored
+                      ? 'each is a separate opening; the edit screen is where they are added'
+                      : 'each is a separate opening; they carry over as they arrived, and the edit screen is where they are changed'}
                   </span>
                 </div>
                 <div className="form-row">
@@ -316,7 +395,9 @@ export default function CharacterNew() {
                   <span className="form-hint" style={{ display: 'block' }}>
                     {card.characterBook
                       ? 'stored with the card; always-on entries cost every turn'
-                      : 'this card carries no world info'}
+                      : authored
+                        ? 'no world info — the edit screen is where it is added'
+                        : 'this card carries no world info'}
                   </span>
                 </div>
               </>

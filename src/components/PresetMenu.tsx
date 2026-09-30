@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { apiJson } from '../lib/api';
 import { useAsync } from '../lib/hooks';
 import { MenuAction, MenuLabel, MenuSep } from './AppBar';
+import { PresetEditor, type PresetDetail } from './PresetEditor';
+import { Modal } from './Modal';
 
 /**
  * Switches the preset for the current chat, from the chat's own menu.
@@ -13,6 +15,10 @@ import { MenuAction, MenuLabel, MenuSep } from './AppBar';
  *
  * The list is profile-wide: every preset is available in every chat, and the choice is
  * stored per chat so two scenes can run different settings.
+ *
+ * Editing happens in a modal over the chat rather than by navigating away. Adjusting the
+ * preset is something you do mid-scene, and losing your place in the transcript to do it
+ * is the same mistake as putting the picker in Settings.
  */
 interface PresetRow {
   id: string;
@@ -25,6 +31,8 @@ export function PresetMenu({ chatId, onChanged }: { chatId: string; onChanged?: 
   const presets = useAsync(() => apiJson<PresetRow[]>('/api/presets'), []);
   const [current, setCurrent] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [editing, setEditing] = useState<PresetDetail | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
 
   // Fetched lazily, on first render of the menu — a chat turn should not wait on it.
   if (!loaded) {
@@ -48,6 +56,15 @@ export function PresetMenu({ chatId, onChanged }: { chatId: string; onChanged?: 
     }
   }
 
+  async function edit(presetId: string) {
+    setProblem(null);
+    try {
+      setEditing(await apiJson<PresetDetail>(`/api/presets/${encodeURIComponent(presetId)}`));
+    } catch (cause) {
+      setProblem(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
   const rows = presets.data ?? [];
 
   return (
@@ -62,20 +79,57 @@ export function PresetMenu({ chatId, onChanged }: { chatId: string; onChanged?: 
         </div>
       )}
 
-      {rows.map((preset) => (
-        <MenuAction
-          key={preset.id}
-          label={preset.name}
-          hint={current === preset.id ? '✓' : preset.knob_count ? `${preset.knob_count}` : undefined}
-          onClick={() => void choose(preset.id)}
-        />
-      ))}
+      {/* Scrolls, so a long list cannot push the rest of the menu off the screen. */}
+      <div className="menu-scroll">
+        {rows.map((preset) => (
+          <div key={preset.id} className="menu-row">
+            <MenuAction
+              label={preset.name}
+              hint={current === preset.id ? '✓' : preset.knob_count ? `${preset.knob_count}` : undefined}
+              onClick={() => void choose(preset.id)}
+            />
+            <button
+              type="button"
+              className="menu-edit"
+              data-menu-keep
+              title={`Edit ${preset.name}`}
+              aria-label={`Edit ${preset.name}`}
+              onClick={() => void edit(preset.id)}
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z" />
+              </svg>
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {problem && <div className="menu-item" style={{ color: 'var(--danger)', whiteSpace: 'normal' }}>{problem}</div>}
 
       {current && (
         <>
           <MenuSep />
           <MenuAction label="Use global settings" onClick={() => void choose(null)} />
         </>
+      )}
+
+      {editing && (
+        <Modal
+          title={editing.name}
+          subtitle="Changes apply from the next turn. Chats using this preset pick them up then."
+          onClose={() => setEditing(null)}
+        >
+          <PresetEditor
+            key={editing.id}
+            preset={editing}
+            onSaved={() => {
+              setEditing(null);
+              presets.reload();
+              onChanged?.();
+            }}
+            onCancel={() => setEditing(null)}
+          />
+        </Modal>
       )}
     </>
   );

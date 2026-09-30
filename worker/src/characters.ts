@@ -273,14 +273,53 @@ export async function getAvatar(env: Env, characterId: string): Promise<Response
     'SELECT content_type, bytes FROM character_assets WHERE character_id = ?',
   )
     .bind(characterId)
-    .first<{ content_type: string; bytes: ArrayBuffer }>();
+    .first<{ content_type: string; bytes: unknown }>();
+  // A row with no bytes is a row that cannot be served: answering 200 with an empty body
+  // hands the browser a broken image and hides the fault behind a success code.
   if (!row) return notFound('no avatar');
-  return new Response(row.bytes, {
+  const bytes = asBytes(row.bytes);
+  if (!bytes || bytes.byteLength === 0) return notFound('no avatar');
+
+  return new Response(bytes, {
     headers: {
       'content-type': row.content_type,
+      'content-length': String(bytes.byteLength),
+      // The URL carries a `?v=` stamp that changes whenever the image does, so this can
+      // be immutable without ever serving a replaced avatar from a stale cache.
       'cache-control': 'public, max-age=31536000, immutable',
     },
   });
+}
+
+/**
+ * Coerces a BLOB column into bytes the `Response` constructor will actually accept.
+ *
+ * D1 does not hand back an `ArrayBuffer` for a BLOB. Depending on the path the value
+ * took it arrives as a plain array of byte numbers, and `new Response(numberArray)` is
+ * not a `BodyInit` — it serializes to nothing at all, producing a `200` with an empty
+ * body and an image that never renders. Typing the column as `ArrayBuffer` does not
+ * make it one; only reading it defensively does.
+ */
+function asBytes(value: unknown): Uint8Array<ArrayBuffer> | null {
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) {
+    // Copied rather than viewed: a view onto a SharedArrayBuffer or a pooled buffer is
+    // not a `BodyInit`, and the copy is one allocation against a request that already
+    // moved these bytes over the wire.
+    const view = value;
+    const out = new Uint8Array(view.byteLength);
+    out.set(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+    return out;
+  }
+  if (Array.isArray(value)) {
+    const out = new Uint8Array(value.length);
+    for (let i = 0; i < value.length; i++) {
+      const byte = value[i];
+      out[i] = typeof byte === 'number' ? byte & 0xff : 0;
+    }
+    return out;
+  }
+  return null;
 }
 
 /** Removes the stored bytes and the path that pointed at them. */
@@ -412,7 +451,12 @@ function readCard(value: unknown, base: CharacterCardJson | null = null): Charac
 
 function base64ToBytes(base64: string): Uint8Array | null {
   try {
+    // `atob` ignores ASCII whitespace, so `atob(' ')` is `''` rather than an error.
+    // Returning that empty array as "valid" is how a zero-byte asset row gets written:
+    // the character ends up pointing at an avatar whose bytes are nothing, and every
+    // reader gets a broken image with a 200 in the log.
     const binary = atob(base64);
+    if (binary.length === 0) return null;
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     return bytes;

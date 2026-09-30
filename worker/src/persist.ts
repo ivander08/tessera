@@ -13,16 +13,30 @@ import type { Role } from '../../src/lib/prompt/types';
  * limit.
  */
 
-export async function persistUserMessage(env: Env, chatId: string, content: string): Promise<number> {
+/**
+ * Writes the reader's message and returns its id and seq.
+ *
+ * The id is what the reply will be parented to, so it has to come back: a turn is two
+ * rows in a chain, and parenting both to the message before the reader's would leave two
+ * active children of one parent — the transcript walk would take the newer and drop the
+ * reader's own line from the scene.
+ */
+export async function persistUserMessage(
+  env: Env,
+  chatId: string,
+  content: string,
+  parentId: string | null,
+): Promise<{ id: string; seq: number }> {
   const now = Date.now();
+  const id = crypto.randomUUID();
   const row = await env.DB.prepare(
     `INSERT INTO messages (id, chat_id, parent_id, role, content, content_tokens, created_at)
-     VALUES (?, ?, NULL, 'user', ?, ?, ?) RETURNING seq`,
+     VALUES (?, ?, ?, 'user', ?, ?, ?) RETURNING seq`,
   )
-    .bind(crypto.randomUUID(), chatId, content, estimateTokens(content), now)
+    .bind(id, chatId, parentId, content, estimateTokens(content), now)
     .first<{ seq: number }>();
   await env.DB.prepare('UPDATE chats SET updated_at = ? WHERE id = ?').bind(now, chatId).run();
-  return row?.seq ?? 0;
+  return { id, seq: row?.seq ?? 0 };
 }
 
 export async function persistAssistant(
@@ -31,7 +45,7 @@ export async function persistAssistant(
   content: string,
   usage: NormalizedUsage | null,
   costUsd: number | null,
-  options: { role?: Role } = {},
+  options: { role?: Role; parentId?: string | null } = {},
 ): Promise<string> {
   const id = crypto.randomUUID();
   const now = Date.now();
@@ -44,11 +58,12 @@ export async function persistAssistant(
     `INSERT INTO messages
        (id, chat_id, parent_id, role, content, content_tokens, prompt_tokens,
         completion_tokens, cached_tokens, cache_write_tokens, cost_usd, created_at)
-     VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
       chatId,
+      options.parentId ?? null,
       role,
       content,
       estimateTokens(content),

@@ -95,20 +95,25 @@ export default function Personas() {
         onError={setProblem}
       />
 
-      {loading && <p className="sheet-sub">Loading…</p>}
-      {error && <div className="note danger">{error}</div>}
-      {problem && <div className="note danger">{problem}</div>}
-      {status && <p className="form-hint">{status}</p>}
+      {loading && <p className="sheet-sub" style={{ marginTop: 16 }}>Loading…</p>}
+      {error && <div className="note danger" style={{ marginTop: 16 }}>{error}</div>}
+      {problem && <div className="note danger" style={{ marginTop: 16 }}>{problem}</div>}
+      {status && <p className="form-hint" style={{ marginTop: 16 }}>{status}</p>}
 
-      {data && data.length === 0 && (
-        <p className="sheet-sub">
-          No personas yet. Add one above and attach it to a chat from the chat header.
-        </p>
-      )}
+      <section className="section">
+        <span className="eyebrow">
+          Saved personas
+          {data && data.length > 0 && <span className="data"> {data.length}</span>}
+        </span>
 
-      <div>
+        {data && data.length === 0 && (
+          <p className="sheet-sub" style={{ marginTop: 0 }}>
+            No personas yet. Add one above and attach it to a chat from the chat header.
+          </p>
+        )}
+
         {data?.map((persona) => (
-          <div key={persona.id} className="panel panel-pad" style={{ marginBottom: 10 }}>
+          <div key={persona.id} className="panel panel-pad" style={{ marginBottom: 12 }}>
             {editingId === persona.id ? (
               <PersonaForm
                 initial={persona}
@@ -135,19 +140,24 @@ export default function Personas() {
                 <div className="min-w-0 flex-1">
                   <p className="row-title">{persona.name}</p>
                   {persona.description ? (
-                    <p className="sheet-sub" style={{ whiteSpace: 'pre-wrap' }}>
+                    <p
+                      className="sheet-sub"
+                      style={{ whiteSpace: 'pre-wrap', marginTop: 5 }}
+                    >
                       {persona.description}
                     </p>
                   ) : (
-                    <p className="form-hint">No description.</p>
+                    <p className="form-hint" style={{ marginTop: 5 }}>
+                      No description.
+                    </p>
                   )}
-                  <p className="form-hint">
+                  <p className="form-hint" style={{ marginTop: 7 }}>
                     {persona.chat_count === 0
                       ? 'Not used by any chat'
                       : `Used by ${persona.chat_count} ${persona.chat_count === 1 ? 'chat' : 'chats'}`}
                   </p>
                 </div>
-                <div className="row-actions" style={{ flexDirection: 'column' }}>
+                <div className="row-actions" style={{ flexDirection: 'column', gap: 6 }}>
                   <button
                     type="button"
                     className="btn quiet"
@@ -169,7 +179,7 @@ export default function Personas() {
             )}
           </div>
         ))}
-      </div>
+      </section>
       </main>
     </>
   );
@@ -250,9 +260,11 @@ function PersonaForm({
   }
 
   return (
-    <form onSubmit={(event) => void submit(event)} className="space-y-2">
-      <label className="block space-y-1">
-        <span className="text-[var(--text-xs)] text-[var(--ink-faint)]">Name — replaces {'{{user}}'}</span>
+    <form onSubmit={(event) => void submit(event)} className="space-y-4">
+      <label className="block space-y-2">
+        <span className="form-hint" style={{ display: 'block' }}>
+          Name — replaces {'{{user}}'}
+        </span>
         <input
           className="field min-h-10"
           value={name}
@@ -262,8 +274,8 @@ function PersonaForm({
         />
       </label>
 
-      <label className="block space-y-1">
-        <span className="text-[var(--text-xs)] text-[var(--ink-faint)]">
+      <label className="block space-y-2">
+        <span className="form-hint" style={{ display: 'block' }}>
           Description — sent to the model every turn
         </span>
         <textarea
@@ -275,8 +287,8 @@ function PersonaForm({
         />
       </label>
 
-      <label className="block space-y-1">
-        <span className="text-[var(--text-xs)] text-[var(--ink-faint)]">
+      <label className="block space-y-2">
+        <span className="form-hint" style={{ display: 'block' }}>
           Avatar URL — optional, shown in the list only
         </span>
         <input
