@@ -161,21 +161,31 @@ const turnA = await turn(chat.id, 'Add one short sentence.');
 const turnB = await turn(chat.id, 'Add another short sentence.');
 const turnC = await turn(chat.id, 'And one more.');
 
-// A short chat has a proportionally large tail (memory + state + lore blocks all sit
-// after the cacheable prefix), so the rate starts low and climbs. Asserting a high
-// number here would be asserting the wrong thing; the 90%-at-turn-40 figure is measured
-// separately. What matters is that caching engages and the cached share grows.
+// Caching is a STEP FUNCTION, not a ramp. The provider extends the cached prefix in
+// fixed-size blocks (~128-134 tokens on the provider in use), so the cached count holds
+// flat for several turns and then jumps. Measured across 24 consecutive turns:
+//
+//   turn  5: 131 cached   turn 12: 267   turn 18: 396   turn 23: 523
+//
+// with every turn in between flat. That is the prefix advancing normally. Asserting
+// "the cached share grows every turn" therefore asserts the wrong thing — it fails on
+// exactly the turns where the provider is between block boundaries.
+//
+// What actually matters, and what a real regression would break:
+//   - caching engages at all
+//   - the cached count never goes BACKWARDS (a mutated prefix would reset it)
+//   - the prompt grows rather than resetting
 const rateC = turnC.usage.cachedTokens / turnC.usage.promptTokens;
-const rateA = turnA.usage.cachedTokens / turnA.usage.promptTokens;
 check(
   'cache engages at all',
   turnC.usage.cachedTokens > 0,
-  `${turnC.usage.cachedTokens} cached tokens`,
+  `${turnC.usage.cachedTokens} cached tokens (${(rateC * 100).toFixed(1)}%)`,
 );
 check(
-  'the cached share grows across turns',
-  rateC >= rateA,
-  `${(rateA * 100).toFixed(1)}% -> ${(rateC * 100).toFixed(1)}%`,
+  'the cached prefix never shrinks across consecutive turns',
+  turnB.usage.cachedTokens >= turnA.usage.cachedTokens &&
+    turnC.usage.cachedTokens >= turnB.usage.cachedTokens,
+  `${turnA.usage.cachedTokens} -> ${turnB.usage.cachedTokens} -> ${turnC.usage.cachedTokens}`,
 );
 check(
   'prompt tokens grow rather than reset',

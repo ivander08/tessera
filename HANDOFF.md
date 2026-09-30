@@ -14,29 +14,31 @@ APK at `android/app/build/outputs/apk/debug/app-debug.apk` (5.5 MB).
 
 279 tests, `tsc -b` clean, lint clean.
 
-## The one thing that needs investigating
+## Resolved: the cache "stall" was a step function
 
-`verify/e2e.ts` passes 17 of 18 checks. The failure is real and I did not paper over it:
+Investigated and closed. `verify/cache-progress.ts` over 24 consecutive turns shows the
+cached count holding flat for several turns and then jumping by ~128-134:
 
 ```
-FAIL  the cached share grows across turns  — 55.6% -> 49.8%
-      cached tokens stayed at exactly 120 while prompt tokens grew 216 -> 241
+turn  5: 131 cached   turn 12: 267   turn 18: 396   turn 23: 523
 ```
 
-A **frozen** cached count while the prompt grows means the cacheable prefix is not
-advancing — the opposite of what the 90%-at-turn-40 measurement showed on a long chat.
-Either something about a short chat with a large tail behaves differently, or the earlier
-measurement was measuring a different path.
+That is the provider extending the cached prefix in fixed-size blocks. The prefix was
+advancing normally the whole time; my e2e assertion ("the cached share grows every turn")
+was asserting the wrong property, because it fails on exactly the turns between block
+boundaries. It now asserts what a real regression would break: caching engages, the
+cached count never goes backwards, and the prompt grows rather than resetting.
 
-Do not relax the assertion. Reproduce first:
+`verify/meter-validity.ts` then confirmed the meter is honest at this scale:
 
-```sh
-bun run worker:dev
-bun run verify/e2e.ts http://localhost:8787 "$(grep -oP 'TESSERA_TOKEN=\K\S+' .dev.vars)"
+```
+warming:   cached 523, 524, 524, 654, 656, 657, 659, 659
+timestamp injected into the system prompt:  cached 0, 0, 0, 0
+restored:  cached 784, 917, 917, 917
 ```
 
-Then send ~10 turns to one chat and watch `cachedTokens` across them. It should climb in
-~128-token steps; if it is pinned, the prefix is being mutated somewhere.
+A deliberate prefix break collapses the hit rate to zero and restoring recovers it. That
+is the check the plan calls the most important one in the project, and it passes.
 
 ## Two known code-quality items
 
