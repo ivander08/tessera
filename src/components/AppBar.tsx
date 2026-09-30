@@ -107,12 +107,12 @@ export function AppBar({
 
         {open && (
           <div className="menu" role="menu" onClick={(event) => {
-            // The menu is a list of things to do, and every one of them changes what is
-            // on screen — a link navigates, an action opens a sheet or writes a setting.
-            // Leaving it open over the result is the "menu that will not go away" feel.
+            // The menu is a list of things to do, and most of them change what is on
+            // screen — a link navigates, an action writes a setting. Leaving it open over
+            // the result is the "menu that will not go away" feel.
             //
-            // The pencil opts out: it opens the preset editor, which is owned by the menu
-            // subtree and would be unmounted by closing it.
+            // Entries that open a SHEET opt out with `data-menu-keep`: the sheet is owned
+            // by this subtree, so closing the menu would unmount it before it paints.
             const target = event.target as HTMLElement;
             if (target.closest('[data-menu-keep]')) return;
             if (target.closest('button, a')) setOpen(false);
@@ -154,24 +154,44 @@ function MenuLink({ to, label }: { to: string; label: string }) {
   );
 }
 
-/** A back link sized and coloured for the titlebar. */
+/**
+ * The way back, written as the trail you are on.
+ *
+ * A bare chevron says "back" but not "back to what", and the titlebar already has a
+ * title next to it — so the two together read as a breadcrumb: `< Characters  WS-G Probe`.
+ * The parent is a link, the current screen is the title beside it, and nothing is
+ * duplicated between them.
+ *
+ * This is the same control on every screen that has one, which is why it lives here
+ * rather than being spelled differently by each route.
+ */
 export function BackLink({ to, label }: { to: string; label: string }) {
   return (
-    <Link to={to} className="icon-btn" aria-label={label} title={label}>
+    <Link to={to} className="crumb" title={`Back to ${label}`}>
       <svg
         viewBox="0 0 24 24"
-        width="18"
-        height="18"
+        width="14"
+        height="14"
         aria-hidden="true"
         fill="none"
         stroke="currentColor"
-        strokeWidth="1.8"
+        strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"
       >
         <path d="M15 18l-6-6 6-6" />
       </svg>
+      <span>{label}</span>
     </Link>
+  );
+}
+
+/** The separator between a parent and the current screen in a titlebar breadcrumb. */
+export function CrumbSep() {
+  return (
+    <span className="crumb-sep" aria-hidden="true">
+      ›
+    </span>
   );
 }
 

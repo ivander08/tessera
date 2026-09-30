@@ -6,11 +6,18 @@ import type { NormalizedUsage, Provider } from './providers/types';
 import { badRequest, notFound, readJson } from './http';
 import { buildPrompt, send } from './prompt';
 import { persistAssistant, persistUserMessage } from './persist';
-import { addAlternativeRow, lastActiveMessage, loadMessage, type MessageRow } from './messages';
+import {
+  abandonMessage,
+  addAlternativeRow,
+  lastActiveMessage,
+  loadMessage,
+  type MessageRow,
+} from './messages';
 import { tailId } from './branch';
 import { parseSse } from '../../src/lib/sse';
 import { estimateChatTokens } from '../../src/lib/tokenEstimate';
-import { updateState } from './state/update';
+import { maybeUpdateState } from './scene';
+import { recordSpeakers } from './cast';
 import { scheduleMemory } from './memory/schedule';
 import type { ChatRow } from './db';
 
@@ -145,98 +152,152 @@ async function runTurn(
   const user = mode === 'send' ? await persistUserMessage(env, chat.id, content, parentId) : null;
   const userSeq = user?.seq ?? null;
 
-  // The reply answers the reader's message when there is one, and the target's parent
-  // otherwise. Parenting a `send` reply to `parentId` would make it a sibling of the
-  // message it answers: two active children of one parent, and the walk would show the
-  // reply while dropping the reader's own line.
-  const replyParentId = mode === 'send' ? (user?.id ?? parentId) : parentId;
+  // Every failure from here on has already written the reader's message. Abandoning it
+  // keeps an unreplied row off the visible path, so the next turn parents to the last real
+  // turn instead of stacking a second user message in front of the model.
+  const userRow = user;
+  async function failAfterPersist(message: string, code: string): Promise<void> {
+    if (userRow) {
+      await abandonMessage(env, chat.id, userRow.id).catch((error: unknown) => {
+        console.warn(`[turn] could not abandon orphan row ${userRow.id}: ${messageOf(error)}`);
+      });
+    }
+    fail(controller, message, code);
+  }
 
-  const prompt = await buildPrompt(env, chat, settings, {
-    mode,
-    userSeq,
-    userContent: content,
-    tailExtra: mode === 'impersonate' ? IMPERSONATE_INSTRUCTION : mode === 'continue' ? CONTINUE_INSTRUCTION : '',
-  });
+  // The reply answers the reader's message when there is one, and otherwise follows the
+  // message it is continuing. Parenting a `send` reply to `parentId` would make it a
+  // sibling of the message it answers: two active children of one parent, and the walk
+  // would show the reply while dropping the reader's own line. Parenting a `continue`
+  // anywhere but the target would splice it into the wrong place in the scene.
+  const replyParentId =
+    mode === 'send'
+      ? (user?.id ?? parentId)
+      : mode === 'continue'
+        ? (target?.id ?? parentId)
+        : parentId;
 
-  const request = provider.buildRequest(
-    {
-      model: settings.model,
-      messages: prompt.messages,
-      stream: true,
-      maxTokens: settings.maxTokens,
-      // Stop strings come from the preset; without them the model runs past where the
-      // preset author intended the reply to end.
-      knobs: settings.stopStrings.length > 0
-        ? { ...settings.knobs, stop: settings.stopStrings }
-        : settings.knobs,
-      sessionId: chat.session_id,
-    },
-    apiKey.key,
-  );
-
-  let response: Response;
+  // From here on the reader's message is already written, so a throw must abandon it
+  // rather than fall through to the stream handler at the top, which writes nothing and
+  // leaves the row on the visible path. `buildPrompt` is the known thrower — a chat with
+  // no character — but everything below shares the same obligation.
   try {
-    response = await fetch(request.url, request.init);
-  } catch (error) {
-    return fail(controller, messageOf(error), 'network');
-  }
+    const prompt = await buildPrompt(env, chat, settings, {
+      mode,
+      userSeq,
+      userContent: content,
+      tailExtra: mode === 'impersonate' ? IMPERSONATE_INSTRUCTION : mode === 'continue' ? CONTINUE_INSTRUCTION : '',
+    });
 
-  if (!response.ok || !response.body) {
-    const text = await response.text().catch(() => '');
-    return fail(controller, provider.readError(response.status, text), 'provider_http');
-  }
-
-  const { text: assistantText, usage, error } = await pipeStream(controller, provider, response.body);
-
-  if (assistantText.length === 0) {
-    return fail(controller, error ?? 'The provider returned no content.', 'stream');
-  }
-
-  const costUsd = resolveCost(usage);
-
-  // Where the text lands depends on the mode. `regenerate` and `continue` extend an
-  // existing message's swipe group, so the conversation keeps exactly one active row per
-  // position and swiping back recovers the previous attempt.
-  //
-  // When `regenerate` targets a message that already has a continuation, that
-  // continuation is not touched: the new alternative becomes the active child, so the
-  // path walk stops at it and the old branch drops out of the transcript. Swiping back
-  // makes the old row active again and its continuation returns with it.
-  const messageId =
-    mode === 'regenerate' || mode === 'continue'
-      ? await addAlternativeRow(env, chat.id, target!.id, assistantText)
-      : await persistAssistant(env, chat.id, assistantText, usage, costUsd, {
-          role: mode === 'impersonate' ? 'user' : 'assistant',
-          parentId: replyParentId,
-        });
-
-  send(controller, {
-    type: 'done',
-    messageId,
-    usage: usage ?? {
-      promptTokens: 0,
-      completionTokens: 0,
-      cachedTokens: 0,
-      cacheWriteTokens: 0,
-      costUsd,
-    },
-    costUsd,
-  });
-
-  if (usage) await calibrate(env, settings.model, usage.promptTokens, prompt.messages);
-
-  // State advances only on a completed turn. Regenerating or continuing rewrites what
-  // the scene says, so folding it into state would record a draft as canon.
-  if (mode === 'send') {
-    ctx.waitUntil(
-      updateState(env, chat.id, { user: content, assistant: assistantText }).catch((err: unknown) => {
-        console.warn(`[state] update failed for chat=${chat.id}: ${messageOf(err)}`);
-      }),
+    const request = provider.buildRequest(
+      {
+        model: settings.model,
+        messages: prompt.messages,
+        stream: true,
+        maxTokens: settings.maxTokens,
+        // Stop strings come from the preset; without them the model runs past where the
+        // preset author intended the reply to end.
+        knobs: settings.stopStrings.length > 0
+          ? { ...settings.knobs, stop: settings.stopStrings }
+          : settings.knobs,
+        sessionId: chat.session_id,
+      },
+      apiKey.key,
     );
-    // Memory runs on the same trigger and for the same reason: the turn is already
-    // delivered and persisted, so bookkeeping must not delay it. `scheduleMemory`
-    // decides whether enough has accumulated; most turns it does nothing.
-    ctx.waitUntil(scheduleMemory(env, chat.id));
+
+    let response: Response;
+    try {
+      response = await fetch(request.url, request.init);
+    } catch (error) {
+      return await failAfterPersist(messageOf(error), 'network');
+    }
+
+    if (!response.ok || !response.body) {
+      const text = await response.text().catch(() => '');
+      return await failAfterPersist(provider.readError(response.status, text), 'provider_http');
+    }
+
+    const {
+      text: assistantText,
+      usage,
+      error,
+      finishReason,
+    } = await pipeStream(controller, provider, response.body);
+
+    if (assistantText.length === 0) {
+      return await failAfterPersist(error ?? 'The provider returned no content.', 'stream');
+    }
+
+    const costUsd = resolveCost(usage);
+
+    // Where the text lands depends on the mode.
+    //
+    // `regenerate` extends an existing message's swipe group, so the conversation keeps
+    // exactly one active row per position and swiping back recovers the previous attempt.
+    // When it targets a message that already has a continuation, that continuation is not
+    // touched: the new alternative becomes the active child, the path walk stops at it, and
+    // the old branch drops out of the transcript until you swipe back.
+    //
+    // `continue` writes a NEW turn answering the last reply. It used to append to that
+    // reply's own group, which meant the continuation replaced the message instead of
+    // following it — the reader asked for more and watched the previous paragraph vanish.
+    // Two assistant turns in a row is what the gesture means.
+    const messageId =
+      mode === 'regenerate'
+        ? await addAlternativeRow(env, chat.id, target!.id, assistantText)
+        : await persistAssistant(env, chat.id, assistantText, usage, costUsd, {
+            role: mode === 'impersonate' ? 'user' : 'assistant',
+            parentId: replyParentId,
+          });
+
+    send(controller, {
+      type: 'done',
+      messageId,
+      usage: usage ?? {
+        promptTokens: 0,
+        completionTokens: 0,
+        cachedTokens: 0,
+        cacheWriteTokens: 0,
+        costUsd,
+      },
+      costUsd,
+      // `length` is the provider's own word for "I hit the cap". The reply is kept as it
+      // arrived — rewriting it would be a second call the reader did not ask for — but the
+      // transcript says so, because a sentence that stops mid-clause otherwise looks like
+      // the model failing rather than the budget doing its job.
+      truncated: finishReason === 'length',
+    });
+
+    if (usage) await calibrate(env, settings.model, usage.promptTokens, prompt.messages);
+
+    // State advances only on a completed turn. Regenerating or continuing rewrites what
+    // the scene says, so folding it into state would record a draft as canon.
+    if (mode === 'send') {
+      // `maybeUpdateState` reads the chat's setup and skips the call entirely when the
+      // reader set the mode to `off`, so a scene that tracks nothing pays nothing.
+      ctx.waitUntil(
+        maybeUpdateState(env, chat.id, { user: content, assistant: assistantText }, messageId).catch(
+          (err: unknown) => {
+            console.warn(`[state] update failed for chat=${chat.id}: ${messageOf(err)}`);
+          },
+        ),
+      );
+      // Memory runs on the same trigger and for the same reason: the turn is already
+      // delivered and persisted, so bookkeeping must not delay it. `scheduleMemory`
+      // decides whether enough has accumulated; most turns it does nothing.
+      ctx.waitUntil(scheduleMemory(env, chat.id));
+
+      // Anyone the narrator introduced. Behind `waitUntil` for the same reason: the reply
+      // is already delivered, so a cast member must never delay it — and a failure here
+      // costs a cast entry, not a turn.
+      ctx.waitUntil(
+        recordSpeakers(env, chat.id, assistantText).catch((err: unknown) => {
+          console.warn(`[cast] speaker detection failed for chat=${chat.id}: ${messageOf(err)}`);
+        }),
+      );
+    }
+  } catch (error) {
+    return await failAfterPersist(messageOf(error), 'internal');
   }
 }
 
@@ -247,8 +308,9 @@ const IMPERSONATE_INSTRUCTION =
   'Do not narrate for anyone else.';
 
 const CONTINUE_INSTRUCTION =
-  'Continue the previous message from exactly where it stops. Do not repeat any of it. ' +
-  'Do not begin a new message or add a speaker label.';
+  'Write the next message in this scene, continuing directly from where the last one ' +
+  'left off. Do not repeat any of it, do not summarise it, and do not begin a new ' +
+  'scene. Pick up the thread and carry it forward as the same speaker.';
 
 function fail(
   controller: ReadableStreamDefaultController<Uint8Array>,
@@ -262,28 +324,35 @@ async function pipeStream(
   controller: ReadableStreamDefaultController<Uint8Array>,
   provider: Provider,
   body: ReadableStream<Uint8Array>,
-): Promise<{ text: string; usage: NormalizedUsage | null; error: string | null }> {
+): Promise<{
+  text: string;
+  usage: NormalizedUsage | null;
+  error: string | null;
+  finishReason: string | null;
+}> {
   let text = '';
   let usage: NormalizedUsage | null = null;
+  let finishReason: string | null = null;
 
   try {
     for await (const event of parseSse(body)) {
       if (event.data === '[DONE]') break;
       const frame = provider.parseFrame(event.data);
       if (!frame) continue;
-      if (frame.error) return { text, usage, error: frame.error };
+      if (frame.error) return { text, usage, error: frame.error, finishReason };
       if (frame.text) {
         text += frame.text;
         send(controller, { type: 'delta', text: frame.text });
       }
       if (frame.usage) usage = frame.usage;
+      if (frame.finishReason) finishReason = frame.finishReason;
     }
   } catch (error) {
     // A client disconnect lands here too. Whatever text arrived is still a reply.
-    return { text, usage, error: messageOf(error) };
+    return { text, usage, error: messageOf(error), finishReason };
   }
 
-  return { text, usage, error: null };
+  return { text, usage, error: null, finishReason };
 }
 
 /**

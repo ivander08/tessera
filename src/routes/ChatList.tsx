@@ -4,6 +4,7 @@ import type { ChatSummary } from '../lib/apiTypes';
 import { useAsync } from '../lib/hooks';
 import { AppBar } from '../components/AppBar';
 import { Avatar } from '../components/Avatar';
+import { Wordmark } from '../components/Mark';
 
 /**
  * The shelf.
@@ -26,7 +27,7 @@ export default function ChatList() {
 
   return (
     <>
-      <AppBar title={<span className="bar-title">Tessera</span>} titleHref={null} />
+      <AppBar title={<Wordmark />} titleHref={null} />
 
       <main className="shelf">
         <div className="sheet-head">

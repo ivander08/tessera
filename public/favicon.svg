@@ -1,20 +1,55 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
   <!--
-    A tessera: one tile in a mosaic. Four surrounding tiles sit dark and slightly
-    cropped, so the lit one reads as part of a larger picture rather than a lone square.
-    Colours are the app's own brass on its warm near-black ground.
+    A tessera: one lit tile in a mosaic. Four surrounding tiles sit dimmed, so the lit one
+    reads as part of a larger picture rather than a lone square.
+
+    ## No background
+
+    This used to paint a `#16130F` rounded square behind the mark. That is correct on the
+    app's own dark ground and wrong everywhere else: a browser tab bar, a bookmark list and
+    a history page all render the icon on THEIR background, and a dark theme paints a dark
+    grey that the black square then sits on as a visible box. The icon looked like a
+    rendering bug rather than a logo.
+
+    ## Why there is a media query in here
+
+    SVG favicons are a document, so they can carry their own `prefers-color-scheme` rules —
+    and this is exactly the case for them. The tile colours have to flip with the tab bar:
+    bright brass and pale neighbours on a dark bar, deeper brass and dark neighbours on a
+    light one. One file serves both, so there is no second asset to keep in sync.
+
+    Browsers that do not support the query fall back to the dark-theme values, which is the
+    theme the app itself defaults to.
   -->
-  <rect width="64" height="64" rx="12" fill="#16130F"/>
-  <g fill="#2E2820">
-    <rect x="7" y="7" width="18" height="18" rx="3"/>
-    <rect x="39" y="7" width="18" height="18" rx="3"/>
-    <rect x="7" y="39" width="18" height="18" rx="3"/>
-    <rect x="39" y="39" width="18" height="18" rx="3"/>
-    <rect x="28" y="4" width="8" height="8" rx="2"/>
-    <rect x="28" y="52" width="8" height="8" rx="2"/>
-    <rect x="4" y="28" width="8" height="8" rx="2"/>
-    <rect x="52" y="28" width="8" height="8" rx="2"/>
+  <style>
+    .neighbour { fill: #B9AE9E; }
+    .tile { fill: #E0BE7E; }
+    .seam { stroke: #1A1610; stroke-opacity: 0.45; }
+
+    @media (prefers-color-scheme: light) {
+      .neighbour { fill: #6B6154; }
+      .tile { fill: #A8823A; }
+      .seam { stroke: #FFFCF6; stroke-opacity: 0.5; }
+    }
+  </style>
+
+  <g class="neighbour" opacity="0.5">
+    <rect x="2" y="2" width="14" height="14" rx="2.5" />
+    <rect x="48" y="2" width="14" height="14" rx="2.5" />
+    <rect x="2" y="48" width="14" height="14" rx="2.5" />
+    <rect x="48" y="48" width="14" height="14" rx="2.5" />
   </g>
-  <rect x="22" y="22" width="20" height="20" rx="4" fill="#C2A36B"/>
-  <rect x="24.5" y="24.5" width="15" height="15" rx="2.5" fill="none" stroke="#8A7142" stroke-width="1.2"/>
+
+  <rect class="tile" x="18" y="18" width="28" height="28" rx="5.5" />
+
+  <rect
+    class="seam"
+    x="21.5"
+    y="21.5"
+    width="21"
+    height="21"
+    rx="3.5"
+    fill="none"
+    stroke-width="1.7"
+  />
 </svg>

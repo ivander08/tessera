@@ -127,7 +127,9 @@ export function PersonaMenu({
                 Use no persona
               </button>
             )}
-            <a className="btn" href="/personas">
+            {/* `data-menu-keep`: this link is inside the menu's subtree, so closing the
+                menu would unmount the sheet and cancel the navigation. */}
+            <a className="btn" href="/personas" data-menu-keep>
               Manage personas
             </a>
           </div>

@@ -9,7 +9,7 @@
     "build:native": "tsc -b && vite build --mode native",
     "preview": "vite preview",
     "worker:dev": "wrangler dev",
-    "deploy": "bun run build && wrangler deploy",
+    "deploy": "bun run build && wrangler d1 migrations apply tessera-db --remote && wrangler deploy",
     "types": "wrangler types",
     "test": "bun test",
     "db:create": "wrangler d1 create tessera-db",
@@ -21,7 +21,7 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "tauri:icon": "tauri icon ./app-icon.png"
+    "tauri:icon": "tauri icon ./app-icon.svg"
   },
   "dependencies": {
     "@capacitor/android": "^8",

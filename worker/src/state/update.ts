@@ -1,6 +1,7 @@
 import { complete, parseJsonReply } from '../cheap';
 import { EMPTY_STATE, validatePatch } from '../../../src/lib/state/schema';
 import type { WorldState } from '../../../src/lib/state/schema';
+import type { SceneSetup } from '../../../src/lib/scene/setup';
 
 /**
  * M5 — world state tracking.
@@ -34,10 +35,7 @@ const SYSTEM = [
   'change nothing about where anyone is or what they carry.',
   '',
   'Allowed keys:',
-  '  "time"       string  — the real-world clock time of the scene, as a full date and',
-  '                time: "Wednesday, 30 September 2026, 05:34 AM". Use the actual date',
-  '                and time when the exchange establishes one, and advance it as the',
-  '                scene moves. Do not invent a fantasy calendar.',
+  '{{TIME_KEY}}',
   '  "location"   string  — where the scene is, as specifically as the exchange says:',
   '                "Sydney, on the coast" or "the scriptorium, sitting on the bed" is',
   '                better than "indoors". Name the city or region when it is known.',
@@ -48,6 +46,11 @@ const SYSTEM = [
   '                move them out of "present" and into "away" in the same reply.',
   '  "inventory"  array of notable items a character is carrying',
   '  "conditions" object mapping character name -> short condition, e.g. {"Ada":"bleeding"}',
+  '  "outfits"    object mapping character name -> what they are wearing right now, e.g.',
+  '                {"Sydney":"school uniform, blazer open"}. Include a character only when',
+  '                their clothing is established or changes. Record what the text says:',
+  '                colours, layers, notable items. Do not invent an outfit, and do not',
+  '                restate one that has not changed.',
   '  "notes"      array of short factual notes worth remembering',
   '',
   'Rules:',
@@ -57,16 +60,87 @@ const SYSTEM = [
   '- Report what is stated, not what is implied. If a character says they will leave,',
   '  that is not yet a departure. If the text is ambiguous, change nothing.',
   '- Never invent names, places, or items that do not appear in the exchange or state.',
-  '- "time" is the reader\'s real-world time, not an in-fiction day count. If the',
-  '  exchange gives a date, a clock time, or a day of the week, record it in full.',
+  '{{TIME_BULLET}}',
   '- "present" holds names only. Never put a pronoun or a role there: "me", "you",',
   '  "the user" and "someone" are not names, and they make the cast list useless.',
   '- A character cannot be both present and away. Leaving is one change: remove them',
   '  from "present" and add them to "away". Returning is the reverse.',
   '- "inventory" is what someone is CARRYING, not what happens to be in the room.',
+  '- "outfits" is what a character is WEARING, not what they own or what is in the room.',
+  '  A character who changes clothes gets a new entry; one who does not is left alone.',
   '- Arrays replace the previous array entirely when present.',
   '- Reply with the JSON object only. No prose, no explanation, no markdown fence.',
 ].join('\n');
+
+/**
+ * Everything the model is told about `time`, per pace.
+ *
+ * Two rules used to describe `time` unconditionally — the key description said to advance
+ * it, and a Rules bullet said to record any clock the text gave — while the pace rule was
+ * appended afterwards. The specific instruction won, so `manual` advanced the clock anyway
+ * (measured: 04:00 -> 09:30, while `minute` and `hour` behaved correctly). The instructions
+ * have to agree, and they only agree if they are written together.
+ *
+ * Each entry is the Allowed-keys line it replaces, including its indentation.
+ */
+const TIME_KEY: Record<SceneSetup['timePace'], string> = {
+  minute: [
+    '  "time"       string  — the real-world clock time of the scene, as a full date and',
+    '                time: "Wednesday, 30 September 2026, 05:34 AM". Advance it by roughly',
+    '                one minute per exchange unless the text says otherwise. Do not invent',
+    '                a fantasy calendar.',
+  ].join('\n'),
+  hour: [
+    '  "time"       string  — the real-world clock time of the scene, as a full date and',
+    '                time: "Wednesday, 30 September 2026, 05:34 AM". Advance it by roughly',
+    '                one hour per exchange unless the text says otherwise. Do not invent a',
+    '                fantasy calendar.',
+  ].join('\n'),
+  scene: [
+    '  "time"       string  — the real-world clock time of the scene, as a full date and',
+    '                time: "Wednesday, 30 September 2026, 05:34 AM". Change it only when the',
+    '                exchange establishes that time has passed. Do not invent a fantasy',
+    '                calendar.',
+  ].join('\n'),
+  manual: [
+    '  "time"       string  — the reader maintains this clock. Include the key ONLY when the',
+    '                exchange states a time that is not already recorded. Never advance it,',
+    '                and never rewrite a time already stored.',
+  ].join('\n'),
+};
+
+/** The recording rule for the Rules block, per pace. */
+const TIME_BULLET: Record<SceneSetup['timePace'], string> = {
+  minute: [
+    '- "time" is the reader\'s real-world time, not an in-fiction day count. If the',
+    '  exchange gives a date, a clock time, or a day of the week, record it in full, then',
+    '  advance it by roughly a minute per exchange.',
+  ].join('\n'),
+  hour: [
+    '- "time" is the reader\'s real-world time, not an in-fiction day count. If the',
+    '  exchange gives a date, a clock time, or a day of the week, record it in full, then',
+    '  advance it by roughly an hour per exchange.',
+  ].join('\n'),
+  scene: [
+    '- "time" is the reader\'s real-world time, not an in-fiction day count. If the',
+    '  exchange gives a date, a clock time, or a day of the week, record it in full. Change',
+    '  it only when the exchange establishes that time has passed.',
+  ].join('\n'),
+  manual: [
+    '- "time" belongs to the reader. Never change a stored value, and do not add one unless',
+    '  the exchange states a time and no time is recorded yet.',
+  ].join('\n'),
+};
+
+/**
+ * The system prompt for one pace: `SYSTEM` with the time key and its rule spliced in.
+ *
+ * `SYSTEM` keeps a placeholder for each, so the rest of the prompt is written once and the
+ * two time lines are the only part that varies.
+ */
+function buildSystemPrompt(pace: SceneSetup['timePace']): string {
+  return SYSTEM.replace('{{TIME_KEY}}', TIME_KEY[pace]).replace('{{TIME_BULLET}}', TIME_BULLET[pace]);
+}
 
 /**
  * Read the last exchange, ask the cheap model for a state patch, validate it, and
@@ -79,12 +153,15 @@ export async function updateState(
   env: Env,
   chatId: string,
   lastExchange: { user: string; assistant: string },
+  setup: SceneSetup,
+  /** The assistant row this state describes, so a snapshot can be attached to it. */
+  messageId?: string | null,
 ): Promise<{ applied: boolean; reason?: string }> {
   try {
     const current = await loadState(env, chatId);
 
     const reply = await complete(env, {
-      system: SYSTEM,
+      system: buildSystemPrompt(setup.timePace),
       user: [
         'Current state:',
         JSON.stringify(current),
@@ -119,6 +196,17 @@ export async function updateState(
       .bind(chatId, JSON.stringify(result.next), Date.now())
       .run();
 
+    // Snapshot onto the turn this state describes, so "where was I when this happened" is
+    // answerable later. The live document is overwritten every turn; this is not.
+    //
+    // Only when the caller named a row. An opening seed has no message to attach to, and
+    // null is the honest answer for "this state belongs to no turn".
+    if (messageId) {
+      await env.DB.prepare('UPDATE messages SET state_json = ? WHERE id = ?')
+        .bind(JSON.stringify(result.next), messageId)
+        .run();
+    }
+
     return { applied: true };
   } catch (error) {
     // Missing cheap model, no API key, provider down, D1 unavailable: all of it is
@@ -126,6 +214,85 @@ export async function updateState(
     return { applied: false, reason: messageOf(error) };
   }
 }
+
+/**
+ * The one-shot opening seed.
+ *
+ * A scene that opens with a time, a place and an outfit already recorded reads correctly
+ * from the first turn instead of the narrator discovering where it is three exchanges in.
+ * The greeting is the only text that exists at this point, so it is the only source —
+ * which is why the instruction is explicit that anything the greeting does not establish
+ * must be omitted rather than invented.
+ *
+ * Never throws, and never blocks: the caller runs it behind the response. A scene with no
+ * opening state is fine; a chat creation that waits on a model call is not.
+ */
+export async function seedOpeningState(
+  env: Env,
+  chatId: string,
+  openingContent: string,
+  card: { name: string; description: string },
+  pace: SceneSetup['timePace'],
+): Promise<{ applied: boolean; reason?: string }> {
+  try {
+    // Nothing to seed from, and a call with no user text is a wasted one.
+    if (openingContent.trim().length === 0) return { applied: false, reason: 'no greeting' };
+
+    const reply = await complete(env, {
+      system: `${buildSystemPrompt(pace)}\n${OPENING_RULE}`,
+      user: [
+        'Current state:',
+        '{}',
+        '',
+        "The character's card:",
+        `name: ${card.name}`,
+        `description: ${card.description}`,
+        '',
+        'The opening of the scene:',
+        openingContent,
+        '',
+        'Reply with the JSON patch object only.',
+      ].join('\n'),
+      maxTokens: 400,
+      json: true,
+    });
+
+    let patch: unknown;
+    try {
+      patch = parseJsonReply<unknown>(reply.text);
+    } catch (error) {
+      return { applied: false, reason: `reply was not JSON: ${messageOf(error)}` };
+    }
+
+    const result = validatePatch({ ...EMPTY_STATE }, patch);
+    if (!result.ok) return { applied: false, reason: result.reason };
+
+    // An empty patch is a legitimate answer — a greeting that establishes nothing gets
+    // no state — and writing `{}` over a row that does not exist is a write with no
+    // information in it.
+    if (Object.keys(result.next).length === 0) return { applied: false, reason: 'nothing established' };
+
+    await env.DB.prepare(
+      `INSERT INTO state (chat_id, json, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(chat_id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at`,
+    )
+      .bind(chatId, JSON.stringify(result.next), Date.now())
+      .run();
+
+    return { applied: true };
+  } catch (error) {
+    return { applied: false, reason: messageOf(error) };
+  }
+}
+
+const OPENING_RULE = [
+  'This is the OPENING of a scene. Nothing has happened yet. Establish the initial "time",',
+  '"location", "weather" and "outfits" that the greeting implies, and leave everything else',
+  'empty. If the greeting does not establish something, omit it rather than inventing it.',
+  // A greeting rarely states a clock, and under `manual` the reader owns it — seeding one
+  // would hand them a time they did not choose.
+  'When the pace is manual, omit "time" entirely.',
+].join('\n');
 
 /**
  * Load the stored document.

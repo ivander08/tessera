@@ -53,10 +53,20 @@ export function assemble(input: AssembleInput, countChatTokens: TokenCounter): A
   const tail: WireMessage[] = [];
   pushIfNonEmpty(tail, 'system', input.tail.memoryBlock);
   pushIfNonEmpty(tail, 'system', input.tail.stateBlock);
+  // Before the lore block: who is in the scene is the more immediate fact, and the cast
+  // is what the script form is written against.
+  pushIfNonEmpty(tail, 'system', input.tail.castBlock);
   pushIfNonEmpty(tail, 'system', input.tail.loreBlock);
   pushIfNonEmpty(tail, 'system', input.tail.authorsNote);
   pushIfNonEmpty(tail, 'system', input.tail.postHistoryInstructions);
-  tail.push({ role: 'user', content: input.tail.userMessage });
+  // The mode's instruction, when the turn is not an ordinary reply. A system line rather
+  // than a user one: it is the operator telling the model what this call is, not the
+  // reader saying something.
+  pushIfNonEmpty(tail, 'system', input.tail.instruction);
+  // Omitted rather than pushed empty. `continue` has no user text — the last thing in
+  // the conversation is the assistant turn being carried forward — and an empty user
+  // message is rejected outright by some providers and read as a blank prompt by others.
+  pushIfNonEmpty(tail, 'user', input.tail.userMessage);
 
   const messages = [...head, ...body, ...tail];
   const tailStart = head.length + body.length;

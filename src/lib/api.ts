@@ -50,7 +50,14 @@ export class OfflineError extends Error {
   }
 }
 
-async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+/**
+ * A fetch that carries the bearer token and resolves the API origin.
+ *
+ * Exported for the one caller that needs BYTES rather than JSON: the export endpoint is
+ * authenticated and a plain `<a href>` cannot carry a header, so its response is fetched
+ * here and handed to a blob URL. Everything else should use `apiJson`.
+ */
+export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const token = getToken();
   const headers = new Headers(init.headers);
   if (token) headers.set('Authorization', `Bearer ${token}`);
@@ -89,7 +96,7 @@ export async function apiJson<T>(path: string, init: RequestInit = {}): Promise<
 
 export type ChatFrame =
   | { type: 'delta'; text: string }
-  | { type: 'done'; messageId: string; usage: NormalizedUsage; costUsd: number | null }
+  | { type: 'done'; messageId: string; usage: NormalizedUsage; costUsd: number | null; truncated: boolean }
   | { type: 'error'; message: string; code: string };
 
 export interface NormalizedUsage {

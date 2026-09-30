@@ -90,6 +90,26 @@ is the check the plan calls the most important one in the project, and it passes
     siblings, and the walk then drops the reader's own line. `branch.test.ts` covers it.
   - A row's `seq` strictly increases along a path, which is why the prompt cut for `send`
     can filter on it.
+- **D1 bills ROWS READ, and the free tier caps it at 5M/day — the whole site 500s when it
+  runs out.** This is not a soft limit; every query fails until 00:00 UTC. It happened on
+  2026-09-30 and took the site down for a day. Two causes, both now fixed and guarded:
+  - `scheduleMemory` computed a message's "position" with a correlated subquery over
+    `swipe_group`, a column no code has written since branching replaced it. So it
+    evaluated `COALESCE(NULL, id) = COALESCE(NULL, id)` for every row — an O(n²) scan to
+    return the row's own `seq`. It runs after EVERY turn, so it read 776,000 rows on a
+    600-message chat. `worker/src/memory/memory.test.ts` now fails if any query the
+    scheduler runs mentions `swipe_group`.
+  - The path walk's per-step lookup used the wrong index. `idx_messages_parent` is
+    `(chat_id, parent_id, seq)` and cannot satisfy `active = 1`, so the planner scanned
+    every active message in the chat at every step. `0006_walk_index.sql` replaces it with
+    `(chat_id, parent_id, active, seq)`: 1,417ms → 3.29ms at 5,000 messages.
+  - Anything that reads messages per turn must be bounded by the PATH, not the chat. If a
+    new query's cost grows with conversation length, it will eventually cost a day.
+- **`swipe_group` is dead.** No code writes it. Never read it; `parent_id` is the
+  structure. A query that mentions it is a bug — see above.
+- **`wrangler d1 migrations apply --remote` must run before the Worker deploy** that needs
+  the new schema. A missing index does not error, it just gets slow — and slow is what the
+  read cap punishes.
 - **A D1 BLOB does not come back as an `ArrayBuffer`.** It arrives as a plain array of
   byte numbers, and `new Response(numberArray)` is not a `BodyInit` — it serializes to
   nothing, so the avatar endpoint answered `200 image/png` with a zero-byte body while the
@@ -113,3 +133,65 @@ is the check the plan calls the most important one in the project, and it passes
 - Release signing for the APK / installers
 - iOS
 - The cache investigation above
+
+## Session — six fixes (509 tests, `tsc -b` clean, lint clean)
+
+**Thoughts removed.** `worker/src/thoughts.ts`, the route, the `Turn.tsx` component, the
+`Chat.tsx` callback and the CSS are gone. `migrations/0010_message_thoughts.sql` was
+deleted while its ledger row remains — `wrangler d1 migrations apply` ignores a ledger row
+with no file, and `--local` reports "No migrations to apply". `messages.thoughts` is a dead
+nullable column in every existing database; nothing reads it and `BRANCH_COLUMNS` does not
+select it. Do not re-add the file and do not add a `DROP COLUMN`.
+
+**A failed turn no longer orphans the reader's row.** `persistUserMessage` still runs
+BEFORE the provider call — that ordering is deliberate, a crash must cost a reply and never
+the reader's own words. Instead `messages.ts#abandonMessage` deactivates that one row from
+every post-persist failure (`network`, `provider_http`, `stream`, and a throw from
+`buildPrompt` or anything after it, which is now wrapped). An inactive row is off the walk,
+so `tailId` returns the last real turn and the next `send` does not stack two `user`
+messages in front of the model. Existing orphans are left alone — the defect is
+forward-looking.
+
+**`timePace: 'manual'` means manual.** `SYSTEM` used to describe `time` unconditionally —
+the key said "advance it as the scene moves" and a Rules bullet said "record it in full" —
+while the pace rule was appended AFTER the whole string, so the specific instruction won and
+`manual` advanced the clock anyway. The time key description and its recording rule now
+come from `TIME_KEY` / `TIME_BULLET` per pace, spliced into `SYSTEM` placeholders by
+`buildSystemPrompt(pace)`. `seedOpeningState` takes the pace too. Measured live, one chat
+per pace, one exchange stating "half past nine": `manual` stayed at 04:00, `minute` → 04:01,
+`hour` → 05:00, `scene` → 09:30.
+
+**A summary is a summary.** `summarize.ts` forbids quoted dialogue in `SYSTEM` and
+`looksLikeSceneProse` catches the failure mechanically — quoted speech or a present-tense
+dialogue tag — retrying ONCE with the transcript re-sent plus a nudge. A retry that is also
+scene prose, or empty, does not replace the first attempt. `consolidate.ts` was left alone:
+an arc summarises already-summarised text, which cannot contain dialogue.
+
+**Recall is observable.** `listMemory` returns `recalled`, `rendered` and `query`,
+following the `getState` `rendered` precedent — the panel shows the block the narrator was
+actually given, not an approximation. The query is the last `user` row's content, which is
+what `buildPrompt` uses for the modes that carry no new text. Note that recall runs
+`messages_fts` over the whole chat, so the query row matches ITSELF and appears among the
+hits; that is what the model really receives.
+
+**Truncation is visible.** `finish_reason` is read into `ParsedFrame` by both providers, and
+the terminal frame carrying only a reason is no longer dropped. `pipeStream` returns it, the
+`done` frame carries `truncated`, and the turn renders "Stopped at the output limit." with a
+Continue link. **Kenari does send `finish_reason`** — confirmed live: with `maxTokens: 16`
+the frame was `finish_reason: 'length'`, so the `completionTokens >= maxTokens` fallback was
+not needed. The stored global `maxTokens` was `256` against a code default of `1024`; it is
+now `1024`.
+
+### Two more traps
+
+- **`.app-link` is a dangling class.** `ThemeEditor.tsx` has used it since the design rework
+  and no stylesheet defines it, so that button renders as bare text under Tailwind's
+  preflight. The truncation marker scopes its own rule (`.turn-truncated .app-link`) rather
+  than defining the class globally, which would restyle Settings as a side effect.
+- **A deleted summary range cannot be re-covered by the scheduler.** `enqueue` keys on
+  `summarize:<chat>:<from>:<to>`, so the ledger row from the original job blocks a second
+  enqueue of the same range forever. This is the queue's double-write guard working as
+  designed, not a bug to fix in passing — but it means "delete a summary and let the
+  scheduler rebuild it" does not happen. Rebuild by enqueuing the NEXT uncovered range, or
+  by deleting the old job row too.
+

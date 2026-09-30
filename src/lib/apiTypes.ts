@@ -1,5 +1,7 @@
 /** Shared row shapes returned by the Worker. */
 
+import type { WorldState } from './state/schema';
+
 export interface CharacterSummary {
   id: string;
   name: string;
@@ -39,7 +41,30 @@ export interface MessageRow {
   cached_tokens: number | null;
   cost_usd: number | null;
   created_at: number;
-  /** Alternative ids at this position, in order. Length 1 when never regenerated. */
+  /**
+   * Who wrote this assistant row, or null for the chat's own character.
+   *
+   * Null is the ordinary case: every row in a single-character scene, and every row
+   * written before casts existed. A group reply is also null — it contains several
+   * speakers, and the content carries the attribution.
+   */
+  speaker?: string | null;
+  /**
+   * The world state as of this turn, when one was recorded.
+   *
+   * Null or absent for most rows: state only advances on a completed `send`, and only
+   * when something actually changed. A row without a snapshot inherits the most recent
+   * one at or before it, which is what was true at the time.
+   */
+  state?: WorldState | null;
+  /**
+   * Alternative ids at this position, in order.
+   *
+   * Absent when the position has never been regenerated. The server omits it rather than
+   * sending a one-element array containing the row's own id: on a real 617-message chat
+   * that was 616 arrays of pure noise, 32 KB of the response. Absent and "length 1" mean
+   * the same thing, so a reader must treat `undefined` as one version.
+   */
   swipes?: string[];
   swipeIndex?: number;
 }
@@ -67,6 +92,25 @@ export interface ChatDetail {
   session_id: string;
   created_at: number;
   updated_at: number;
+}
+
+/**
+ * One page of a chat's transcript.
+ *
+ * The window is served from the END of the visible path — the reader is looking at the
+ * newest turns — so the transcript is not the whole conversation and does not say how
+ * long the conversation is. `hasMore` is the only promise the server makes about what is
+ * out of view, and `oldestId` is how the client asks for it.
+ */
+export interface Transcript {
+  chat: ChatDetail;
+  character: ChatCharacter | null;
+  persona: ChatPersona | null;
+  messages: MessageRow[];
+  /** True when older turns exist before the first message in `messages`. */
+  hasMore: boolean;
+  /** Id of the oldest returned message; pass as `cursor` to page backwards. */
+  oldestId: string | null;
 }
 
 export interface ModelInfo {

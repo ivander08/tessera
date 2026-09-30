@@ -57,6 +57,12 @@ export const kenari: Provider = {
     const delta = frame.choices?.[0]?.delta?.content;
     if (typeof delta === 'string' && delta.length > 0) out.text = delta;
 
+    // The terminal frame repeats finish_reason with an empty delta and adds `usage`. It is
+    // the only place the provider says WHY it stopped, and `length` is the difference
+    // between a finished reply and one cut off mid-sentence.
+    const reason = frame.choices?.[0]?.finish_reason;
+    if (typeof reason === 'string' && reason.length > 0) out.finishReason = reason;
+
     if (frame.usage) {
       out.usage = {
         promptTokens: frame.usage.prompt_tokens ?? 0,
@@ -67,7 +73,9 @@ export const kenari: Provider = {
       };
     }
 
-    return out.text === undefined && out.usage === undefined ? null : out;
+    return out.text === undefined && out.usage === undefined && out.finishReason === undefined
+      ? null
+      : out;
   },
 
   /**

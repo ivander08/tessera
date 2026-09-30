@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { apiJson, setToken } from '../lib/api';
+import { Mark } from '../components/Mark';
 
 /**
  * The entrance.
@@ -47,13 +48,17 @@ export default function Setup() {
     >
       <div style={{ width: '100%', maxWidth: 420 }}>
         <div style={{ marginBottom: 26 }}>
+          {/* The mark leads the name at display size. This is the one screen where the app
+              introduces itself rather than getting out of the way, so the logo belongs
+              here at full size — everywhere else it is a titlebar glyph. */}
+          <Mark size={44} />
           <h1
             style={{
               fontFamily: 'var(--font-prose)',
               fontSize: 'clamp(34px, 9vw, 46px)',
               fontWeight: 400,
               letterSpacing: '-0.02em',
-              margin: 0,
+              margin: '14px 0 0',
               lineHeight: 1.1,
             }}
           >

@@ -118,6 +118,25 @@ const DARK: Record<string, string> = {
   // one aged.
   '--verdigris': '#7BA88F',
   '--verdigris-dim': '#44604F',
+  // The speaker palette. Six voices is a cast; seven is a crowd, and a reader who cannot
+  // tell two speakers apart is reading a puzzle rather than a scene. Every entry is
+  // checked to read as text on `--ground` — these are the only saturated colours that
+  // carry information, so they have to hold contrast rather than merely look distinct.
+  //
+  // Voice 1 IS brass, unchanged, so a single-character scene looks exactly as it did.
+  // Voice 2 is verdigris, so the reader keeps the colour they have always had.
+  '--voice-1': '#C2A36B',
+  '--voice-2': '#7BA88F',
+  '--voice-3': '#B98BB5',
+  '--voice-4': '#7FA3C4',
+  '--voice-5': '#C98F6B',
+  '--voice-6': '#A3AE72',
+  // Primary actions are deliberately NOT a voice. Brass used to be both, which works
+  // with one speaker and collapses with three: every speaker would be the same colour as
+  // every button. A near-white action on a warm near-black ground is high contrast in
+  // both directions and competes with nothing.
+  '--action': '#E9E2D7',
+  '--action-ink': '#16130F',
   '--danger': '#D9705C',
   '--good': '#86A96B',
   '--warn': '#D2A24C',
@@ -144,12 +163,32 @@ const LIGHT: Record<string, string> = {
   '--brass-ink': '#FFFFFF',
   '--verdigris': '#2F6B57',
   '--verdigris-dim': '#9DBFB2',
+  // The same six voices, darkened to hold contrast on parchment. A colour that reads on a
+  // near-black ground is too light on paper, so these are not the dark set reused.
+  '--voice-1': '#7E6224',
+  '--voice-2': '#2F6B57',
+  '--voice-3': '#7A4A76',
+  '--voice-4': '#3A5F82',
+  '--voice-5': '#8A5430',
+  '--voice-6': '#5E6B2E',
+  // Near-black on parchment, which is the same contrast inverted.
+  '--action': '#221D17',
+  '--action-ink': '#F6F2EA',
   '--danger': '#A83E2C',
   '--good': '#4A7A32',
   '--warn': '#8A6414',
   '--shadow': '0 1px 2px rgba(34, 29, 23, 0.10)',
   '--scrim': 'rgba(34, 29, 23, 0.42)',
 };
+
+/**
+ * The voice palette, as a list, for the worker's colour assignment.
+ *
+ * Read from the DARK palette because both sets define the same six slots and the ORDER is
+ * the only thing that matters here — the cast stores a slot index, and the CSS resolves
+ * it per theme. Defined once so the worker cannot drift from the stylesheet.
+ */
+export const VOICE_SLOTS = 6;
 
 /** Resolves `auto` against the OS preference. */
 export function resolveMode(theme: Theme, prefersDark: boolean): 'dark' | 'light' {
@@ -244,6 +283,13 @@ export function applyTheme(
 ): void {
   const tokens = themeTokens(theme, prefersDark);
   for (const [key, value] of Object.entries(tokens)) root.style.setProperty(key, value);
+
+  // The message layout is a STRUCTURAL choice, not a colour, so it cannot be a custom
+  // property: no CSS rule can restyle the grid from a variable. It goes on the root as a
+  // data attribute, which the stylesheet keys off — one source of truth, applied at the
+  // same moment as the palette and with no prop to thread through every component that
+  // renders a turn.
+  root.dataset.layout = theme.messageLayout;
 
   const styleId = 'tessera-custom-css';
   let node = document.getElementById(styleId) as HTMLStyleElement | null;

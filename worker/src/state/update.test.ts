@@ -1,0 +1,372 @@
+import { Database } from 'bun:sqlite';
+import { readFileSync } from 'node:fs';
+import { afterEach, describe, expect, test } from 'bun:test';
+
+import { loadState, seedOpeningState, updateState } from './update';
+import { encryptKey } from '../../../src/lib/crypto';
+import { DEFAULT_SCENE_SETUP } from '../../../src/lib/scene/setup';
+import type { SceneSetup } from '../../../src/lib/scene/setup';
+
+/**
+ * The state engine's two calls: the per-turn patch, and the one-shot opening seed.
+ *
+ * Both are driven through a stubbed `fetch`, so what is asserted is what actually goes
+ * on the wire — which system prompt, with which pace rule, and whether a call happens at
+ * all. The rule that matters most is that a patch is accepted only if `validatePatch`
+ * accepts it: the model's reply is untrusted input like any other.
+ */
+
+const MIGRATIONS = [
+  '0000_init.sql',
+  '0001_memory.sql',
+  '0002_state.sql',
+  '0003_presets.sql',
+  '0004_swipes_presets.sql',
+  '0005_branching.sql',
+  '0006_walk_index.sql',
+  '0007_scene_setup.sql',
+  '0008_cast.sql',
+  '0009_message_speaker.sql',
+  '0011_message_state.sql',
+];
+
+const realFetch = globalThis.fetch;
+afterEach(() => {
+  globalThis.fetch = realFetch;
+});
+
+/** `bun-types` types the variadic form too narrowly; one seam keeps the cast out of call sites. */
+function exec(db: Database, sql: string, ...params: unknown[]): void {
+  db.run(sql, ...(params as never[]));
+}
+
+/** Captures each request body so the test can read the system prompt and user text. */
+interface Sent {
+  system: string;
+  user: string;
+}
+
+function makeEnv(): { env: Env; db: Database; sent: Sent[] } {
+  const db = new Database(':memory:');
+  for (const name of MIGRATIONS) {
+    db.exec(readFileSync(new URL(`../../../migrations/${name}`, import.meta.url), 'utf8'));
+  }
+
+  const now = Date.now();
+  // `bun-types` types the variadic form too narrowly; the same seam the other worker
+  // tests use.
+  exec(db,
+    `INSERT INTO chats (id, character_id, persona_id, title, preset_id, window_start_seq,
+                        session_id, created_at, updated_at)
+     VALUES ('chat-1', NULL, NULL, 't', NULL, 0, 's', ?, ?)`,
+    now,
+    now,
+  );
+
+  const settings: Record<string, string> = {
+    provider: 'openrouter',
+    model: 'test/model',
+    systemPrompt: 'narrator',
+  };
+
+  const sent: Sent[] = [];
+
+  const { promise: keyPromise, resolve: resolveKey } = Promise.withResolvers<{
+    key_enc: Uint8Array;
+    iv: Uint8Array;
+  }>();
+  void encryptKey('sk-test', 'token').then(({ enc, iv }) =>
+    resolveKey({ key_enc: new Uint8Array(enc), iv: new Uint8Array(iv) }),
+  );
+
+  const DB = {
+    prepare(sql: string) {
+      const trimmed = sql.replace(/\s+/g, ' ').trim();
+      let params: unknown[] = [];
+      const statement = {
+        bind(...values: unknown[]) {
+          params = values;
+          return statement;
+        },
+        async all() {
+          if (trimmed.includes('FROM settings')) {
+            return {
+              results: Object.entries(settings).map(([key, value]) => ({ key, value })),
+              success: true,
+              meta: {},
+            };
+          }
+          return { results: db.query(sql).all(...(params as never[])), success: true, meta: {} };
+        },
+        async first() {
+          if (trimmed.includes('FROM provider_keys')) return await keyPromise;
+          if (trimmed.includes('FROM token_calibration')) return { factor: 1, samples: 0 };
+          return db.query(sql).get(...(params as never[])) ?? null;
+        },
+        async run() {
+          const result = db.run(sql, ...(params as never[]));
+          return { success: true, meta: { changes: result.changes } };
+        },
+      };
+      return statement;
+    },
+  };
+
+  return {
+    env: { DB, APP_NAME: 'Tessera', TESSERA_TOKEN: 'token' } as unknown as Env,
+    db,
+    sent,
+  };
+}
+
+/** Stubs the provider with a fixed JSON reply, recording what was asked. */
+function stubProvider(sent: Sent[], reply: string): void {
+  globalThis.fetch = (async (_url: unknown, init: RequestInit) => {
+    const body = JSON.parse(String(init.body)) as {
+      messages: Array<{ role: string; content: string }>;
+      response_format?: unknown;
+    };
+    const system = body.messages.find((m) => m.role === 'system')?.content ?? '';
+    const user = body.messages.find((m) => m.role === 'user')?.content ?? '';
+    sent.push({ system, user });
+
+    // The JSON path, so the `response_format` request is exercised too.
+    expect(body.response_format).toEqual({ type: 'json_object' });
+
+    return new Response(
+      JSON.stringify({ choices: [{ message: { content: reply } }], usage: { prompt_tokens: 1 } }),
+      { headers: { 'content-type': 'application/json' } },
+    );
+  }) as unknown as typeof fetch;
+}
+
+const setupWith = (pace: SceneSetup['timePace']): SceneSetup => ({
+  ...DEFAULT_SCENE_SETUP,
+  timePace: pace,
+});
+
+describe('updateState: the pace rule', () => {
+  test.each([
+    ['minute', 'a minute per exchange'],
+    ['hour', 'an hour per exchange'],
+    ['scene', 'only when the exchange establishes that time has passed'],
+    ['manual', 'belongs to the reader'],
+  ] as const)('%s puts the right instruction to the cheap model', async (pace, expected) => {
+    const { env, sent } = makeEnv();
+    stubProvider(sent, '{}');
+
+    await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith(pace));
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].system).toContain(expected);
+    // And the schema is unchanged by the pace rule: the same allowed keys are described.
+    expect(sent[0].system).toContain('"outfits"');
+    expect(sent[0].system).toContain('"conditions"');
+  });
+
+  test('the manual prompt never tells the model to record or advance a clock', async () => {
+    // The defect this replaces: two unconditional instructions inside `SYSTEM` — the key
+    // description said "advance it as the scene moves", a Rules bullet said "record it in
+    // full" — overrode the appended pace rule, so `manual` advanced the clock (measured
+    // 04:00 -> 09:30). The instructions now come from one place, and this is the assertion
+    // that they agree.
+    const { env, sent } = makeEnv();
+    stubProvider(sent, '{}');
+
+    await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('manual'));
+
+    const system = sent[0].system;
+    expect(system).toContain('Never change');
+    expect(system).not.toContain('record it in full');
+    expect(system).not.toContain('advance it as the');
+    expect(system).not.toContain('Advance it by');
+  });
+
+  test('minute and hour keep the wording that already worked', async () => {
+    // These two paces behaved correctly before the fix, so their text is the regression
+    // guard: the rewrite must not have changed what the model is told for them.
+    const minute = makeEnv();
+    stubProvider(minute.sent, '{}');
+    await updateState(minute.env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('minute'));
+
+    const hour = makeEnv();
+    stubProvider(hour.sent, '{}');
+    await updateState(hour.env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('hour'));
+
+    expect(minute.sent[0].system).toContain('roughly\n                one minute per exchange');
+    expect(minute.sent[0].system).toContain('Advance it by roughly');
+    expect(minute.sent[0].system).not.toContain('belongs to the reader');
+
+    expect(hour.sent[0].system).toContain('roughly\n                one hour per exchange');
+    expect(hour.sent[0].system).not.toContain('belongs to the reader');
+  });
+
+  test('no pace leaves a placeholder in the prompt', async () => {
+    for (const pace of ['minute', 'hour', 'scene', 'manual'] as const) {
+      const { env, sent } = makeEnv();
+      stubProvider(sent, '{}');
+      await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith(pace));
+
+      expect(sent[0].system).not.toContain('{{TIME_KEY}}');
+      expect(sent[0].system).not.toContain('{{TIME_BULLET}}');
+      // The key is described exactly once, by the entry that replaced the placeholder.
+      expect(sent[0].system.match(/"time" {7}string/g)).toHaveLength(1);
+    }
+  });
+
+  test('stores a valid patch', async () => {
+    const { env, db, sent } = makeEnv();
+    stubProvider(sent, '{"location":"the lantern room","outfits":{"Quill":"oilskin coat"}}');
+
+    const result = await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('scene'));
+    expect(result.applied).toBe(true);
+    expect(await loadState(env, 'chat-1')).toEqual({
+      location: 'the lantern room',
+      outfits: { Quill: 'oilskin coat' },
+    });
+    expect(db).toBeDefined();
+  });
+
+  test('an invalid patch changes nothing', async () => {
+    // The model is untrusted input. A hallucinated key must not reach the document.
+    const { env, sent } = makeEnv();
+    stubProvider(sent, '{"location":"the lantern room","nonsense":true}');
+
+    const result = await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('scene'));
+    expect(result.applied).toBe(false);
+    expect(result.reason).toContain('nonsense');
+    expect(await loadState(env, 'chat-1')).toEqual({});
+  });
+
+  test('a non-JSON reply is not applied and does not throw', async () => {
+    const { env, sent } = makeEnv();
+    stubProvider(sent, 'I think nothing changed.');
+
+    const result = await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('scene'));
+    expect(result.applied).toBe(false);
+    expect(await loadState(env, 'chat-1')).toEqual({});
+  });
+});
+
+describe('seedOpeningState', () => {
+  test('writes the state the greeting implies', async () => {
+    const { env, sent } = makeEnv();
+    stubProvider(
+      sent,
+      '{"time":"Wednesday, 30 September 2026, 05:34 AM","location":"the lantern room",' +
+        '"weather":"warm, clear morning","outfits":{"Quill":"oilskin coat, salt-stained"}}',
+    );
+
+    const result = await seedOpeningState(
+      env,
+      'chat-1',
+      'Quill looks up. You are late.',
+      {
+        name: 'Quill',
+        description: 'A lighthouse keeper.',
+      },
+      'scene',
+    );
+
+    expect(result.applied).toBe(true);
+    expect(await loadState(env, 'chat-1')).toEqual({
+      time: 'Wednesday, 30 September 2026, 05:34 AM',
+      location: 'the lantern room',
+      weather: 'warm, clear morning',
+      outfits: { Quill: 'oilskin coat, salt-stained' },
+    });
+  });
+
+  test('asks only for the opening facts, and says to omit what is not established', async () => {
+    const { env, sent } = makeEnv();
+    stubProvider(sent, '{}');
+
+    await seedOpeningState(
+      env,
+      'chat-1',
+      'The room is empty and quiet.',
+      {
+        name: 'Quill',
+        description: 'A lighthouse keeper.',
+      },
+      'scene',
+    );
+
+    const system = sent[0].system;
+    expect(system).toContain('OPENING');
+    expect(system).toContain('leave everything else');
+    expect(system).toContain('omit it rather than inventing it');
+    // The card is context for the greeting, not a licence to invent.
+    expect(sent[0].user).toContain('The room is empty and quiet.');
+    expect(sent[0].user).toContain('A lighthouse keeper.');
+  });
+
+  test('a manual chat is told not to seed a clock at all', async () => {
+    // Under `manual` the reader owns `time`, so a greeting that implies a time must not
+    // hand them one they did not choose.
+    const { env, sent } = makeEnv();
+    stubProvider(sent, '{}');
+
+    await seedOpeningState(
+      env,
+      'chat-1',
+      'It is nearly dawn when the door opens.',
+      { name: 'Quill', description: '' },
+      'manual',
+    );
+
+    expect(sent[0].system).toContain('When the pace is manual, omit "time" entirely.');
+    expect(sent[0].system).toContain('belongs to the reader');
+  });
+
+  test('an empty patch writes no row at all', async () => {
+    // A greeting that establishes nothing is a legitimate outcome, and a row holding `{}`
+    // is a write with no information in it.
+    const { env, db, sent } = makeEnv();
+    stubProvider(sent, '{}');
+
+    const result = await seedOpeningState(
+      env,
+      'chat-1',
+      'The room is empty and quiet.',
+      {
+        name: 'Quill',
+        description: '',
+      },
+      'scene',
+    );
+
+    expect(result.applied).toBe(false);
+    expect(db.query('SELECT COUNT(*) AS n FROM state').get()).toEqual({ n: 0 });
+  });
+
+  test('a blank greeting does not call the model', async () => {
+    const { env, sent } = makeEnv();
+    stubProvider(sent, '{}');
+
+    const result = await seedOpeningState(env, 'chat-1', '   ', { name: 'Q', description: '' }, 'scene');
+    expect(result.applied).toBe(false);
+    expect(sent).toHaveLength(0);
+  });
+
+  test('a provider failure is reported, not thrown', async () => {
+    // This runs behind a response; a scene with no opening state must still work.
+    const { env } = makeEnv();
+    globalThis.fetch = (async () => {
+      throw new Error('provider down');
+    }) as unknown as typeof fetch;
+
+    const result = await seedOpeningState(
+      env,
+      'chat-1',
+      'Some greeting.',
+      {
+        name: 'Q',
+        description: '',
+      },
+      'scene',
+    );
+    expect(result.applied).toBe(false);
+    expect(result.reason).toContain('provider down');
+  });
+});

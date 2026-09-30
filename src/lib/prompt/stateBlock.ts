@@ -25,6 +25,7 @@ type SectionKey =
   | 'present'
   | 'away'
   | 'conditions'
+  | 'outfits'
   | 'inventory'
   | 'notes';
 
@@ -41,6 +42,9 @@ const DROP_ORDER: SectionKey[] = [
   'notes',
   'inventory',
   'conditions',
+  // Between a condition note and who is present: an outfit is more useful to the
+  // narrator than a condition, less load-bearing than the cast list.
+  'outfits',
   'away',
   'weather',
   'present',
@@ -118,6 +122,10 @@ function collect(state: WorldState): Section[] {
 
   add('conditions', renderConditions(state.conditions));
 
+  // What everyone is wearing. Sits after `conditions` because the two are the same kind
+  // of fact — a short note about a named character — and a narrator reads them together.
+  add('outfits', renderOutfits(state.outfits));
+
   // Notes are whole sentences, so they get their own lines rather than being
   // comma-joined into a fragment.
   const notes = (state.notes ?? []).map((note) => note.trim()).filter((note) => note.length > 0);
@@ -146,6 +154,17 @@ function renderConditions(conditions: Record<string, string> | undefined): strin
 
   if (entries.length === 0) return '';
   return `Conditions: ${entries.map(([name, condition]) => `${name} (${condition})`).join('; ')}`;
+}
+
+/** Sorted by name, for the same reason as `renderConditions`. */
+function renderOutfits(outfits: Record<string, string> | undefined): string {
+  const entries = Object.entries(outfits ?? {})
+    .map(([name, outfit]) => [name.trim(), outfit.trim()] as const)
+    .filter(([name, outfit]) => name.length > 0 && outfit.length > 0)
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+
+  if (entries.length === 0) return '';
+  return `Outfits: ${entries.map(([name, outfit]) => `${name}: ${outfit}`).join('; ')}`;
 }
 
 /**

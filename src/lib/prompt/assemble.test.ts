@@ -122,3 +122,36 @@ describe('stableStringify', () => {
     expect(stableStringify([2, 1])).toBe('[2,1]');
   });
 });
+
+/**
+ * A turn is not always "answer the reader". `continue` has no user text at all — the
+ * last thing in the conversation is the assistant turn being carried forward — and
+ * `impersonate` asks for the reader's own next line. Both used to send an empty user
+ * message, which some providers reject outright and others read as a blank prompt.
+ */
+describe('assemble: mode instructions and empty tails', () => {
+  test('omits the user message when there is none, rather than pushing it empty', () => {
+    const out = build({ ...base, history: [u1, a1], tail: { userMessage: '' } });
+    expect(out.messages.some((m) => m.role === 'user' && m.content === '')).toBe(false);
+    // The history's own user turn is still there; only the tail's empty one is gone.
+    expect(out.messages.filter((m) => m.role === 'user')).toHaveLength(1);
+  });
+
+  test('places the mode instruction after the author note and before the user message', () => {
+    const out = build({
+      ...base,
+      history: [u1],
+      tail: { authorsNote: 'NOTE', instruction: 'INSTRUCTION', userMessage: 'hello' },
+    });
+    const contents = out.messages.map((m) => m.content);
+    expect(contents.indexOf('INSTRUCTION')).toBe(contents.indexOf('NOTE') + 1);
+    expect(contents.indexOf('hello')).toBe(contents.indexOf('INSTRUCTION') + 1);
+  });
+
+  test('a turn with no user message keeps the instruction in the tail', () => {
+    // The `continue` shape: instruction present, user text absent. The instruction must
+    // survive on its own or the model has nothing telling it what was asked for.
+    const out = build({ ...base, history: [u1, a1], tail: { instruction: 'INSTRUCTION', userMessage: '' } });
+    expect(out.messages[out.messages.length - 1].content).toBe('INSTRUCTION');
+  });
+});

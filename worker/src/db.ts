@@ -42,6 +42,8 @@ export interface MessageRow {
   tokens: number | null;
   cached_tokens: number | null;
   cost_usd: number | null;
+  /** Who wrote this assistant row; null means the chat's own character. */
+  speaker: string | null;
   created_at: number;
 }
 

@@ -13,9 +13,11 @@ import { dynamicMacrosIn, substituteHead, substituteTail } from '../../src/lib/p
 import { renderStateBlock } from '../../src/lib/prompt/stateBlock';
 import { recall } from './memory/recall';
 import { loadState } from './state/update';
-import { loadBranchRows, walkPath } from './branch';
+import { loadPathTail, type BranchRow } from './branch';
+import { loadCast, type CastRow } from './cast';
 import { asNumber } from '../../src/lib/json';
 import type { Frame } from './frame';
+import type { Role } from '../../src/lib/prompt/types';
 
 export { type Frame };
 
@@ -67,33 +69,94 @@ export async function buildPrompt(
   // as the tail instead. Inferring it from the last row would turn any orphan user row
   // (from a turn that failed before the provider answered) into two consecutive user
   // turns, which providers reject.
-  const path = walkPath(await loadBranchRows(env, chat.id));
-
-  // The cut is by the row's own seq: along a path, seq strictly increases, so everything
-  // written before the new user message is history and the message itself is not.
+  //
+  // BOUNDED, and that is the point. This used to be `loadPath`, which walks the whole
+  // conversation and then throws away everything before `window_start_seq` — so a turn on
+  // a 2,000-message chat read 2,000 rows to send perhaps 60. The cost was quadratic in
+  // conversation length on the hottest path in the app, and D1 bills row reads.
+  //
+  // The tail is the right set to load, because the persisted window start is held FIXED
+  // while the window grows and only re-anchors when the budget is blown. That invariant
+  // is what bounds the distance from `window_start_seq` to the tail: it is at most one
+  // budget's worth of tokens, so a count derived from the budget is a real bound rather
+  // than a guess. The floor keeps short chats whole and the ceiling keeps a single huge
+  // message from being dropped — `computeWindowStart` has to SEE the message that does
+  // not fit in order to decide where to re-anchor.
   const cutoff = options.userSeq === null ? null : options.userSeq;
-  const results = (cutoff === null ? path : path.filter((row) => row.seq < cutoff)).map(
-    (row) => ({
-      seq: row.seq,
-      role: row.role,
-      content: row.content,
-      content_tokens: row.content_tokens,
-    }),
-  );
 
   // The budget is expressed in real prompt tokens, but `content_tokens` is a local
   // estimate with a per-model bias. Applying the stored factor keeps the budget honest
   // for a model whose tokenizer differs from the estimator.
   const calibration = await loadCalibration(env, settings.model);
 
-  const windowStart = computeWindowStart(
-    results.map((row) => ({
+  // The history budget is what is LEFT of the context window after everything that is not
+  // history. Passing the whole budget here was the bug the 32k test caught: the window
+  // held `contextBudget` worth of messages while the card, the lorebook, the memory
+  // block, the state block and the authors note also rode along, so the assembled prompt
+  // ran over the configured size and the provider reported 34,237 tokens against a 32,000
+  // budget.
+  //
+  // The head is measured exactly — it is the same text every turn, and it is the part
+  // that cannot be dropped. The tail is RESERVED rather than measured, because it is
+  // assembled after the window is chosen and its size is not known yet; the reservation
+  // covers the memory block, the state block, the lore block, the notes and the reply.
+  const headTokens = estimateChatTokens(headMessages(card, personaRow, settings));
+  const historyBudget = Math.max(
+    MIN_HISTORY_BUDGET,
+    settings.contextBudget - headTokens - TAIL_RESERVE_TOKENS,
+  );
+
+  const readWindow = (rows: BranchRow[]): Array<{
+    seq: number;
+    role: Role;
+    content: string;
+    content_tokens: number | null;
+    speaker: string | null;
+  }> => {
+    const usable = cutoff === null ? rows : rows.filter((row) => row.seq < cutoff);
+    return usable.map((row) => ({
+      seq: row.seq,
+      role: row.role,
+      content: row.content,
+      content_tokens: row.content_tokens,
+      speaker: row.speaker,
+    }));
+  };
+
+  let limit = promptWindowLimit(historyBudget, calibration);
+  let loaded = await loadPathTail(env, chat.id, limit, null);
+  let results = readWindow(loaded);
+
+  const entries = (rows: typeof results) =>
+    rows.map((row) => ({
       seq: row.seq,
       tokens: applyCalibration(row.content_tokens ?? estimateTokens(row.content), calibration),
-    })),
-    chat.window_start_seq,
-    settings.contextBudget,
-  );
+    }));
+
+  let windowStart = computeWindowStart(entries(results), chat.window_start_seq, historyBudget);
+
+  // The window wants rows older than the oldest one loaded, which means the load was too
+  // small. Doubling ONCE is enough in every case the invariant above allows, and a loop
+  // here would turn a wrong budget into an unbounded read — the exact failure this is
+  // fixing. `loaded.length === limit` is what distinguishes "there is more to read" from
+  // "that is the whole chat".
+  if (windowStart < (results[0]?.seq ?? Infinity) && loaded.length === limit) {
+    limit *= 2;
+    loaded = await loadPathTail(env, chat.id, limit, null);
+    results = readWindow(loaded);
+    windowStart = computeWindowStart(entries(results), chat.window_start_seq, historyBudget);
+    if (windowStart < (results[0]?.seq ?? Infinity) && loaded.length === limit) {
+      // Still short. The prompt is still correct — it is windowed to what was loaded —
+      // but the window start is older than the data, which means the budget arithmetic
+      // does not match the conversation. Worth saying out loud rather than hiding.
+      console.warn(
+        `[window] chat=${chat.id} window_start_seq=${chat.window_start_seq} is older than ` +
+          `the oldest of ${loaded.length} loaded rows (seq ${results[0]?.seq}); the context ` +
+          `budget and the stored calibration disagree.`,
+      );
+    }
+  }
+
   if (windowStart !== chat.window_start_seq) {
     // Persisted once per re-anchor, not per turn — the sawtooth is the point.
     await env.DB.prepare('UPDATE chats SET window_start_seq = ? WHERE id = ?')
@@ -101,10 +164,21 @@ export async function buildPrompt(
       .run();
   }
 
+  // The cast, loaded once and used for two things: the tail block below, and the
+  // `includeNames` prefixing here. A chat with no cast rows still has one — the chat's
+  // own character — so the common single-character scene takes the same path.
+  const cast = await loadCast(env, chat.id);
+  const multiSpeaker = cast.length > 1;
+
+  // `includeNames` is the preset's lever for a scene with several speakers: prefix each
+  // history row with who wrote it, so the model can tell who said what in a long script.
+  // It was parsed, plumbed through `EffectiveSettings` and exposed in the preset editor
+  // long before anything consumed it.
+  const includeNames = settings.includeNames;
+
   const history = results
     .filter((row) => row.seq >= windowStart)
-    .map((row) => ({ role: row.role, content: row.content }));
-
+    .map((row) => ({ role: row.role, content: row.content, speaker: row.speaker }));
   // Recall is driven by whatever the user just said. In the non-send modes there is no
   // new user text, so the last thing in the conversation stands in for it.
   const recallQuery = options.userContent || history[history.length - 1]?.content || '';
@@ -115,6 +189,14 @@ export async function buildPrompt(
     buildMemoryBlock(env, chat.id, recallQuery, calibration),
     buildStateBlock(env, chat.id, calibration),
   ]);
+
+  // The cast block, when there is more than one speaker. It names the SHOWN name — the
+  // CCv3 nickname, which is what the transcript calls the character — rather than the
+  // card's title, which is often a dated label.
+  //
+  // Tail, not head: a cast grows during a scene, and a head block that changed would
+  // rewrite the cached prefix every time someone was introduced.
+  const castBlock = multiSpeaker ? renderCastBlock(cast, personaRow?.name ?? null) : '';
 
   // Keyword-triggered lorebook entries. Matched against the last `scanDepth` messages
   // and rendered into the TAIL — an entry firing on turn 12 must not rewrite the prefix
@@ -186,13 +268,17 @@ export async function buildPrompt(
     })),
     history: history.map((row) => ({
       role: row.role,
-      content: substituteHead(row.content, macroContext),
+      content: substituteHead(
+        includeNames ? withSpeakerName(row, character.name, personaRow?.name ?? null) : row.content,
+        macroContext,
+      ),
     })),
     tail: {
       // The tail gets both tiers: it is after `tailStart`, so it cannot disturb the
       // cached prefix however much it changes.
       memoryBlock: substituteTail(memoryBlock, macroContext),
       stateBlock: substituteTail(stateBlock, macroContext),
+      castBlock: substituteTail(castBlock, macroContext),
       loreBlock: substituteTail(loreBlock, macroContext),
       authorsNote: substituteTail(settings.authorsNote, macroContext),
       // Precedence, per the CCv2/v3 spec: the CARD's post-history instructions replace
@@ -204,6 +290,17 @@ export async function buildPrompt(
       // extend the user's jailbreak rather than replace it.
       postHistoryInstructions: substituteTail(
         applyOriginal(card.postHistoryInstructions, settings.presetPostHistory || settings.authorsNote),
+        macroContext,
+      ),
+      // The mode's own instruction — "write the next message", "write their next line".
+      // It sat in `PromptOptions` unwired until now, so `continue` and `impersonate`
+      // were sending nothing that told the model what they were asking for.
+      //
+      // The preset's reply-length rule rides in the same slot and BEFORE the mode's
+      // instruction, so a mode that is more specific about what to write still has the
+      // last word. Both are per-turn state, so neither can disturb the cached prefix.
+      instruction: substituteTail(
+        [settings.responseLengthRule, options.tailExtra].filter((part) => part.length > 0).join('\n'),
         macroContext,
       ),
       userMessage: substituteTail(options.userContent, macroContext),
@@ -226,8 +323,143 @@ export async function buildPrompt(
   return assembled;
 }
 
+/**
+ * Tokens reserved for everything that is not history.
+ *
+ * The tail is assembled AFTER the window is chosen, so its size cannot be measured when
+ * the window is decided — it has to be reserved. The number covers the memory block
+ * (800), the state block (800), a matched lore block (up to the preset's budget), the
+ * authors note, and the reply the model is about to write.
+ *
+ * Deliberately generous. Reserving too much costs a slightly shorter history and a
+ * slightly less warm cache; reserving too little is what produced a prompt that ran over
+ * the configured context and would eventually be rejected outright by a provider with a
+ * hard limit.
+ */
+const TAIL_RESERVE_TOKENS = 3000;
+
+/** Even an enormous card must leave room for a conversation. */
+const MIN_HISTORY_BUDGET = 2048;
+
+/**
+ * The head, as wire messages.
+ *
+ * A second construction of the same text `assemble` will build, because the budget has to
+ * be decided before `assemble` runs. It mirrors the head order exactly — system prompt,
+ * character, mesExample, persona, lorebook — so the measurement matches what is sent.
+ * The lorebook here is the always-on set only; keyword-triggered entries land in the tail
+ * and are covered by the reservation.
+ */
+function headMessages(
+  card: CharacterCardJson,
+  persona: { name: string; description: string | null } | null,
+  settings: EffectiveSettings,
+): Array<{ role: string; content: string }> {
+  const out: Array<{ role: string; content: string }> = [];
+  const push = (content: string | undefined): void => {
+    if (content) out.push({ role: 'system', content });
+  };
+
+  push(card.systemPrompt || settings.presetSystemPrompt || settings.systemPrompt);
+
+  const lines: string[] = [];
+  if (card.name.length > 0) lines.push(`Name: ${card.name}`);
+  if (card.description.length > 0) lines.push(`Description: ${card.description}`);
+  if (card.personality.length > 0) lines.push(`Personality: ${card.personality}`);
+  if (card.scenario.length > 0) lines.push(`Scenario: ${card.scenario}`);
+  push(lines.join('\n'));
+
+  push(card.mesExample);
+
+  if (persona) {
+    const personaLines: string[] = [];
+    if (persona.name.length > 0) personaLines.push(`Name: ${persona.name}`);
+    if (persona.description) personaLines.push(`Description: ${persona.description}`);
+    push(personaLines.join('\n'));
+  }
+
+  for (const entry of alwaysOnLore(parseLorebook(card.characterBook))) push(entry.content);
+
+  return out;
+}
+
 /** Tokens reserved for the memory block, taken out of the history budget. */
 const MEMORY_BLOCK_TOKENS = 800;
+
+/**
+ * How many history rows a bounded walk should read for this budget.
+ *
+ * The budget is a token count, so it has to become a row count somehow. Rather than
+ * assume an average message size — which is wrong in both directions, badly, for a scene
+ * of one-word exchanges and for a scene of long paragraphs — the conversion uses the
+ * floor and ceiling to bracket the answer and lets the re-anchor check in `buildPrompt`
+ * correct it. A row is counted as at least 40 tokens, which is on the low side for prose
+ * and therefore over-reads rather than under-reads.
+ *
+ * `MIN` is what keeps a short chat whole: below it, reading the tail IS reading the chat.
+ * `MAX` is the ceiling that stops a chat with tiny messages from reading thousands of
+ * rows to fill a budget they will never fill.
+ */
+const MIN_WINDOW_ROWS = 40;
+const MAX_WINDOW_ROWS = 400;
+const MIN_TOKENS_PER_ROW = 40;
+
+function promptWindowLimit(contextBudget: number, calibration: number): number {
+  const rows = Math.ceil((contextBudget * Math.max(calibration, 0.5)) / MIN_TOKENS_PER_ROW);
+  return Math.min(MAX_WINDOW_ROWS, Math.max(MIN_WINDOW_ROWS, rows));
+}
+
+/**
+ * The `Speakers in this scene:` block.
+ *
+ * Tells the narrator there is more than one voice and how to write them. The script form
+ * is the contract `speakersIn` and `splitSpeakers` parse, so the instruction and the
+ * parser are one design: a reply written any other way renders as a single speaker, which
+ * is a correct degradation rather than a failure.
+ *
+ * Each member is listed by its SHOWN name — the CCv3 nickname, which is what the
+ * transcript renders — because `loadCast` already resolved it from the card. The reader is
+ * named last and marked as the reader, because the narrator must NOT write their lines: a
+ * model that thinks it controls the reader writes the story for them.
+ */
+function renderCastBlock(cast: CastRow[], personaName: string | null): string {
+  const lines = ['Speakers in this scene:'];
+  for (const member of cast) {
+    lines.push(
+      member.is_primary === 1
+        ? `- ${member.name} (the character you write)`
+        : `- ${member.name} (a supporting character)`,
+    );
+  }
+  lines.push(`- ${personaName ?? 'the reader'} (the reader)`);
+  lines.push(
+    "Write the reply as a script: each speaker's name on its own line, then their words " +
+      'and actions. Write only the characters you control. Give each speaker a distinct ' +
+      'voice and let them talk to each other, not only to the reader.',
+  );
+  return lines.join('\n');
+}
+
+/**
+ * Prefixes a history row with who wrote it, for `includeNames`.
+ *
+ * The prefix has to be STABLE — the same row must render the same text on every turn or
+ * the cached prefix changes and the whole cache is lost. That is why the speaker is read
+ * from the row rather than inferred from the current cast: the cast grows, and inferring
+ * would silently re-label old turns.
+ *
+ * A row with no stored speaker is the chat's own character, which is every row in a
+ * single-character scene.
+ */
+function withSpeakerName(
+  row: { role: Role; content: string; speaker: string | null },
+  cardName: string,
+  personaName: string | null,
+): string {
+  if (row.role === 'user') return `${personaName ?? 'User'}: ${row.content}`;
+  if (row.role === 'system') return row.content;
+  return `${row.speaker ?? cardName}: ${row.content}`;
+}
 
 /**
  * Renders the world-state document for the prompt TAIL.

@@ -1,4 +1,8 @@
 import { badRequest, json, notFound, readJson } from '../http';
+import { recall } from './recall';
+import { renderMemoryBlock } from '../../../src/lib/prompt/memoryBlock';
+import { estimateTokens } from '../../../src/lib/tokenEstimate';
+import type { RecallHit } from '../../../src/lib/memoryTypes';
 
 /**
  * HTTP surface for the memory viewer (`src/routes/Memory.tsx`).
@@ -41,7 +45,7 @@ export async function listMemory(env: Env, chatId: string): Promise<Response> {
     .first<{ id: string }>();
   if (!chat) return notFound('chat not found');
 
-  const [summaries, facts] = await Promise.all([
+  const [summaries, facts, lastUser] = await Promise.all([
     // Newest coverage first: the arc/scene you just made is the one you want to read.
     env.DB.prepare(
       `SELECT id, tier, covers_from, covers_to, content, tokens, created_at
@@ -55,9 +59,54 @@ export async function listMemory(env: Env, chatId: string): Promise<Response> {
     )
       .bind(chatId)
       .all<FactRow>(),
+    // What recall would be run against: the reader's most recent line. The same query
+    // `buildPrompt` uses for the modes that do not carry new text.
+    env.DB.prepare(
+      `SELECT content FROM messages
+        WHERE chat_id = ? AND role = 'user'
+        ORDER BY seq DESC LIMIT 1`,
+    )
+      .bind(chatId)
+      .first<{ content: string }>(),
   ]);
 
-  return json({ summaries: summaries.results, facts: facts.results });
+  // The same call `buildPrompt` makes, with the same query and the same summary set, so
+  // what this shows is what the narrator was actually given rather than a re-derivation of
+  // it. Failures degrade to an empty block: the viewer must not 500 because recall could
+  // not run.
+  const query = lastUser?.content ?? '';
+  let recalled: RecallHit[] = [];
+  let rendered = '';
+  try {
+    recalled = query.length > 0 ? await recall(env, chatId, query, 8) : [];
+    rendered = renderMemoryBlock(
+      {
+        // The same newest-three-by-coverage set the prompt builder takes, so the block is
+        // the block rather than a recall-only excerpt of it.
+        summaries: [...summaries.results]
+          .sort((a, b) => b.covers_to - a.covers_to)
+          .slice(0, 3)
+          .map((row) => ({
+            kind: 'summary' as const,
+            refId: row.id,
+            text: row.content,
+            score: 0,
+          })),
+        facts: recalled.filter((hit) => hit.kind === 'fact'),
+        recalled: recalled.filter((hit) => hit.kind !== 'fact'),
+      },
+      800,
+      estimateTokens,
+    );
+  } catch (error) {
+    console.warn(`[memory] viewer recall failed for chat=${chatId}: ${messageOf(error)}`);
+  }
+
+  return json({ summaries: summaries.results, facts: facts.results, recalled, rendered, query });
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**

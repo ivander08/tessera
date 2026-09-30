@@ -23,6 +23,8 @@ export interface ParsedFrame {
   text?: string;
   usage?: NormalizedUsage;
   error?: string;
+  /** The provider's stop reason, when it reported one. `'length'` means the cap was hit. */
+  finishReason?: string;
 }
 
 export interface Provider {

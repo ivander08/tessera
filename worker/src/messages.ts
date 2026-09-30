@@ -1,8 +1,9 @@
 import type { Role } from '../../src/lib/prompt/types';
 import { badRequest, json, notFound, readJson } from './http';
 import { estimateTokens as estimate } from '../../src/lib/tokenEstimate';
-import { loadBranchRows, loadPath } from './branch';
+import { loadPath } from './branch';
 import type { BranchRow } from './branch';
+import { BRANCH_COLUMNS } from './branch';
 
 /**
  * Message lifecycle: swipes, edit, delete, regenerate, impersonate, continue.
@@ -51,8 +52,61 @@ async function loadMessage(env: Env, chatId: string, id: string): Promise<Messag
 
 /** Every version of one position: the rows answering the same parent. */
 async function siblingsOf(env: Env, chatId: string, parentId: string | null): Promise<BranchRow[]> {
-  const rows = await loadBranchRows(env, chatId);
-  return rows.filter((row) => (row.parent_id ?? null) === parentId);
+  // Targeted rather than a scan of the chat. This runs on every swipe, and a chat with a
+  // long history should not pay for its length to move one position.
+  if (parentId === null) {
+    const { results } = await env.DB.prepare(
+      `SELECT ${BRANCH_COLUMNS} FROM messages
+        WHERE chat_id = ?1 AND parent_id IS NULL ORDER BY seq`,
+    )
+      .bind(chatId)
+      .all<BranchRow>();
+    return results;
+  }
+
+  const { results } = await env.DB.prepare(
+    `SELECT ${BRANCH_COLUMNS} FROM messages
+      WHERE chat_id = ?1 AND parent_id = ?2 ORDER BY seq`,
+  )
+    .bind(chatId, parentId)
+    .all<BranchRow>();
+  return results;
+}
+
+/**
+ * Deactivates every active row at one position.
+ *
+ * Two messages are versions of the same position exactly when they share a parent, so the
+ * position is the parent — no id list needed. That matters: the previous version bound one
+ * parameter per sibling, and D1 rejects a statement with more than 100. A position with
+ * 101 versions would have failed to swipe, regenerate or delete, and the failure would
+ * look like a random 500 rather than a limit.
+ *
+ * `IS ?` rather than `= ?` because the opening's parent is NULL, and `= NULL` matches
+ * nothing. A bound NULL works with `IS`, which is what lets one statement cover the root.
+ *
+ * Callers pass a statement rather than awaiting one so this can join their batch.
+ */
+function deactivatePosition(env: Env, chatId: string, parentId: string | null) {
+  return env.DB.prepare(
+    `UPDATE messages SET active = 0
+      WHERE chat_id = ?1 AND parent_id IS ?2 AND active = 1`,
+  ).bind(chatId, parentId);
+}
+
+/**
+ * Takes one row out of the transcript without deleting it.
+ *
+ * Used when a turn fails after the reader's message is already written: the text is theirs
+ * and must survive, but an unreplied row on the visible path becomes the parent of the next
+ * turn, which puts two `user` messages in a row in front of the model.
+ *
+ * Deactivated, never removed — the same reasoning as every other lifecycle operation here.
+ */
+async function abandonMessage(env: Env, chatId: string, id: string): Promise<void> {
+  await env.DB.prepare('UPDATE messages SET active = 0 WHERE id = ? AND chat_id = ?')
+    .bind(id, chatId)
+    .run();
 }
 
 /**
@@ -67,32 +121,24 @@ async function addVersion(
   parentId: string | null,
   role: Role,
   content: string,
+  speaker: string | null = null,
 ): Promise<string> {
   const id = crypto.randomUUID();
   const now = Date.now();
-  const siblings = await siblingsOf(env, chatId, parentId);
-
-  const statements = [
-    env.DB.prepare(
-      `INSERT INTO messages (id, chat_id, parent_id, role, content, content_tokens, active, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
-    ).bind(id, chatId, parentId, role, content, estimate(content), now),
-    env.DB.prepare('UPDATE chats SET updated_at = ? WHERE id = ?').bind(now, chatId),
-  ];
 
   // Deactivate the other versions of this position. Doing it here rather than at the
   // call site keeps the one-active-child invariant in a single place.
-  if (siblings.length > 0) {
-    statements.unshift(
-      env.DB.prepare(
-        `UPDATE messages SET active = 0 WHERE chat_id = ? AND id IN (${siblings
-          .map(() => '?')
-          .join(', ')})`,
-      ).bind(chatId, ...siblings.map((row) => row.id)),
-    );
-  }
-
-  await env.DB.batch(statements);
+  //
+  // The deactivation runs BEFORE the insert in the same batch, so it cannot switch off
+  // the row just added.
+  await env.DB.batch([
+    deactivatePosition(env, chatId, parentId),
+    env.DB.prepare(
+      `INSERT INTO messages (id, chat_id, parent_id, role, content, content_tokens, active, speaker, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+    ).bind(id, chatId, parentId, role, content, estimate(content), speaker, now),
+    env.DB.prepare('UPDATE chats SET updated_at = ? WHERE id = ?').bind(now, chatId),
+  ]);
   return id;
 }
 
@@ -126,12 +172,11 @@ export async function swipeMessage(env: Env, req: Request): Promise<Response> {
   // Activating a version is the whole operation. Its continuation — if it has one — is
   // still in the table and becomes reachable again the moment this row is the active
   // child, which is what makes swiping back restore the messages that followed.
+  //
+  // The deactivation is by position, not by id list: `siblings.length` parameters would
+  // breach D1's 100-parameter cap on a heavily regenerated position.
   await env.DB.batch([
-    env.DB.prepare(
-      `UPDATE messages SET active = 0 WHERE chat_id = ? AND id IN (${siblings
-        .map(() => '?')
-        .join(', ')})`,
-    ).bind(body.chatId, ...siblings.map((row) => row.id)),
+    deactivatePosition(env, body.chatId, current.parent_id ?? null),
     env.DB.prepare('UPDATE messages SET active = 1 WHERE id = ?').bind(chosen.id),
   ]);
 
@@ -193,14 +238,9 @@ export async function deleteMessage(env: Env, req: Request): Promise<Response> {
   const message = await loadMessage(env, body.chatId, body.id);
   if (!message) return notFound('message not found');
 
-  const siblings = await siblingsOf(env, body.chatId, message.parent_id ?? null);
-  await env.DB.prepare(
-    `UPDATE messages SET active = 0 WHERE chat_id = ? AND id IN (${siblings
-      .map(() => '?')
-      .join(', ')})`,
-  )
-    .bind(body.chatId, ...siblings.map((row) => row.id))
-    .run();
+  // Deactivating every version is what empties the position, so the path walk stops there
+  // and the message leaves the transcript with everything after it.
+  await deactivatePosition(env, body.chatId, message.parent_id ?? null).run();
 
   // The position is empty now, so the UI drops it rather than leaving a blank slot.
   return json({ ok: true, groupEmpty: true });
@@ -225,11 +265,12 @@ export async function addAlternativeRow(
   chatId: string,
   targetId: string,
   content: string,
+  speaker: string | null = null,
 ): Promise<string> {
   const message = await loadMessage(env, chatId, targetId);
   if (!message) throw new Error('message not found');
 
-  return await addVersion(env, chatId, message.parent_id ?? null, message.role, content);
+  return await addVersion(env, chatId, message.parent_id ?? null, message.role, content, speaker);
 }
 
 /** Appends an alternative to a position without changing which one is active. */
@@ -269,5 +310,5 @@ export async function lastActiveMessage(env: Env, chatId: string): Promise<Messa
   return await loadMessage(env, chatId, tail.id);
 }
 
-export { loadMessage };
+export { loadMessage, abandonMessage };
 export type { MessageRow };

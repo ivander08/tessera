@@ -47,6 +47,10 @@ scratch/
 tmp/
 *.local.md
 
+# Database backups — contain message history and encrypted provider keys.
+backup-*/
+*.sql.dump
+
 # Vite
 dist-ssr
 *.local

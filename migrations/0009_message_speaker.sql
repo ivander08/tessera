@@ -1,0 +1,12 @@
+-- Who wrote this assistant row.
+--
+-- Null means "the chat's own character", which is every row written before casts existed
+-- and every row in a single-character scene. Storing the NAME rather than a cast id is
+-- deliberate: a cast member can be promoted to a real character and renamed, and the
+-- transcript should keep saying what it said.
+--
+-- This is also what makes `includeNames` cache-safe. Prefixing a history row with its
+-- speaker has to render the SAME text on every turn or the cached prefix changes — so the
+-- speaker has to be read from the row rather than inferred from the current cast, which
+-- changes as the scene grows.
+ALTER TABLE messages ADD COLUMN speaker TEXT;

@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { AppBar } from '../components/AppBar';
+import { AppBar, BackLink, CrumbSep } from '../components/AppBar';
 import { apiJson } from '../lib/api';
 import { messageOf, useAsync } from '../lib/hooks';
 import { parseFf5 } from '../lib/presets/ff5';
@@ -158,7 +158,15 @@ export default function Presets() {
 
   return (
     <>
-      <AppBar title={<span className="bar-title">Presets</span>} />
+      <AppBar
+        lead={<BackLink to="/" label="Scenes" />}
+        title={
+          <>
+            <CrumbSep />
+            <span className="bar-title">Presets</span>
+          </>
+        }
+      />
 
       <main className="sheet">
       <div className="sheet-head">
@@ -273,7 +281,7 @@ export default function Presets() {
                 {/* Wrapped rather than ellipsised: the line carries five facts and the
                     last one is the one that tells you what is inside the preset. */}
                 <p className="row-sub" style={{ marginTop: 7, whiteSpace: 'normal' }}>
-                  <span className={`tag ${preset.kind === 'textgen' ? 'brass' : preset.kind === 'chat' ? 'verdigris' : ''}`}>
+                  <span className={`tag ${preset.kind === 'textgen' ? 'accent' : preset.kind === 'chat' ? 'verdigris' : ''}`}>
                     {preset.kind}
                   </span>{' '}
                   {preset.knob_count} knob{preset.knob_count === 1 ? '' : 's'}

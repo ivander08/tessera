@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { DEFAULT_PRESET_CONFIG, parsePresetConfig } from './presetConfig';
+import { DEFAULT_PRESET_CONFIG, parsePresetConfig, type PresetConfig } from './presetConfig';
 
 /**
  * A stored preset config is untrusted input: it may have been written by an older build,
@@ -132,7 +132,7 @@ describe('parsePresetConfig — a complete config', () => {
   });
 
   test('a round trip through JSON preserves a fully specified config', () => {
-    const full = {
+    const full: PresetConfig = {
       provider: 'openrouter',
       model: 'anthropic/claude-sonnet-4',
       systemPrompt: 'Write in present tense.',
@@ -149,6 +149,8 @@ describe('parsePresetConfig — a complete config', () => {
       loreScanDepth: 6,
       loreTokenBudget: 2048,
       loreRecursive: true,
+      responseLength: 'medium',
+      responseLengthCustom: '',
     };
     expect(parsePresetConfig(JSON.stringify(full))).toEqual(full);
   });

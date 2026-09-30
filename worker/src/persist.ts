@@ -39,13 +39,23 @@ export async function persistUserMessage(
   return { id, seq: row?.seq ?? 0 };
 }
 
+/**
+ * Writes an assistant row and returns its id.
+ *
+ * `speaker` names who wrote it, and is null for the chat's own character — which is every
+ * row in a single-character scene and every row written before casts existed. A group
+ * reply is also null: it contains several speakers and the CONTENT carries the
+ * attribution, so a single name on the row would be a half-truth. The column is written
+ * only when it is informative, and `includeNames` falls back to the chat's character for
+ * the null case.
+ */
 export async function persistAssistant(
   env: Env,
   chatId: string,
   content: string,
   usage: NormalizedUsage | null,
   costUsd: number | null,
-  options: { role?: Role; parentId?: string | null } = {},
+  options: { role?: Role; parentId?: string | null; speaker?: string | null } = {},
 ): Promise<string> {
   const id = crypto.randomUUID();
   const now = Date.now();
@@ -57,8 +67,8 @@ export async function persistAssistant(
   await env.DB.prepare(
     `INSERT INTO messages
        (id, chat_id, parent_id, role, content, content_tokens, prompt_tokens,
-        completion_tokens, cached_tokens, cache_write_tokens, cost_usd, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        completion_tokens, cached_tokens, cache_write_tokens, cost_usd, speaker, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
@@ -72,6 +82,7 @@ export async function persistAssistant(
       usage?.cachedTokens ?? null,
       usage?.cacheWriteTokens ?? null,
       costUsd,
+      options.speaker ?? null,
       now,
     )
     .run();

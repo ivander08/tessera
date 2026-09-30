@@ -38,6 +38,18 @@ export interface WorldState {
   away?: Record<string, string>;
   /** Character name -> short condition, e.g. `{ Ada: 'bleeding' }`. */
   conditions?: Record<string, string>;
+  /**
+   * Character name -> what they are wearing, e.g.
+   * `{ Sydney: 'school uniform, blazer open' }`.
+   *
+   * A map keyed by name rather than a list, because clothing belongs to a person: a flat
+   * list cannot say whose coat is whose, and "a coat" is not information.
+   *
+   * Like `conditions`, this replaces wholesale rather than merging — the cheap model is
+   * told to include a character only when their clothing is established or changes, and a
+   * merge would make it impossible to clear one.
+   */
+  outfits?: Record<string, string>;
   notes?: string[];
 }
 
@@ -54,6 +66,18 @@ const NOT_A_NAME: Record<string, true> = {
   they: true, someone: true, anyone: true, everyone: true, nobody: true, user: true,
   'the user': true, myself: true, yourself: true,
 };
+
+/**
+ * Whether a word can be a character's name.
+ *
+ * Exported because speaker detection in a reply needs exactly this judgement, and a second
+ * copy of the list would be a second thing to keep in step. A pronoun is never a name in
+ * either context — the narrator writing `You: hello` in a script is the same mistake as
+ * `present: ["me"]`, and it produces the same unusable result.
+ */
+export function isName(value: string): boolean {
+  return NOT_A_NAME[value.trim().toLowerCase()] !== true;
+}
 
 /**
  * Frozen so a caller cannot mutate the shared empty document by accident. Copy it
@@ -202,9 +226,68 @@ export function validatePatch(current: WorldState, patch: unknown): ValidationRe
         break;
       }
 
+      case 'outfits': {
+        if (value === null) {
+          delete next.outfits;
+          break;
+        }
+        // Same shape as `conditions`: an object of names to strings. Empty-string values
+        // are KEPT here and dropped at render time by `renderOutfits`, exactly as
+        // `renderAway` and `renderConditions` do — making `stringMap` drop them would
+        // change those two as well.
+        const map = stringMap(value);
+        if (!map) {
+          return {
+            ok: false,
+            reason: `"outfits" must be an object with string values or null, got ${describe(value)}`,
+          };
+        }
+        next.outfits = map;
+        break;
+      }
+
       default:
         return { ok: false, reason: `unknown state key "${key}"` };
     }
+  }
+
+  // Last, once every key has been applied: a condition on someone who has LEFT is a
+  // contradiction the document must not carry.
+  //
+  // Measured on a real 157-turn chat: the final state had `present: []` and
+  // `away.Odile = "gone up the market lane"` while `conditions.Odile` still read
+  // "standing in the doorway, ledger under her arm, holding the door open". The narrator
+  // reads both lines in the tail and is told she is simultaneously gone and present.
+  //
+  // The cheap model updates `present`/`away` when someone leaves but has no reason to
+  // revisit their condition, so this cannot be left to the model — it is a structural
+  // inconsistency, and the same class of thing `present` vs `away` already resolves.
+  //
+  // A departure is what makes a condition stale, so the condition is DROPPED rather than
+  // rewritten: guessing what she is doing wherever she went is invention, and an absent
+  // condition is simply less information.
+  const present = new Set((next.present as string[] | undefined)?.map((name) => name.toLowerCase()) ?? []);
+  const awayNames = new Set(Object.keys((next.away as Record<string, string> | undefined) ?? {}).map((name) => name.toLowerCase()));
+  const conditions = next.conditions as Record<string, string> | undefined;
+  if (conditions) {
+    const kept: Record<string, string> = {};
+    let dropped = 0;
+    for (const [who, what] of Object.entries(conditions)) {
+      const key = who.toLowerCase();
+      // Only when the document has actually placed them elsewhere. Someone neither
+      // present nor away is unaccounted for, not gone, and their condition may still be
+      // current.
+      if (awayNames.has(key) && !present.has(key)) {
+        dropped += 1;
+        continue;
+      }
+      kept[who] = what;
+    }
+    if (dropped > 0) {
+      console.warn(`[state] dropped ${dropped} condition(s) for characters who have left`);
+    }
+    if (Object.keys(kept).length > 0) next.conditions = kept;
+    else delete next.conditions;
   }
 
   return { ok: true, next: next as WorldState };

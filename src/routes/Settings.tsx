@@ -263,7 +263,9 @@ export default function Settings() {
 
       <ThemeEditor value={theme} onChange={setTheme} />
 
-      <div className="flex items-center gap-3">
+      {/* 26px, matching the gap between the sections above it. The button was flush
+          against the Appearance panel once that panel gained its own spacing. */}
+      <div className="flex items-center gap-3" style={{ marginTop: 26 }}>
         <button
           type="button"
           onClick={() => void save()}

@@ -7,6 +7,7 @@ import { recall } from './recall';
 import { summarize } from './summarize';
 import { consolidate } from './consolidate';
 import { claim, enqueue, finish, recoverStale, start } from '../jobs';
+import { scheduleMemory, SUMMARY_EVERY } from './schedule';
 import type { JobRow } from '../jobs';
 import { createFact, listMemory, mutateMemory } from './api';
 import { putSetting } from '../db';
@@ -29,10 +30,33 @@ function migrationSql(name: string): string {
   return readFileSync(new URL(`../../../migrations/${name}`, import.meta.url), 'utf8');
 }
 
+/**
+ * Every migration, in order.
+ *
+ * This used to load only 0000 and 0001, which meant the harness could not run any code
+ * that touched `active`, `parent_id` or the walk — including `scheduleMemory`, the
+ * function that reads the visible path after every single turn. It went untested and
+ * shipped a query that read 776,000 rows on a 600-message chat and exhausted the D1 free
+ * tier. A harness that cannot run the code under test is worse than no harness, because
+ * it looks like coverage.
+ */
+const MIGRATIONS = [
+  '0000_init.sql',
+  '0001_memory.sql',
+  '0002_state.sql',
+  '0003_presets.sql',
+  '0004_swipes_presets.sql',
+  '0005_branching.sql',
+  '0006_walk_index.sql',
+  '0007_scene_setup.sql',
+  '0008_cast.sql',
+  '0009_message_speaker.sql',
+  '0011_message_state.sql',
+];
+
 function makeEnv(): { env: Env; db: Database; calls: Recorded[] } {
   const db = new Database(':memory:');
-  db.exec(migrationSql('0000_init.sql'));
-  db.exec(migrationSql('0001_memory.sql'));
+  for (const name of MIGRATIONS) db.exec(migrationSql(name));
 
   const calls: Recorded[] = [];
 
@@ -98,13 +122,31 @@ function seedChat(db: Database, id = 'chat-1'): string {
   return id;
 }
 
+/**
+ * Appends one visible message, parented to the previous one.
+ *
+ * Chaining matters: `parent_id` is the transcript's structure, and a row with no parent
+ * is an OPENING. A batch of rows all parented to NULL is not a conversation — the walk
+ * sees one message and stops. Tests that seeded that way were not testing the walk at
+ * all.
+ */
 function seedMessage(db: Database, chatId: string, content: string): number {
+  const parent = one<{ id: string }>(
+    db,
+    `SELECT m.id FROM messages m
+      WHERE m.chat_id = ?1 AND m.active = 1
+        AND NOT EXISTS (SELECT 1 FROM messages c
+                         WHERE c.chat_id = m.chat_id AND c.parent_id = m.id AND c.active = 1)
+      ORDER BY m.seq DESC LIMIT 1`,
+    chatId,
+  );
   const row = one<{ seq: number }>(
     db,
     `INSERT INTO messages (id, chat_id, parent_id, role, content, created_at)
-     VALUES (?, ?, NULL, 'assistant', ?, ?) RETURNING seq`,
+     VALUES (?, ?, ?, 'assistant', ?, ?) RETURNING seq`,
     crypto.randomUUID(),
     chatId,
+    parent?.id ?? null,
     content,
     Date.now(),
   );
@@ -460,6 +502,114 @@ describe('summarize', () => {
     await expect(summarize(env, chatId, 1, 5)).rejects.toThrow(/no messages/);
     expect(captured).toBeNull();
   });
+
+  describe('scene-shaped replies', () => {
+    /** Stubs one reply per call, so a retry is distinguishable from the first attempt. */
+    function stubReplies(replies: string[]): { calls: Array<Record<string, unknown>> } {
+      const calls: Array<Record<string, unknown>> = [];
+      let index = 0;
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        calls.push(body);
+        const content = replies[Math.min(index, replies.length - 1)];
+        index += 1;
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content } }],
+            usage: { prompt_tokens: 40, completion_tokens: 12 },
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        );
+      }) as unknown as typeof fetch;
+      return { calls };
+    }
+
+    function storedContent(db: Database, chatId: string): string {
+      const rows = allOf<{ content: string }>(
+        db,
+        'SELECT content FROM summaries WHERE chat_id = ?',
+        chatId,
+      );
+      expect(rows).toHaveLength(1);
+      return rows[0].content;
+    }
+
+    test('a reply that quotes the scene is retried, and the retry is what is stored', async () => {
+      const { env, db } = makeEnv();
+      const chatId = seedChat(db);
+      await configure(env);
+      seedMessage(db, chatId, 'Ada entered the cellar.');
+      seedMessage(db, chatId, 'The door locked behind her.');
+
+      const { calls } = stubReplies([
+        '"No," she says. "Not this way."',
+        'Ada entered the cellar and the door locked behind her.',
+      ]);
+
+      const summary = await summarize(env, chatId, 1, 2);
+
+      expect(calls).toHaveLength(2);
+      // The second call re-sends the transcript and adds the nudge, so the failure is
+      // addressed rather than merely repeated.
+      const retryUser = (calls[1].messages as Array<{ role: string; content: string }>).find(
+        (message) => message.role === 'user',
+      )?.content;
+      expect(retryUser).toContain('Ada entered the cellar.');
+      expect(retryUser).toContain('quoted the scene');
+
+      expect(summary.content).toBe('Ada entered the cellar and the door locked behind her.');
+      expect(storedContent(db, chatId)).toBe('Ada entered the cellar and the door locked behind her.');
+    });
+
+    test('a clean reply is not retried', async () => {
+      const { env, db } = makeEnv();
+      const chatId = seedChat(db);
+      await configure(env);
+      seedMessage(db, chatId, 'Ada entered the cellar.');
+      seedMessage(db, chatId, 'The door locked behind her.');
+
+      const { calls } = stubReplies(['Ada entered the cellar and the door locked behind her.']);
+
+      const summary = await summarize(env, chatId, 1, 2);
+
+      expect(calls).toHaveLength(1);
+      expect(summary.content).toBe('Ada entered the cellar and the door locked behind her.');
+    });
+
+    test('a retry that is also scene prose does not replace a usable first attempt', async () => {
+      // The retry is a second roll of the same dice. When it comes back just as wrong,
+      // paying for it and then throwing away the first answer would be strictly worse.
+      const { env, db } = makeEnv();
+      const chatId = seedChat(db);
+      await configure(env);
+      seedMessage(db, chatId, 'Ada entered the cellar.');
+
+      const { calls } = stubReplies([
+        'Ada walked in. "It is dark," she murmurs.',
+        '"Still dark," she says.',
+      ]);
+
+      const summary = await summarize(env, chatId, 1, 1);
+
+      expect(calls).toHaveLength(2);
+      expect(summary.content).toBe('Ada walked in. "It is dark," she murmurs.');
+      expect(storedContent(db, chatId)).toBe('Ada walked in. "It is dark," she murmurs.');
+    });
+
+    test('an empty first reply still throws and writes nothing', async () => {
+      const { env, db } = makeEnv();
+      const chatId = seedChat(db);
+      await configure(env);
+      seedMessage(db, chatId, 'Ada entered the cellar.');
+
+      stubReplies(['']);
+
+      await expect(summarize(env, chatId, 1, 1)).rejects.toThrow(
+        'summarization returned no content',
+      );
+      expect(one<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM summaries')).toEqual({ n: 0 });
+    });
+  });
 });
 
 describe('consolidate', () => {
@@ -720,6 +870,75 @@ describe('memory viewer API', () => {
     expect((await listMemory(env, 'nope')).status).toBe(404);
   });
 
+  describe('recall visibility', () => {
+    /** Appends a row with an explicit role and parent, for a real chained transcript. */
+    function seedRow(
+      db: Database,
+      chatId: string,
+      parentId: string | null,
+      role: 'user' | 'assistant',
+      content: string,
+    ): string {
+      const id = crypto.randomUUID();
+      exec(
+        db,
+        `INSERT INTO messages (id, chat_id, parent_id, role, content, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        id,
+        chatId,
+        parentId,
+        role,
+        content,
+        Date.now(),
+      );
+      return id;
+    }
+
+    test('shows what recall returned for the last reader message, and the block itself', async () => {
+      const { env, db } = makeEnv();
+      const chatId = seedChat(db);
+      const opening = seedRow(db, chatId, null, 'assistant', 'The lamp room is cold.');
+      const earlier = seedRow(
+        db,
+        chatId,
+        opening,
+        'assistant',
+        'She mentions the barometer is falling fast.',
+      );
+      seedRow(db, chatId, earlier, 'user', 'What did you say about the barometer?');
+
+      const payload = await body(await listMemory(env, chatId));
+      const recalled = payload.recalled as Array<{ kind: string; refId: string; text: string }>;
+
+      expect(recalled.length).toBeGreaterThan(0);
+      expect(recalled.some((hit) => hit.refId === earlier)).toBe(true);
+      // The query is reported so the panel can say what was searched for.
+      expect(payload.query).toBe('What did you say about the barometer?');
+      // And the block is the block — not an approximation of it.
+      expect(String(payload.rendered)).toContain('barometer');
+      expect(String(payload.rendered)).toContain('Relevant earlier moments');
+    });
+
+    test('a chat with no reader message yet reports no query and an empty block', async () => {
+      // The empty path that actually exists: nothing the reader has said, so recall has
+      // nothing to run against and the panel must not guess. A chat whose ONLY row is a
+      // reader message is not this case — recall queries `messages_fts` over the whole
+      // chat, so the query row matches itself and comes back as a hit. That is what the
+      // narrator is really given, and the panel's job is to show it rather than hide it.
+      const { env, db } = makeEnv();
+      const chatId = seedChat(db);
+      seedRow(db, chatId, null, 'assistant', 'The lamp room is cold.');
+
+      const res = await listMemory(env, chatId);
+      const payload = await body(res);
+
+      expect(res.status).toBe(200);
+      expect(payload.query).toBe('');
+      expect(payload.recalled).toEqual([]);
+      expect(payload.rendered).toBe('');
+    });
+  });
+
   test('creates a fact and refuses a blank one', async () => {
     const { env, db } = makeEnv();
     const chatId = seedChat(db);
@@ -850,5 +1069,134 @@ describe('memory viewer API', () => {
     expect(one<{ content: string }>(db, 'SELECT content FROM summaries')).toEqual({
       content: 'original',
     });
+  });
+});
+
+/**
+ * The scheduler that decides when to summarize.
+ *
+ * This had NO test coverage, and it is the function that reads the visible path after
+ * every completed turn. The version that shipped computed a message's "position" with a
+ * correlated subquery over `swipe_group` — a column no code has written since branching
+ * replaced it — so it evaluated `COALESCE(NULL, id) = COALESCE(NULL, id)` for every row and
+ * returned the row's own `seq`. An O(n²) scan to compute a value that was already there.
+ *
+ * It read 776,000 rows in three calls on a 600-message chat and exhausted the D1 free
+ * tier, taking the site down for a day. So these tests check both what it decides and what
+ * it costs — the second one is the regression guard.
+ */
+describe('scheduleMemory', () => {
+  /** A chat with `count` visible messages, plus a cheap model so the scheduler will run. */
+  async function ready(count: number, env: Env, db: Database): Promise<string> {
+    const chatId = seedChat(db);
+    for (let index = 0; index < count; index += 1) seedMessage(db, chatId, `line ${index}`);
+    // `loadCheapModel` reads settings, and no cheap model means no summarization at all.
+    await putSetting(env, 'provider', 'openrouter');
+    await putSetting(env, 'model', 'test/model');
+    return chatId;
+  }
+
+  test('enqueues nothing below a full block', async () => {
+    const { env, db } = makeEnv();
+    const chatId = await ready(SUMMARY_EVERY - 1, env, db);
+    await scheduleMemory(env, chatId);
+    expect(one<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM jobs')).toEqual({ n: 0 });
+  });
+
+  test('enqueues one job covering the first complete block', async () => {
+    const { env, db } = makeEnv();
+    const chatId = await ready(SUMMARY_EVERY, env, db);
+    await scheduleMemory(env, chatId);
+
+    const job = one<{ payload: string }>(db, 'SELECT payload FROM jobs');
+    expect(JSON.parse(String(job?.payload))).toEqual({ fromSeq: 1, toSeq: SUMMARY_EVERY });
+  });
+
+  test('does not re-enqueue what a summary already covers', async () => {
+    const { env, db } = makeEnv();
+    const chatId = await ready(SUMMARY_EVERY * 2, env, db);
+    // A summary already covering the first block, as a completed job would leave behind.
+    seedScene(db, chatId, 1, SUMMARY_EVERY, 'already covered');
+
+    await scheduleMemory(env, chatId);
+    const job = one<{ payload: string }>(db, 'SELECT payload FROM jobs');
+    expect(JSON.parse(String(job?.payload))).toEqual({
+      fromSeq: SUMMARY_EVERY + 1,
+      toSeq: SUMMARY_EVERY * 2,
+    });
+  });
+
+  test('never summarizes a message that is off the visible path', async () => {
+    // The reader regenerated a reply and then kept talking on the OLD branch's text.
+    // Those rows are still `active = 1` — deactivating a parent hides its descendants
+    // without touching them — so a plain `seq > ?` scan would summarize a scene that is
+    // not on screen. The walk must follow parents, not seq.
+    const { env, db } = makeEnv();
+    const chatId = seedChat(db);
+    await putSetting(env, 'provider', 'openrouter');
+    await putSetting(env, 'model', 'test/model');
+
+    const now = Date.now();
+    // Opening A1, then a user turn and a reply continuing it (the abandoned branch).
+    exec(db, `INSERT INTO messages (id, chat_id, parent_id, role, content, active, created_at)
+              VALUES ('a1', ?, NULL, 'assistant', 'opening', 0, ?)`, chatId, now);
+    exec(db, `INSERT INTO messages (id, chat_id, parent_id, role, content, active, created_at)
+              VALUES ('u1', ?, 'a1', 'user', 'abandoned user', 1, ?)`, chatId, now);
+    // The regenerate: A1b is the active version of the SAME position, with no continuation.
+    exec(db, `INSERT INTO messages (id, chat_id, parent_id, role, content, active, created_at)
+              VALUES ('a1b', ?, NULL, 'assistant', 'rewritten opening', 1, ?)`, chatId, now);
+    // Then the reader talks on from the new version.
+    for (let index = 0; index < SUMMARY_EVERY - 1; index += 1) {
+      exec(db, `INSERT INTO messages (id, chat_id, parent_id, role, content, active, created_at)
+                VALUES (?, ?, ?, 'user', ?, 1, ?)`,
+        `n${index}`, chatId, index === 0 ? 'a1b' : `n${index - 1}`, `visible ${index}`, now);
+    }
+
+    await scheduleMemory(env, chatId);
+    const job = one<{ payload: string }>(db, 'SELECT payload FROM jobs');
+    const payload = JSON.parse(String(job?.payload)) as { fromSeq: number; toSeq: number };
+
+    // The abandoned `u1` is seq 2 and must not be inside the covered range.
+    const abandoned = one<{ seq: number }>(db, "SELECT seq FROM messages WHERE id = 'u1'");
+    expect(abandoned?.seq).toBeGreaterThan(0);
+    const covered = allOf<{ content: string }>(
+      db,
+      `SELECT content FROM messages WHERE seq BETWEEN ? AND ?`,
+      payload.fromSeq,
+      payload.toSeq,
+    ).map((row) => row.content);
+    expect(covered).not.toContain('abandoned user');
+    expect(covered).toContain('rewritten opening');
+  });
+
+  test('walks the path instead of scanning, and never reads the dead group column', async () => {
+    // The regression guard, and it has to be shaped like one: the old query used an
+    // INDEX, so `EXPLAIN QUERY PLAN` reported SEARCH and looked healthy. What it actually
+    // did was re-evaluate two correlated subqueries for every row — O(n²) index seeks,
+    // 776,000 rows read on 600 messages. Plan text cannot see that, and the driver does
+    // not expose rows-read, so this asserts the two properties that made it quadratic:
+    //
+    //  1. The scheduler must not read `swipe_group`. No code has written that column
+    //     since branching replaced it, so `COALESCE(swipe_group, id) = COALESCE(swipe_group, id)`
+    //     is a tautology that returns the row's own seq — a per-row subquery to compute a
+    //     column that was already in the row.
+    //  2. The transcript must be walked, not filtered by `seq > ?`. A row can be active
+    //     while sitting on an abandoned branch, so a seq filter reads the wrong rows AND
+    //     an unbounded number of them.
+    const { env, db, calls } = makeEnv();
+    const chatId = await ready(600, env, db);
+    await scheduleMemory(env, chatId);
+
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) {
+      expect(call.sql).not.toContain('swipe_group');
+      expect(call.sql).not.toMatch(/SELECT\s+seq\s+FROM\s+messages\s+WHERE\s+chat_id\s*=\s*\?\s+AND\s+active/);
+    }
+
+    // The walk is one query, and it is recursive — not a flat scan of the chat.
+    const walk = calls.find((call) => /WITH RECURSIVE path/.test(call.sql));
+    expect(walk).toBeDefined();
+    // `pathSeqsAfter` is called once, so the whole decision is one bounded query.
+    expect(calls.filter((call) => /WITH RECURSIVE path/.test(call.sql))).toHaveLength(1);
   });
 });

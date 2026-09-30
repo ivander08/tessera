@@ -18,6 +18,8 @@ interface Field {
   label: string;
   hint: string;
   list?: boolean;
+  /** A map of name -> text, edited as `Name: text` lines. */
+  map?: boolean;
 }
 
 /**
@@ -28,15 +30,29 @@ const GROUPS: Array<{ heading: string; fields: Field[] }> = [
   {
     heading: 'Where and when',
     fields: [
-      { key: 'time', label: 'Time', hint: 'In-world clock, e.g. "late evening", "the 3rd of Rain, dusk".' },
-      { key: 'location', label: 'Location', hint: 'Where the scene is — a room and a spot: "the scriptorium, at the desk".' },
-      { key: 'weather', label: 'Weather', hint: 'Optional atmosphere.' },
+      {
+        key: 'time',
+        label: 'Time',
+        hint: 'Real date and time — "Wednesday, 30 September 2026, 05:34 AM".',
+      },
+      {
+        key: 'location',
+        label: 'Location',
+        hint: 'Place and spot — "Sydney, on the coast, sitting on the bed".',
+      },
+      { key: 'weather', label: 'Weather', hint: 'What it is doing outside, if it was said.' },
     ],
   },
   {
     heading: 'Who and what',
     fields: [
       { key: 'present', label: 'Present', hint: 'Characters in the scene, one per line.', list: true },
+      {
+        key: 'outfits',
+        label: 'Outfits',
+        hint: 'Character: what they are wearing. One per line.',
+        map: true,
+      },
       { key: 'inventory', label: 'Inventory', hint: 'Things being carried, one per line.', list: true },
     ],
   },
@@ -72,11 +88,20 @@ export default function State({ embedded = false }: { embedded?: boolean } = {})
 
   const state = data?.state ?? {};
 
-  function currentValue(key: keyof WorldState, list?: boolean): string {
+  function currentValue(key: keyof WorldState, list?: boolean, map?: boolean): string {
     if (edits[key] !== undefined) return edits[key];
     const value = state[key];
     if (value === undefined) return '';
-    return list ? (value as string[]).join('\n') : String(value);
+    if (list) return (value as string[]).join('\n');
+    // Sorted by key, so the textarea is stable across reloads — a record's iteration
+    // order is insertion order, which depends on the order patches happened to arrive.
+    if (map) {
+      return Object.entries(value as Record<string, string>)
+        .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+        .map(([name, text]) => `${name}: ${text}`)
+        .join('\n');
+    }
+    return String(value);
   }
 
   async function save() {
@@ -94,6 +119,20 @@ export default function State({ embedded = false }: { embedded?: boolean } = {})
         patch[key] = null; // null clears, which is what emptying the box means
       } else if (field.list) {
         patch[key] = trimmed.split('\n').map((line) => line.trim()).filter(Boolean);
+      } else if (field.map) {
+        // Split on the FIRST colon only: an outfit can contain one ("a coat: navy"), and
+        // a value that loses its tail is worse than a line that is skipped.
+        const entries: Record<string, string> = {};
+        for (const line of trimmed.split('\n')) {
+          const at = line.indexOf(':');
+          if (at < 0) continue;
+          const name = line.slice(0, at).trim();
+          const text = line.slice(at + 1).trim();
+          if (name.length === 0) continue;
+          entries[name] = text;
+        }
+        if (Object.keys(entries).length === 0) continue;
+        patch[key] = entries;
       } else {
         patch[key] = trimmed;
       }
@@ -182,15 +221,15 @@ export default function State({ embedded = false }: { embedded?: boolean } = {})
                       <span>{field.label}</span>
                       <span className="form-hint">{field.hint}</span>
                     </span>
-                    {field.list ? (
+                    {field.list || field.map ? (
                       <textarea
                         className="field"
                         rows={3}
-                        value={currentValue(field.key, true)}
+                        value={currentValue(field.key, field.list, field.map)}
                         onChange={(event) =>
                           setEdits({ ...edits, [String(field.key)]: event.target.value })
                         }
-                        placeholder="one per line"
+                        placeholder={field.map ? 'Name: what they are wearing' : 'one per line'}
                       />
                     ) : (
                       <input

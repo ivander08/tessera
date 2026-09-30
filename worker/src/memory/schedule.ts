@@ -1,5 +1,7 @@
-import { enqueue, claim, start, finish, type JobRow } from '../jobs';
+import { enqueue, claim, recoverStale, start, finish, type JobRow } from '../jobs';
+import { pathSeqsAfter } from '../branch';
 import { summarize } from './summarize';
+import { extractFacts } from './extract';
 import { consolidate, SCENES_PER_ARC } from './consolidate';
 import { loadCheapModel } from '../cheap';
 
@@ -34,16 +36,12 @@ export async function scheduleMemory(env: Env, chatId: string): Promise<void> {
     // keeps a failing job out of the queue entirely.
     if (!(await loadCheapModel(env))) return;
 
-    // Active rows only: a swiped-away alternative is not part of the story.
-    // Ordered by POSITION, matching the prompt builder, so the summarized range is the
-    // range the reader actually saw.
-    const positionExpr = `COALESCE(
-      (SELECT MIN(m2.seq) FROM messages m2
-        WHERE m2.chat_id = messages.chat_id
-          AND COALESCE(m2.swipe_group, m2.id) = COALESCE(messages.swipe_group, messages.id)),
-      messages.seq
-    )`;
-
+    // Active rows only, and only the ones on the visible path: a swiped-away alternative
+    // is not part of the story and must never be summarized.
+    //
+    // The range to cover is `covered + 1` onward, so asking for the first `SUMMARY_EVERY`
+    // visible messages after the last summary is enough to decide both whether to enqueue
+    // and what to enqueue. Nothing beyond that block is read.
     const lastSummary = await env.DB.prepare(
       'SELECT MAX(covers_to) AS covered FROM summaries WHERE chat_id = ?',
     )
@@ -51,22 +49,25 @@ export async function scheduleMemory(env: Env, chatId: string): Promise<void> {
       .first<{ covered: number | null }>();
     const covered = lastSummary?.covered ?? 0;
 
-    const { results } = await env.DB.prepare(
-      `SELECT seq, ${positionExpr} AS position FROM messages
-        WHERE chat_id = ? AND active = 1 AND ${positionExpr} > ?
-        ORDER BY position`,
-    )
-      .bind(chatId, covered)
-      .all<{ seq: number; position: number }>();
+    const seqs = await pathSeqsAfter(env, chatId, covered, SUMMARY_EVERY);
+    if (seqs.length < SUMMARY_EVERY) return;
 
-    if (results.length < SUMMARY_EVERY) return;
-
-    // Summarize up to the last complete block, leaving the remainder for next time so a
-    // summary is never a one-message fragment.
-    const upTo = results[SUMMARY_EVERY - 1].seq;
-    const oldest = results[0].seq;
+    // Summarize the whole block, so a summary is never a one-message fragment.
+    const oldest = seqs[0];
+    const upTo = seqs[seqs.length - 1];
 
     await enqueue(env, chatId, 'summarize', `summarize:${chatId}:${oldest}:${upTo}`, {
+      fromSeq: oldest,
+      toSeq: upTo,
+    });
+
+    // Facts are extracted over the SAME block, in their own job rather than inside the
+    // summarizer. Two reasons: one failure must not lose the other's work, and the
+    // summarizer is asked to compress while this one is asked to be precise — asking a
+    // single call for both produces a summary with facts filed off it.
+    //
+    // Measured before this existed: zero facts after 157 turns.
+    await enqueue(env, chatId, 'extract', `extract:${chatId}:${oldest}:${upTo}`, {
       fromSeq: oldest,
       toSeq: upTo,
     });
@@ -82,53 +83,90 @@ interface SummarizePayload {
 }
 
 /**
- * Runs one pending memory job, if any.
+ * How many queued jobs one wake will drain.
  *
- * Called on worker wake alongside the stale-lease sweep. One job per wake is deliberate:
- * a cold start has a CPU budget, and draining a backlog on every request would compete
- * with the request that triggered it.
+ * Was one, which does not keep pace. A scene block now enqueues TWO jobs (summary +
+ * extraction), so a single job per wake falls behind by construction — measured on a real
+ * 157-turn chat, coverage reached 160 messages behind, and a 6th job sat claimed with an
+ * expired lease for over ten minutes because `recoverStale` runs once per isolate and a
+ * warm isolate never cold-starts.
+ *
+ * Four is a compromise: enough that a two-job block drains well within one wake and a
+ * short backlog clears, small enough that a long backlog cannot consume the CPU budget of
+ * the request that triggered the wake. The work is all behind `waitUntil`, so this costs
+ * latency only to itself.
+ */
+const JOBS_PER_WAKE = 4;
+
+/**
+ * Runs pending memory jobs.
+ *
+ * Called on worker wake alongside the stale-lease sweep. Bounded rather than unbounded:
+ * draining an arbitrarily long backlog on every request would compete with the request
+ * that triggered it.
  */
 export async function runPendingMemoryJob(env: Env): Promise<void> {
   try {
     if (!(await loadCheapModel(env))) return;
 
-    const pending = await env.DB.prepare(
-      `SELECT id, chat_id, kind, status, attempts, lease_until, payload, error, created_at, updated_at
-         FROM jobs WHERE status = 'queued'
-        ORDER BY created_at LIMIT 1`,
-    ).first<JobRow>();
-    if (!pending) return;
+    // Reclaim anything whose owner was evicted mid-run BEFORE draining, so a job stranded
+    // by a warm isolate that never cold-starts is picked up rather than sitting claimed
+    // forever. This is the failure the report caught: a job in `generating` with an
+    // expired lease and nothing to reclaim it.
+    await recoverStale(env).catch(() => {});
 
-    const job = await claim(env, pending.id, 60_000);
-    if (!job) return; // another isolate took it
+    for (let round = 0; round < JOBS_PER_WAKE; round += 1) {
+      const pending = await env.DB.prepare(
+        `SELECT id, chat_id, kind, status, attempts, lease_until, payload, error, created_at, updated_at
+           FROM jobs WHERE status = 'queued'
+          ORDER BY created_at LIMIT 1`,
+      ).first<JobRow>();
+      if (!pending) return;
 
-    // `start` renews the lease and fences on the attempts counter, so a superseded
-    // isolate cannot finish a job another one has already taken over.
-    if (!(await start(env, job, 60_000))) return;
+      const job = await claim(env, pending.id, 60_000);
+      if (!job) return; // another isolate took it
 
-    try {
-      if (job.kind === 'summarize') {
-        const payload = JSON.parse(job.payload ?? '{}') as SummarizePayload;
-        await summarize(env, job.chat_id, payload.fromSeq, payload.toSeq);
+      // `start` renews the lease and fences on the attempts counter, so a superseded
+      // isolate cannot finish a job another one has already taken over.
+      if (!(await start(env, job, 60_000))) return;
 
-        // Consolidation is checked here rather than on a schedule: it only has work to do
-        // when a scene has just been added, and asking otherwise is a wasted query.
-        await consolidate(env, job.chat_id).catch((error: unknown) => {
-          console.warn(`[memory] consolidate failed for chat=${job.chat_id}: ${messageOf(error)}`);
-        });
-
-        await finish(env, job.id, 'delivered', JSON.stringify({ ok: true }));
-      } else {
-        // An unknown kind is a bug or a leftover from an older version. Failing it is
-        // better than retrying forever.
-        await finish(env, job.id, 'failed', undefined, `unknown job kind: ${job.kind}`);
-      }
-    } catch (error) {
-      await finish(env, job.id, 'failed', undefined, messageOf(error));
-      console.warn(`[memory] job ${job.id} failed: ${messageOf(error)}`);
+      await runJob(env, job);
     }
   } catch (error) {
     console.warn(`[memory] job runner failed: ${messageOf(error)}`);
+  }
+}
+
+/** One job, with its own failure handling so a bad job does not stop the drain. */
+async function runJob(env: Env, job: JobRow): Promise<void> {
+  try {
+    if (job.kind === 'summarize') {
+      const payload = JSON.parse(job.payload ?? '{}') as SummarizePayload;
+      await summarize(env, job.chat_id, payload.fromSeq, payload.toSeq);
+
+      // Consolidation is checked here rather than on a schedule: it only has work to do
+      // when a scene has just been added, and asking otherwise is a wasted query.
+      await consolidate(env, job.chat_id).catch((error: unknown) => {
+        console.warn(`[memory] consolidate failed for chat=${job.chat_id}: ${messageOf(error)}`);
+      });
+
+      await finish(env, job.id, 'delivered', JSON.stringify({ ok: true }));
+      return;
+    }
+
+    if (job.kind === 'extract') {
+      const payload = JSON.parse(job.payload ?? '{}') as SummarizePayload;
+      const result = await extractFacts(env, job.chat_id, payload.fromSeq, payload.toSeq);
+      await finish(env, job.id, 'delivered', JSON.stringify(result));
+      return;
+    }
+
+    // An unknown kind is a bug or a leftover from an older version. Failing it is better
+    // than retrying forever.
+    await finish(env, job.id, 'failed', undefined, `unknown job kind: ${job.kind}`);
+  } catch (error) {
+    await finish(env, job.id, 'failed', undefined, messageOf(error));
+    console.warn(`[memory] job ${job.id} failed: ${messageOf(error)}`);
   }
 }
 

@@ -103,10 +103,14 @@ export function PresetMenu({ chatId, onChanged }: { chatId: string; onChanged?: 
                   {current === preset.id && <span className="pick-tick">✓</span>}
                 </button>
                 {/* The editor is a long form and belongs on its own screen, so this is a
-                    link rather than a second sheet stacked on this one. */}
+                    link rather than a second sheet stacked on this one.
+                    `data-menu-keep` because the link lives inside the menu's own subtree:
+                    without it the menu closes first, the sheet unmounts, and the
+                    navigation is cancelled before the router sees it. */}
                 <Link
                   to={`/presets/${preset.id}`}
                   className="menu-edit"
+                  data-menu-keep
                   title={`Edit ${preset.name}`}
                   aria-label={`Edit ${preset.name}`}
                 >
@@ -124,7 +128,7 @@ export function PresetMenu({ chatId, onChanged }: { chatId: string; onChanged?: 
                 Use global settings
               </button>
             )}
-            <Link className="btn" to="/presets">
+            <Link className="btn" to="/presets" data-menu-keep>
               Manage presets
             </Link>
           </div>

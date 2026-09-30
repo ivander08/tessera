@@ -53,6 +53,102 @@ export interface PresetConfig {
   loreScanDepth?: number;
   loreTokenBudget?: number;
   loreRecursive?: boolean;
+  /**
+   * How long a reply should be.
+   *
+   * Deliberately NOT the same control as `maxTokens`. That is a hard ceiling the provider
+   * enforces and the reader pays for; this is an instruction to the model, and the values
+   * a reader actually wants — "one beat", "a full scene" — are not token counts and do
+   * not behave the same way on every model.
+   *
+   * `auto` sends nothing, which is the honest default: a model already has an opinion
+   * about how much to write, and a rule can only narrow it.
+   */
+  responseLength?: ResponseLength;
+  /** Replaces the built-in rule when `responseLength` is `custom`. */
+  responseLengthCustom?: string;
+}
+
+/**
+ * The lengths a reader can ask for, and what each one means to the model.
+ *
+ * Written as instructions rather than as word counts on purpose. "Roughly 120 words"
+ * produces prose that pads to reach the number and stops mid-beat when it hits it, while
+ * "one beat, then stop" produces a reply that ends where the writing ends. The counts in
+ * the descriptions are the reader-facing summary; the rule is what is actually sent.
+ */
+export type ResponseLength = 'auto' | 'brief' | 'short' | 'medium' | 'long' | 'custom';
+
+export const RESPONSE_LENGTHS: Array<{
+  value: ResponseLength;
+  label: string;
+  /** Shown under the control, so the reader knows what they are choosing. */
+  description: string;
+  /** Sent to the model. Empty means nothing is sent. */
+  rule: string;
+}> = [
+  {
+    value: 'auto',
+    label: 'Let the model decide',
+    description: 'No instruction. The reply is as long as the scene asks for.',
+    rule: '',
+  },
+  {
+    value: 'brief',
+    label: 'Brief',
+    description: 'One action, one line of dialogue. A beat, not a scene.',
+    rule:
+      'Write a brief reply: one beat, then stop. A single action or a single line of ' +
+      'dialogue is enough. Do not summarise what came before and do not set up what ' +
+      'comes next.',
+  },
+  {
+    value: 'short',
+    label: 'Short',
+    description: 'A short paragraph — a few sentences.',
+    rule:
+      'Write a short reply: one short paragraph of a few sentences. Move the scene ' +
+      'forward by one step and stop there.',
+  },
+  {
+    value: 'medium',
+    label: 'Medium',
+    description: 'Two or three paragraphs.',
+    rule:
+      'Write a medium reply: two or three paragraphs. Give the scene room to breathe ' +
+      'without padding, and end on a beat that invites a response.',
+  },
+  {
+    value: 'long',
+    label: 'Long',
+    description: 'A full scene beat — four or more paragraphs.',
+    rule:
+      'Write a long reply: four or more paragraphs. Develop the moment in detail — ' +
+      'sensory description, interiority, and dialogue — while keeping every sentence ' +
+      'doing work. Do not pad or repeat.',
+  },
+  {
+    value: 'custom',
+    label: 'Custom',
+    description: 'Your own instruction, sent verbatim.',
+    rule: '',
+  },
+];
+
+/**
+ * The rule for a length, or '' when nothing should be sent.
+ *
+ * One function rather than a lookup at the call site, because `custom` has to fall back
+ * to nothing when it is empty — an empty instruction sent as a system line is noise the
+ * model has to read and discard.
+ */
+export function responseLengthRule(
+  length: ResponseLength | undefined,
+  custom: string | undefined,
+): string {
+  if (!length || length === 'auto') return '';
+  if (length === 'custom') return (custom ?? '').trim();
+  return RESPONSE_LENGTHS.find((option) => option.value === length)?.rule ?? '';
 }
 
 /**
@@ -79,6 +175,8 @@ export const DEFAULT_PRESET_CONFIG: PresetConfig = {
   loreScanDepth: 4,
   loreTokenBudget: 1024,
   loreRecursive: false,
+  responseLength: 'auto',
+  responseLengthCustom: '',
 };
 
 /**
@@ -163,5 +261,12 @@ export function parsePresetConfig(raw: string | null | undefined): PresetConfig 
     loreScanDepth: clampNumber(record.loreScanDepth, 'loreScanDepth'),
     loreTokenBudget: clampNumber(record.loreTokenBudget, 'loreTokenBudget'),
     loreRecursive: record.loreRecursive === true,
+    responseLength: isResponseLength(record.responseLength) ? record.responseLength : 'auto',
+    responseLengthCustom:
+      typeof record.responseLengthCustom === 'string' ? record.responseLengthCustom : '',
   };
+}
+
+function isResponseLength(value: unknown): value is ResponseLength {
+  return RESPONSE_LENGTHS.some((option) => option.value === value);
 }

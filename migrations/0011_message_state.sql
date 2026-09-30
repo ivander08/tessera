@@ -1,0 +1,15 @@
+-- The world state as of one turn.
+--
+-- `state` holds ONE document per chat: the narrator's belief right now. That is the right
+-- shape for the prompt, and the wrong shape for reading back — "where was I when this
+-- happened" cannot be answered from a document that has since been overwritten.
+--
+-- A snapshot on the row rather than a history table: the state is only meaningful at the
+-- turn it was derived from, so a separate table would be a join for no gain, and this is
+-- the same shape `speaker` already uses.
+--
+-- Null means no state change was recorded for that turn — a `regenerate` or `continue`
+-- does not advance state, and a turn where the cheap model changed nothing writes
+-- nothing. A reader looking at such a row sees the most recent snapshot at or before it,
+-- which is exactly what was true at the time.
+ALTER TABLE messages ADD COLUMN state_json TEXT;

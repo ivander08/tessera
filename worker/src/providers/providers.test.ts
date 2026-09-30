@@ -74,6 +74,25 @@ describe('openrouter adapter', () => {
   test('does not throw on a malformed payload', () => {
     expect(openrouter.parseFrame('not json')).toBeNull();
   });
+
+  test('carries finish_reason, including the terminal frame that has nothing else', () => {
+    // The reason is the ONLY way anything downstream can tell a finished reply from one
+    // cut off at the cap, and it arrives on a frame that carries no text.
+    const terminal = openrouter.parseFrame(
+      JSON.stringify({ choices: [{ delta: {}, finish_reason: 'length' }] }),
+    );
+    expect(terminal).not.toBeNull();
+    expect(terminal?.finishReason).toBe('length');
+
+    expect(
+      openrouter.parseFrame(JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] }))
+        ?.finishReason,
+    ).toBe('stop');
+  });
+
+  test('a frame with no reason, no text and no usage is still dropped', () => {
+    expect(openrouter.parseFrame(JSON.stringify({ choices: [{ delta: {} }] }))).toBeNull();
+  });
 });
 
 describe('kenari adapter', () => {
@@ -114,5 +133,24 @@ describe('kenari adapter', () => {
     expect(kenari.readError(429, JSON.stringify({ error: { message: 'slow down' } }))).toBe(
       'kenari 429: slow down',
     );
+  });
+
+  test('carries finish_reason, including the terminal frame that has nothing else', () => {
+    // Whether Kenari actually sends this was not observable from the code, so it is read
+    // when present and the turn falls back to the token count when it is not.
+    const terminal = kenari.parseFrame(
+      JSON.stringify({ choices: [{ delta: {}, finish_reason: 'length' }] }),
+    );
+    expect(terminal).not.toBeNull();
+    expect(terminal?.finishReason).toBe('length');
+
+    expect(
+      kenari.parseFrame(JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] }))
+        ?.finishReason,
+    ).toBe('stop');
+  });
+
+  test('a frame with no reason, no text and no usage is still dropped', () => {
+    expect(kenari.parseFrame(JSON.stringify({ choices: [{ delta: {} }] }))).toBeNull();
   });
 });

@@ -57,21 +57,10 @@ export default function Characters() {
   const [status, setStatus] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
 
-  async function startChat(character: CharacterRow) {
-    setBusyId(character.id);
-    setStatus(null);
-    setFailure(null);
-    try {
-      const chat = await apiJson<{ id: string }>('/api/chats', {
-        method: 'POST',
-        body: JSON.stringify({ characterId: character.id }),
-      });
-      navigate(`/chat/${chat.id}`);
-    } catch (cause) {
-      setFailure(`Could not start a chat with ${character.name}: ${messageOf(cause)}`);
-    } finally {
-      setBusyId(null);
-    }
+  function startChat(character: CharacterRow) {
+    // The wizard asks how the scene should behave before it opens; it creates the chat
+    // itself, so nothing is written until the reader has answered or skipped.
+    navigate(`/characters/${character.id}/start`);
   }
 
   async function fork(character: CharacterRow) {

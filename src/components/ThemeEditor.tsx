@@ -29,7 +29,12 @@ export function ThemeEditor({
   }
 
   return (
-    <section className="space-y-4">
+    // `section panel panel-pad` — the same treatment every other block on the Settings
+    // page carries. Without it this was the only section with no top margin (0px against
+    // its siblings' 26px) and no panel border, so it sat flush against the block above it
+    // and read as part of it. It is also the right wrapper in the appearance sheet, where
+    // a panel inside the sheet body is the same pattern `CastPanel` uses.
+    <section className="section panel panel-pad space-y-4">
       <div className="flex items-baseline justify-between">
         <h2 className="text-[var(--text-sm)] font-semibold uppercase tracking-wide text-[var(--ink-dim)]">
           Appearance

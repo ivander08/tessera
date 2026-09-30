@@ -7,7 +7,7 @@ import { loadTokenCounter } from '../lib/tokenizerClient';
 import { messageOf, useAsync } from '../lib/hooks';
 import { GreetingsEditor } from '../components/GreetingsEditor';
 import { Avatar } from '../components/Avatar';
-import { AppBar, BackLink } from '../components/AppBar';
+import { AppBar, BackLink, CrumbSep } from '../components/AppBar';
 
 interface CharacterDetail {
   id: string;
@@ -277,7 +277,12 @@ export default function CharacterEdit() {
     <>
       <AppBar
         lead={<BackLink to="/characters" label="Characters" />}
-        title={<span className="bar-title">{value('name') || data?.name || 'Character'}</span>}
+        title={
+          <>
+            <CrumbSep />
+            <span className="bar-title">{value('name') || data?.name || 'Character'}</span>
+          </>
+        }
       />
 
       <main className="sheet">
@@ -321,27 +326,22 @@ export default function CharacterEdit() {
                   {new Date(data.createdAt).toLocaleDateString()}
                 </p>
               </div>
-              <div className="row-actions">
-                <button type="button" className="btn" onClick={() => void fork()} disabled={busy}>
-                  Fork
-                </button>
-                <button
-                  type="button"
-                  className="btn primary"
-                  onClick={() => void save()}
-                  disabled={busy}
-                >
-                  {busy ? 'Saving…' : 'Save changes'}
-                </button>
-              </div>
+              {/* No actions here. The row at the foot of the form is the single place this
+                  sheet commits — it carries Save, Fork and the way back, so a Save in the
+                  header was the same button twice with a scroll between them. The
+                  invalid-card branch above has always been header-only. */}
             </div>
 
             <div className="panel panel-pad" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+              {/* Zoomable, like every other portrait in the app. It is also the only way to
+                  see a newly-picked image at full size before committing it: the buttons
+                  beside it replace and remove, and neither one shows you what you chose. */}
               <Avatar
                 src={avatarPreview ?? storedAvatar}
                 name={value('name') || '?'}
                 className="chip"
                 style={{ width: 64, height: 64, fontSize: 'var(--text-lg)' }}
+                zoomable
               />
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div className="eyebrow">Portrait</div>
@@ -518,7 +518,12 @@ export default function CharacterEdit() {
             {failure && <div className="note danger" style={{ marginTop: 20 }}>{failure}</div>}
             {status && <div className="note" style={{ marginTop: 20 }}>{status}</div>}
 
-            <div className="row-actions" style={{ marginTop: 22 }}>
+            {/* Sticky, like the chat composer. This sheet is 2,600px tall and committing it
+                used to mean scrolling to the very bottom — which is why the header grew a
+                second Save button that then had to be removed for being the same button
+                twice. Pinning the one row keeps it reachable from anywhere in the form
+                without duplicating it. */}
+            <div className="sheet-commit">
               <button
                 type="button"
                 className="btn primary"

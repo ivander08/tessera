@@ -3,6 +3,7 @@ import { useParams } from 'react-router';
 import { apiJson } from '../lib/api';
 import { messageOf, useAsync } from '../lib/hooks';
 import { AppBar, BackLink } from '../components/AppBar';
+import type { RecallHit } from '../lib/memoryTypes';
 
 /**
  * Memory viewer: read, edit, pin and delete what the chat remembers.
@@ -39,6 +40,12 @@ interface FactEntry {
 interface MemoryPayload {
   summaries: SummaryEntry[];
   facts: FactEntry[];
+  /** The recall hits the narrator was given for the most recent reader message. */
+  recalled: RecallHit[];
+  /** The memory block exactly as it is rendered into the prompt. */
+  rendered: string;
+  /** The text recall was run against. */
+  query: string;
 }
 
 export default function Memory({ embedded = false }: { embedded?: boolean } = {}) {
@@ -190,6 +197,41 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
                 />
               )}
             </section>
+
+            <section className="section">
+              <span className="eyebrow">
+                Recall <span className="data">{data.recalled.length}</span>
+              </span>
+              <p className="form-hint" style={{ marginTop: 0 }}>
+                What the narrator was given from earlier in this scene when you last spoke
+                {data.query.length > 0 ? <> — searched for <em>{data.query.slice(0, 80)}</em></> : null}.
+                This is the block that goes into the prompt tail, so it never costs a cache miss.
+              </p>
+              {data.recalled.length === 0 ? (
+                <div className="empty">Nothing was recalled for the last message.</div>
+              ) : (
+                <ul className="panel">
+                  {data.recalled.map((hit, index) => (
+                    <li
+                      key={`${hit.kind}:${hit.refId}`}
+                      className="panel-pad"
+                      style={{ borderTop: index > 0 ? '1px solid var(--line)' : undefined }}
+                    >
+                      <span className="tag accent">{hit.kind}</span>{' '}
+                      <span style={{ color: 'var(--ink-dim)', fontSize: 'var(--text-sm)' }}>{hit.text}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <details className="md-details" style={{ marginTop: 12 }}>
+                <summary className="md-summary">The block as the model receives it</summary>
+                <div className="md-details-body">
+                  <pre className="data" style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: 1.65 }}>
+                    {data.rendered || '(nothing — the block is omitted entirely when empty)'}
+                  </pre>
+                </div>
+              </details>
+            </section>
           </>
         )}
     </>
@@ -286,7 +328,7 @@ function FactRow({
           {(pinned || superseded) && (
             <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: 8 }}>
               {pinned && (
-                <span className="tag brass" title="Recalled into every prompt">
+                <span className="tag accent" title="Recalled into every prompt">
                   pinned
                 </span>
               )}

@@ -1,5 +1,6 @@
 import { getSettings, loadChatSettings } from './db';
 import type { ChatSettings } from './db';
+import { responseLengthRule, type ResponseLength } from '../../src/lib/presets/presetConfig';
 
 /**
  * Effective generation settings for one chat: the chat's preset layered over the global
@@ -17,6 +18,8 @@ export interface EffectiveSettings extends ChatSettings {
   stopStrings: string[];
   assistantPrefill: string;
   includeNames: boolean;
+  /** The preset's reply-length instruction, resolved from its length setting. */
+  responseLengthRule: string;
   /** Replaces the card's post-history instructions when the preset sets them. */
   presetPostHistory: string;
   presetSystemPrompt: string;
@@ -33,6 +36,7 @@ export async function loadEffectiveSettings(
     stopStrings: [],
     assistantPrefill: '',
     includeNames: false,
+    responseLengthRule: '',
     presetPostHistory: '',
     presetSystemPrompt: '',
   };
@@ -75,6 +79,12 @@ export async function loadEffectiveSettings(
         effective.assistantPrefill = config.assistantPrefill;
       }
       if (config.includeNames === true) effective.includeNames = true;
+      if (typeof config.responseLength === 'string') {
+        effective.responseLengthRule = responseLengthRule(
+          config.responseLength as ResponseLength,
+          typeof config.responseLengthCustom === 'string' ? config.responseLengthCustom : '',
+        );
+      }
       if (Array.isArray(config.stopStrings)) {
         effective.stopStrings = config.stopStrings.filter(
           (entry): entry is string => typeof entry === 'string' && entry.length > 0,

@@ -8,6 +8,7 @@ import Setup from './routes/Setup';
 import Characters from './routes/Characters';
 import CharacterNew from './routes/CharacterNew';
 import CharacterEdit from './routes/CharacterEdit';
+import SceneSetup from './routes/SceneSetup';
 import Memory from './routes/Memory';
 import State from './routes/State';
 import Personas from './routes/Personas';
@@ -23,6 +24,7 @@ export default function App() {
       <Route path="/characters" element={<RequireToken>{<Characters />}</RequireToken>} />
       <Route path="/characters/new" element={<RequireToken>{<CharacterNew />}</RequireToken>} />
       <Route path="/characters/:id/edit" element={<RequireToken>{<CharacterEdit />}</RequireToken>} />
+      <Route path="/characters/:id/start" element={<RequireToken>{<SceneSetup />}</RequireToken>} />
       <Route path="/chat/:id" element={<RequireToken>{<Chat />}</RequireToken>} />
       <Route path="/chat/:id/memory" element={<RequireToken>{<Memory />}</RequireToken>} />
       <Route path="/chat/:id/state" element={<RequireToken>{<State />}</RequireToken>} />

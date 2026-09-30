@@ -1,7 +1,7 @@
-import { Link, useNavigate, useParams } from 'react-router';
+import { useNavigate, useParams } from 'react-router';
 import { apiJson } from '../lib/api';
 import { messageOf, useAsync } from '../lib/hooks';
-import { AppBar } from '../components/AppBar';
+import { AppBar, BackLink, CrumbSep } from '../components/AppBar';
 import { PresetEditor, type PresetDetail } from '../components/PresetEditor';
 
 /**
@@ -27,12 +27,13 @@ export default function PresetEdit() {
   return (
     <>
       <AppBar
-        lead={
-          <Link to="/presets" className="bar-link">
-            Presets
-          </Link>
+        lead={<BackLink to="/presets" label="Presets" />}
+        title={
+          <>
+            <CrumbSep />
+            <span className="bar-title">{data?.name ?? 'Preset'}</span>
+          </>
         }
-        title={<span className="bar-title">{data?.name ?? 'Preset'}</span>}
       />
 
       <main className="sheet">

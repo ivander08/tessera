@@ -33,8 +33,33 @@ const SYSTEM = [
   '- Note unresolved threads and open questions; they matter more later than mood.',
   '- Write in the third person, past tense, as prose. No bullet lists, no headings,',
   '  no preamble, no closing remarks.',
+  '- NEVER quote dialogue. Do not reproduce a line of speech, and do not write a',
+  '  character\'s words in quotation marks. Report that something was said, not what.',
+  '- Do not write a scene. You are summarising one that has already happened, so do not',
+  '  narrate events in the present tense and do not use the transcript\'s own sentences.',
+  '- Every sentence must be your own paraphrase. If you find yourself copying a phrase',
+  '  from the transcript, rewrite it.',
   '- If the transcript contradicts itself, state both readings rather than choosing.',
 ].join('\n');
+
+/**
+ * Whether a reply reads as a summary rather than a pasted scene.
+ *
+ * The prompt asks for third-person prose with no dialogue, and the model ignored it often
+ * enough to matter — one stored summary opened `"No," she says.` This is the mechanical
+ * check that catches it, because a rule the model can ignore is not a guarantee.
+ *
+ * Deliberately loose: it flags a reply that is CLEARLY a transcript excerpt and lets
+ * everything else through. A strict check would reject good summaries and pay for retries
+ * that produce no better text.
+ */
+function looksLikeSceneProse(text: string): boolean {
+  // Quoted dialogue, straight or curly, is the strongest signal and the one observed.
+  if (/["“][^"”\n]{2,}["”]/.test(text)) return true;
+  // Present-tense narration with a dialogue tag is the same failure in another costume.
+  if (/\b(says|asks|replies|whispers|murmurs)\b/i.test(text)) return true;
+  return false;
+}
 
 /**
  * Summarize the inclusive `messages.seq` range `[fromSeq, toSeq]` of one chat into a
@@ -67,9 +92,29 @@ export async function summarize(
 
   // Throws a clear "no cheap model configured" / "no API key" error before any write,
   // so a failed summarization never leaves a half-written row behind.
-  const reply = await complete(env, { system: SYSTEM, user: transcript, maxTokens: 700 });
+  const first = await complete(env, { system: SYSTEM, user: transcript, maxTokens: 700 });
+  let content = first.text.trim();
 
-  const content = reply.text.trim();
+  // One retry, and only when the reply is clearly a scene rather than a summary. The
+  // transcript is re-sent unchanged: the failure is the model ignoring the instruction, not
+  // a missing input, so the second call adds only a nudge.
+  if (content.length > 0 && looksLikeSceneProse(content)) {
+    const retry = await complete(env, {
+      system: SYSTEM,
+      user: [
+        transcript,
+        '',
+        'Your previous attempt quoted the scene instead of summarising it. Rewrite it as',
+        'third-person past-tense prose with no dialogue and no quoted lines.',
+      ].join('\n'),
+      maxTokens: 700,
+    });
+    const second = retry.text.trim();
+    // Keep the retry only when it is better. A retry that is also scene prose, or empty,
+    // must not replace a usable first attempt.
+    if (second.length > 0 && !looksLikeSceneProse(second)) content = second;
+  }
+
   if (content.length === 0) throw new Error('summarization returned no content');
 
   const id = crypto.randomUUID();

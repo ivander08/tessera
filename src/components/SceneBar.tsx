@@ -3,17 +3,17 @@ import type { WorldState } from '../lib/state/schema';
 /**
  * Where and when the scene stands, always on screen.
  *
- * The reader was having to open a sheet to find out what the narrator currently believes
- * about the time, the place and the weather — which is the one thing you want to check
- * *while* reading, because it is what tells you whether the writing has drifted. This is
- * a persistent strip under the titlebar rather than something you go and look at.
+ * The reader wanted the current time, place and weather visible without opening
+ * anything — that is what tells you the narrator has drifted. The first version tried to
+ * show every field at once in a single strip, which truncated the time to
+ * "Wednesday, 30 September 2026, ..." and was too small to read at a glance.
  *
- * It reads the same document the prompt is built from, so what it shows and what the
- * model is told cannot disagree. Empty fields are omitted rather than shown blank: a
- * fresh scene genuinely has no state yet, and a row of dashes would read as a broken
- * feature instead of a scene that has not established itself.
+ * So this shows the two facts that orient you — where and when — in a size you can read
+ * while scrolling, and opens the full document for everything else. The full document is
+ * also where it is edited, so the panel is one tap from the strip either way.
  *
- * Clicking anywhere on it opens the full state sheet, which is also where it is edited.
+ * Reads the same state the prompt is built from, so what is on screen and what the model
+ * is told cannot disagree.
  */
 export function SceneBar({ state, onOpen }: { state: WorldState | undefined; onOpen: () => void }) {
   const time = state?.time?.trim() ?? '';
@@ -22,43 +22,78 @@ export function SceneBar({ state, onOpen }: { state: WorldState | undefined; onO
   const present = (state?.present ?? []).filter((name) => name.trim().length > 0);
   const away = Object.entries(state?.away ?? {}).filter(([who]) => who.trim().length > 0);
 
-  const empty = !time && !location && !weather && present.length === 0 && away.length === 0;
+  // The reader's own name is not in `present` unless the model put it there, so the cast
+  // line is worth a count rather than a list — the names are in the panel.
+  const castCount = present.length + away.length;
+
+  // Only characters with something recorded count: an entry with an empty value is
+  // dropped at render time, so counting it here would claim a fact the prompt never sees.
+  const outfitCount = Object.values(state?.outfits ?? {}).filter(
+    (outfit) => outfit.trim().length > 0,
+  ).length;
+
+  // An outfit alone is still a recorded scene, so it keeps the strip rather than being
+  // hidden behind "no scene recorded yet" while the state holds a fact.
+  const empty =
+    !time && !location && !weather && present.length === 0 && away.length === 0 && outfitCount === 0;
 
   return (
     <button
       type="button"
       className={`scene-bar${empty ? ' is-empty' : ''}`}
       onClick={onOpen}
-      title="Where the scene stands. Written automatically after each turn; click to read or correct it."
+      title="The scene, as the narrator sees it. Written after each turn; click for the full document."
     >
-      <ClockGlyph />
       {empty ? (
         <span className="scene-bar-empty">
+          <ClockGlyph />
           No scene recorded yet — the narrator fills this in after the first completed turn
         </span>
       ) : (
         <>
-          {time && <Chip label="Time" value={time} />}
-          {location && <Chip label="Place" value={location} />}
-          {weather && <Chip label="Weather" value={weather} />}
-          {present.length > 0 && <Chip label="Present" value={present.join(', ')} />}
-          {away.length > 0 && (
-            <Chip
-              label="Elsewhere"
-              value={away.map(([who, where]) => `${who} at ${where}`).join('; ')}
-            />
-          )}
+          <span className="scene-bar-lead">
+            <ClockGlyph />
+            <span className="scene-bar-place">{location || 'Unknown place'}</span>
+            {time && (
+              <>
+                <span className="scene-bar-dot" aria-hidden="true">
+                  ·
+                </span>
+                <span className="scene-bar-time">{time}</span>
+              </>
+            )}
+          </span>
+
+          <span className="scene-bar-rest">
+            {weather && <Rest label="Weather" value={weather} />}
+            {castCount > 0 && (
+              <Rest
+                label={away.length > 0 ? 'Away' : 'Present'}
+                value={
+                  away.length > 0
+                    ? away.map(([who]) => who).join(', ')
+                    : `${present.length} ${present.length === 1 ? 'person' : 'people'}`
+                }
+              />
+            )}
+            {state?.inventory && state.inventory.length > 0 && (
+              <Rest label="Carrying" value={`${state.inventory.length}`} />
+            )}
+            {outfitCount > 0 && <Rest label="Outfits" value={`${outfitCount}`} />}
+          </span>
+
+          <ChevronGlyph />
         </>
       )}
     </button>
   );
 }
 
-function Chip({ label, value }: { label: string; value: string }) {
+function Rest({ label, value }: { label: string; value: string }) {
   return (
-    <span className="scene-chip-item">
-      <span className="scene-chip-label">{label}</span>
-      <span className="scene-chip-value">{value}</span>
+    <span className="scene-rest">
+      <span className="scene-rest-label">{label}</span>
+      <span className="scene-rest-value">{value}</span>
     </span>
   );
 }
@@ -67,8 +102,8 @@ function ClockGlyph() {
   return (
     <svg
       viewBox="0 0 24 24"
-      width="13"
-      height="13"
+      width="15"
+      height="15"
       aria-hidden="true"
       fill="none"
       stroke="currentColor"
@@ -78,6 +113,24 @@ function ClockGlyph() {
     >
       <circle cx="12" cy="12" r="8.5" />
       <path d="M12 7.5V12l3 1.8" />
+    </svg>
+  );
+}
+
+function ChevronGlyph() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="14"
+      height="14"
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M9 6l6 6-6 6" />
     </svg>
   );
 }

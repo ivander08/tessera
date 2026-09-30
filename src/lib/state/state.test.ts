@@ -375,3 +375,154 @@ describe('state block: characters elsewhere', () => {
     expect(block).not.toContain('Elsewhere');
   });
 });
+
+/**
+ * Outfits: what each character is wearing.
+ *
+ * The field exists because a flat `inventory` cannot say whose coat is whose — "a coat"
+ * is not information. Every assertion here is about the two properties that make it
+ * usable: it is per-character, and it renders identically every turn.
+ */
+describe('world state: outfits', () => {
+  test('accepts a name -> outfit map', () => {
+    const result = validatePatch({}, { outfits: { Sydney: 'blazer' } });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.next.outfits?.Sydney).toBe('blazer');
+  });
+
+  test('rejects a value that is not a name -> outfit map', () => {
+    // Same shape as `away`: a string, an array and a non-string value are all rejected
+    // whole rather than coerced.
+    expect(validatePatch({}, { outfits: 'blazer' }).ok).toBe(false);
+    expect(validatePatch({}, { outfits: ['blazer'] }).ok).toBe(false);
+    expect(validatePatch({}, { outfits: { Sydney: 3 } }).ok).toBe(false);
+  });
+
+  test('replaces the whole map rather than merging into it', () => {
+    // Merging would make it impossible to clear one character: the model is told to
+    // include a character only when their clothing changes, so an absent name means
+    // "unknown", and a merge would keep the stale value forever.
+    const result = validatePatch({ outfits: { A: 'x' } }, { outfits: { B: 'y' } });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.next.outfits).toEqual({ B: 'y' });
+  });
+
+  test('clears with null', () => {
+    const result = validatePatch({ outfits: { A: 'x' } }, { outfits: null });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.next.outfits).toBeUndefined();
+  });
+
+  test('a patch mixing valid outfits with an unknown key is rejected whole', () => {
+    // The all-or-nothing contract, asserted for this key: a partially applied patch
+    // would leave the model believing it recorded something the state never took.
+    const result = validatePatch({}, { outfits: { A: 'x' }, nonsense: true });
+    expect(result.ok).toBe(false);
+  });
+
+  test('renders one line per character, sorted by name', () => {
+    const block = renderStateBlock({
+      location: 'The scriptorium',
+      outfits: { Zoe: 'riding leathers', Ada: 'ink-stained apron' },
+    });
+    expect(block).toContain('Outfits: Ada: ink-stained apron; Zoe: riding leathers');
+  });
+
+  test('an entry with an empty value renders nothing', () => {
+    const block = renderStateBlock({ outfits: { Ada: '   ' } });
+    expect(block).not.toContain('Outfits');
+    // And the same state with a real value does render, so the filter is not hiding a
+    // broken renderer.
+    expect(renderStateBlock({ outfits: { Ada: 'apron' } })).toContain('Outfits: Ada: apron');
+  });
+
+  test('is deterministic under differing insertion order', () => {
+    const first = renderStateBlock({ outfits: { Zoe: 'leathers', Ada: 'apron' } });
+    const second = renderStateBlock({ outfits: { Ada: 'apron', Zoe: 'leathers' } });
+    expect(first).toBe(second);
+  });
+
+  test('sheds outfits before away and after conditions', () => {
+    const state = {
+      time: 'late evening',
+      location: 'The scriptorium',
+      present: ['Ada'],
+      away: { Bram: 'the courtyard' },
+      conditions: { Ada: 'tired' },
+      outfits: { Ada: 'an ink-stained apron with three pockets and a torn hem' },
+    };
+    const full = renderStateBlock(state, 1000);
+    expect(full).toContain('Conditions:');
+    expect(full).toContain('Outfits:');
+    expect(full).toContain('Elsewhere:');
+
+    // Just too tight for everything: conditions go first, then the outfits, and the
+    // characters are the last to be given up.
+    const tight = renderStateBlock(state, 34);
+    expect(tight).not.toContain('Conditions:');
+    expect(tight).toContain('Present: Ada');
+  });
+});
+
+/**
+ * The document must not contradict itself about who is in the scene.
+ *
+ * Found on a real 157-turn chat: the final state held `present: []` and
+ * `away.Odile = "gone up the market lane"` while `conditions.Odile` still read
+ * "standing in the doorway, ledger under her arm, holding the door open". The narrator
+ * reads both lines and is told she is simultaneously gone and present.
+ *
+ * The cheap model updates `present`/`away` when someone leaves and has no reason to
+ * revisit their condition, so this cannot be left to the model.
+ */
+describe('world state: conditions versus presence', () => {
+  test('a condition is dropped when the character has left the scene', () => {
+    const result = validatePatch(
+      { conditions: { Odile: 'standing in the doorway' } },
+      { present: [], away: { Odile: 'gone up the market lane' } },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.next.conditions).toBeUndefined();
+      expect(result.next.away).toEqual({ Odile: 'gone up the market lane' });
+    }
+  });
+
+  test('a condition survives while the character is present', () => {
+    const result = validatePatch({}, { present: ['Ada'], conditions: { Ada: 'tired' } });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.next.conditions).toEqual({ Ada: 'tired' });
+  });
+
+  test('a condition survives for someone the document does not place at all', () => {
+    // Neither present nor away is unaccounted for, not gone. Dropping the condition would
+    // lose a fact the scene may still be using.
+    const result = validatePatch({}, { conditions: { Ada: 'tired' } });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.next.conditions).toEqual({ Ada: 'tired' });
+  });
+
+  test('only the departed character loses their condition', () => {
+    const result = validatePatch(
+      { conditions: { Ada: 'tired', Bram: 'bleeding' } },
+      { present: ['Ada'], away: { Bram: 'the courtyard' } },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.next.conditions).toEqual({ Ada: 'tired' });
+  });
+
+  test('a character who returns keeps a condition written for them afterwards', () => {
+    // The drop happens on the patch that places them away, not forever: once they are
+    // back, a new condition for them is legitimate.
+    const away = validatePatch(
+      { conditions: { Ada: 'tired' } },
+      { present: [], away: { Ada: 'the courtyard' } },
+    );
+    expect(away.ok).toBe(true);
+    if (away.ok) expect(away.next.conditions).toBeUndefined();
+
+    const back = validatePatch(away.ok ? away.next : {}, { present: ['Ada'], conditions: { Ada: 'wary' } });
+    expect(back.ok).toBe(true);
+    if (back.ok) expect(back.next.conditions).toEqual({ Ada: 'wary' });
+  });
+});

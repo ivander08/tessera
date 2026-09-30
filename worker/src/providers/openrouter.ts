@@ -64,8 +64,14 @@ export const openrouter: Provider = {
     const delta = frame.choices?.[0]?.delta?.content;
     if (typeof delta === 'string' && delta.length > 0) out.text = delta;
 
-    // The terminal frame repeats finish_reason with an empty delta and adds `usage`.
-    // It is an accounting frame, not a second terminal event.
+    // The only place the provider says WHY it stopped. `length` is the difference between
+    // a finished reply and one cut off mid-sentence, and it arrives on the terminal frame
+    // with an empty delta.
+    const reason = frame.choices?.[0]?.finish_reason;
+    if (typeof reason === 'string' && reason.length > 0) out.finishReason = reason;
+
+    // That terminal frame also carries `usage`. It is an accounting frame, not a second
+    // terminal event.
     if (frame.usage) {
       out.usage = {
         promptTokens: frame.usage.prompt_tokens ?? 0,
@@ -76,7 +82,9 @@ export const openrouter: Provider = {
       };
     }
 
-    return out.text === undefined && out.usage === undefined ? null : out;
+    return out.text === undefined && out.usage === undefined && out.finishReason === undefined
+      ? null
+      : out;
   },
 
   readError(status: number, body: string): string {

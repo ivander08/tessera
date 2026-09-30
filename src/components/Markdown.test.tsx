@@ -89,6 +89,100 @@ describe('Markdown safety', () => {
   });
 });
 
+/**
+ * Quoted speech is marked so the theme's `quote` colour has something to apply to.
+ *
+ * The case that matters is a quotation CONTAINING an inline style: markdown splits the
+ * paragraph at `*my*`, so the opening and closing quote land in different tokens. A
+ * per-token scan cannot see the pair, which is why `"Hi."` was coloured and a long
+ * quotation with italics in it was not — the inconsistency this pins.
+ */
+describe('Markdown speech', () => {
+  /**
+   * The speech spans as they appear in the DOM, in order.
+   *
+   * Asserted against the rendered HTML rather than by rewriting it into a string: a
+   * quotation containing an emphasis run is emitted as `span + em + span`, and any
+   * text-rewriting helper has to re-implement the parser to describe that. Reading the
+   * actual structure keeps the assertion about the output, not about the helper.
+   */
+  const spans = (content: string): string[] =>
+    [...render(content).matchAll(/<span class="md-speech">([\s\S]*?)<\/span>/g)].map((m) =>
+      m[1]
+        .replace(/&quot;/g, '"')
+        .replace(/&#x27;/g, "'")
+        .replace(/&amp;/g, '&'),
+    );
+
+  /** The whole rendered paragraph as plain text, for the loss checks. */
+  const text = (content: string): string =>
+    render(content)
+      .replace(/<[^>]+>/g, '')
+      .replace(/&quot;/g, '"')
+      .replace(/&#x27;/g, "'")
+      .replace(/&amp;/g, '&');
+
+  test('marks a short quotation', () => {
+    expect(spans('She says, "Hi." Then nothing.')).toEqual(['"Hi."']);
+    expect(text('She says, "Hi." Then nothing.')).toBe('She says, "Hi." Then nothing.');
+  });
+
+  test('marks a quotation that spans an emphasis run', () => {
+    // The regression: the pair crosses a token boundary. Both halves are marked, and the
+    // emphasised word between them is left to the `<em>` that owns it.
+    expect(spans('He said "nothing but *my* time" and left.')).toEqual([
+      '"nothing but ',
+      ' time"',
+    ]);
+    expect(text('He said "nothing but *my* time" and left.')).toBe(
+      'He said "nothing but my time" and left.',
+    );
+  });
+
+  test('marks a quotation that spans a strong run', () => {
+    expect(spans('He said "this is **very** important" and left.')).toEqual([
+      '"this is ',
+      ' important"',
+    ]);
+  });
+
+  test('keeps the emphasis inside a quotation', () => {
+    // Splitting for the colour must not flatten the styling it split around.
+    const html = render('He said "nothing but *my* time" and left.');
+    expect(html).toContain('<em');
+    expect(html).toContain('my');
+  });
+
+  test('marks both quotations when one line holds two', () => {
+    expect(spans('"One." She pauses. "Two."')).toEqual(['"One."', '"Two."']);
+  });
+
+  test('leaves an apostrophe alone', () => {
+    // A single quote is far more often an apostrophe than a quotation in this prose.
+    expect(spans("Don't do that, it's fine.")).toEqual([]);
+  });
+
+  test('leaves a single-quoted aside inside dialogue alone', () => {
+    expect(spans('"He said \'no\' to me." She shrugged.')).toEqual(['"He said \'no\' to me."']);
+  });
+
+  test('marks nothing in narration', () => {
+    expect(spans('Just narration with no dialogue at all.')).toEqual([]);
+  });
+
+  test('does not mark an unclosed quotation', () => {
+    // Half a quotation is not a quotation, and marking the rest of the paragraph would
+    // repaint prose that is not dialogue.
+    expect(spans('She starts "and never finishes.')).toEqual([]);
+  });
+
+  test('preserves the text exactly', () => {
+    // The visible words must survive the marking unchanged.
+    const input = 'A "quoted bit here" and then some narration.';
+    expect(text(input)).toBe(input);
+  });
+});
+
 describe('Markdown structure', () => {
   test('renders a heading as a paragraph so it does not fight the page hierarchy', () => {
     const html = render('# Title');

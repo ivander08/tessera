@@ -8,5 +8,5 @@ import type { NormalizedUsage } from './providers/types';
  */
 export type Frame =
   | { type: 'delta'; text: string }
-  | { type: 'done'; messageId: string; usage: NormalizedUsage; costUsd: number | null }
+  | { type: 'done'; messageId: string; usage: NormalizedUsage; costUsd: number | null; truncated: boolean }
   | { type: 'error'; message: string; code: string };
