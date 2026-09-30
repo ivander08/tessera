@@ -2,11 +2,15 @@ import type { ModelInfo } from '../lib/apiTypes';
 import { buildSupportMap, knobSupport } from '../lib/presets/knobSupport';
 
 /**
- * Knobs are honest: a control the selected model cannot honour is disabled with a
- * reason rather than silently dropped by the provider. Support data comes from
- * `knobSupport.ts`, which is the single implementation of that rule — OpenRouter
- * publishes `supported_parameters` per model, Kenari publishes none so its documented
- * field set is the allowlist.
+ * Sampler knobs, with support read from the provider.
+ *
+ * A knob the selected model cannot honour is disabled with a reason rather than silently
+ * dropped by the provider — that is the honest-knobs rule, and it is why the reason is
+ * rendered inline instead of hidden in a tooltip. Silently ignoring a setting is how you
+ * end up unable to tell why a control had no effect.
+ *
+ * No heading of its own: the caller places it in a section, because Settings and the
+ * preset editor group it differently.
  */
 const KNOBS: Array<{ key: string; label: string; hint: string }> = [
   { key: 'temperature', label: 'Temperature', hint: '0.7–1.2 is the usual roleplay range.' },
@@ -16,8 +20,8 @@ const KNOBS: Array<{ key: string; label: string; hint: string }> = [
   { key: 'repetition_penalty', label: 'Repetition penalty', hint: '1.0 is neutral.' },
   { key: 'frequency_penalty', label: 'Frequency penalty', hint: 'OpenAI-style.' },
   { key: 'presence_penalty', label: 'Presence penalty', hint: 'OpenAI-style.' },
-  { key: 'dry_multiplier', label: 'DRY multiplier', hint: 'Needs DRY-capable backends.' },
-  { key: 'xtc_probability', label: 'XTC probability', hint: 'Needs XTC-capable backends.' },
+  { key: 'dry_multiplier', label: 'DRY multiplier', hint: 'Needs a DRY-capable backend.' },
+  { key: 'xtc_probability', label: 'XTC probability', hint: 'Needs an XTC-capable backend.' },
   { key: 'seed', label: 'Seed', hint: 'Blank means provider-chosen.' },
 ];
 
@@ -38,7 +42,9 @@ export function KnobEditor({
   const supportMap = buildSupportMap(models);
 
   function support(key: string): { enabled: boolean; reason: string } {
-    if (!provider || !model) return { enabled: false, reason: 'Choose a provider and model first.' };
+    if (!provider || !model) {
+      return { enabled: false, reason: 'Choose a provider and model first.' };
+    }
     const { supported, reason } = knobSupport(supportMap, model, key, provider);
     return { enabled: supported, reason };
   }
@@ -50,32 +56,51 @@ export function KnobEditor({
     onChange(JSON.stringify(next));
   }
 
+  const enabledCount = KNOBS.filter((knob) => support(knob.key).enabled).length;
+
   return (
-    <section className="space-y-3">
-      <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-dim">Sampler</h2>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+    <div>
+      <p className="form-hint" style={{ marginBottom: 10 }}>
+        {provider && model
+          ? `${enabledCount} of ${KNOBS.length} apply to ${model}.`
+          : 'Choose a provider and model to see which knobs apply.'}
+      </p>
+
+      <div className="field-list two">
         {KNOBS.map((knob) => {
           const { enabled, reason } = support(knob.key);
           const current = knobs[knob.key];
+
           return (
-            <label key={knob.key} className="block space-y-1" title={enabled ? knob.hint : reason}>
-              <span className={`text-xs ${enabled ? 'text-ink-dim' : 'text-ink-dim/50'}`}>
-                {knob.label}
-                {!enabled && <span className="ml-2 text-amber-500/70">unsupported</span>}
+            <label key={knob.key} className="block">
+              <span className="form-label">
+                <span style={{ color: enabled ? 'var(--ink)' : 'var(--ink-faint)' }}>
+                  {knob.label}
+                </span>
+                {!enabled && <span className="form-hint">does not apply</span>}
               </span>
               <input
+                className="field"
                 value={current === undefined ? '' : String(current)}
                 onChange={(event) => update(knob.key, event.target.value)}
                 disabled={!enabled}
                 inputMode="decimal"
-                placeholder={enabled ? 'default' : reason}
-                className="w-full rounded border border-white/15 bg-black/30 px-3 py-1.5 text-sm outline-none focus:border-accent disabled:cursor-not-allowed disabled:opacity-40"
+                placeholder={enabled ? 'default' : ''}
+                title={enabled ? knob.hint : reason}
+                aria-describedby={!enabled ? `knob-${knob.key}-why` : undefined}
               />
+              {/* The reason is rendered, not tooltipped. A disabled control with no
+                  visible explanation is the exact complaint this rule exists to answer. */}
+              {!enabled && (
+                <span id={`knob-${knob.key}-why`} className="form-hint" style={{ display: 'block' }}>
+                  {reason}
+                </span>
+              )}
             </label>
           );
         })}
       </div>
-    </section>
+    </div>
   );
 }
 

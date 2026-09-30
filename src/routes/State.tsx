@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Link, useParams } from 'react-router';
+import { useParams } from 'react-router';
 import { apiJson } from '../lib/api';
 import type { WorldState } from '../lib/state/schema';
 import { messageOf, useAsync } from '../lib/hooks';
+import { AppBar, BackLink } from '../components/AppBar';
 
 interface StatePayload {
   chatId: string;
@@ -12,15 +13,40 @@ interface StatePayload {
   tokens: number;
 }
 
-/** Field order mirrors the prompt block, so the two read the same way. */
-const FIELDS: Array<{ key: keyof WorldState; label: string; hint: string; list?: boolean }> = [
-  { key: 'time', label: 'Time', hint: 'In-world clock, e.g. "late evening". Not a timestamp.' },
-  { key: 'location', label: 'Location', hint: 'Where the scene is.' },
-  { key: 'weather', label: 'Weather', hint: 'Optional atmosphere.' },
-  { key: 'present', label: 'Present', hint: 'Characters in the scene, one per line.', list: true },
-  { key: 'inventory', label: 'Inventory', hint: 'Things being carried, one per line.', list: true },
-  { key: 'notes', label: 'Notes', hint: 'Anything the narrator should not forget.', list: true },
+interface Field {
+  key: keyof WorldState;
+  label: string;
+  hint: string;
+  list?: boolean;
+}
+
+/**
+ * Grouped the way a scene is described — where and when, who and what, then the rest.
+ * The order also mirrors the prompt block, so the two read the same way down the page.
+ */
+const GROUPS: Array<{ heading: string; fields: Field[] }> = [
+  {
+    heading: 'Where and when',
+    fields: [
+      { key: 'time', label: 'Time', hint: 'In-world clock, e.g. "late evening".' },
+      { key: 'location', label: 'Location', hint: 'Where the scene is.' },
+      { key: 'weather', label: 'Weather', hint: 'Optional atmosphere.' },
+    ],
+  },
+  {
+    heading: 'Who and what',
+    fields: [
+      { key: 'present', label: 'Present', hint: 'Characters in the scene, one per line.', list: true },
+      { key: 'inventory', label: 'Inventory', hint: 'Things being carried, one per line.', list: true },
+    ],
+  },
+  {
+    heading: 'Notes',
+    fields: [{ key: 'notes', label: 'What not to forget', hint: 'One per line.', list: true }],
+  },
 ];
+
+const ALL_FIELDS: Field[] = GROUPS.flatMap((group) => group.fields);
 
 /**
  * The world-state viewer.
@@ -61,7 +87,7 @@ export default function State() {
     // rewritten with a normalised version of themselves.
     const patch: Record<string, unknown> = {};
     for (const [key, raw] of Object.entries(edits)) {
-      const field = FIELDS.find((f) => f.key === key);
+      const field = ALL_FIELDS.find((f) => f.key === key);
       if (!field) continue;
       const trimmed = raw.trim();
       if (trimmed.length === 0) {
@@ -110,92 +136,118 @@ export default function State() {
   }
 
   return (
-    <main className="mx-auto max-w-2xl space-y-5 p-4 pb-24">
-      <header className="flex items-center justify-between">
-        <h1 className="text-[var(--font-lg)] font-semibold">World state</h1>
-        <Link to={`/chat/${id}`} className="app-link">
-          ← Chat
-        </Link>
-      </header>
+    <>
+      <AppBar
+        lead={<BackLink to={`/chat/${id}`} label="Back to chat" />}
+        title={<span className="bar-title">World state</span>}
+      />
 
-      {loading && <p className="text-sm text-[var(--ink-dim)]">Loading…</p>}
-      {error && <p className="text-sm text-[var(--danger)]">{error}</p>}
+      <main className="sheet">
+        {loading && <p className="sheet-sub">Loading…</p>}
+        {error && <div className="note danger">{error}</div>}
 
-      {data && (
-        <>
-          <p className="text-[var(--font-xs)] text-[var(--ink-faint)]">
-            {data.updatedAt
-              ? `Last written ${new Date(data.updatedAt).toLocaleString()}`
-              : 'Never written — the engine runs after a completed turn.'}
-            {' · '}
-            {data.tokens} tokens in the prompt tail
-          </p>
-
-          {Object.keys(state).length === 0 && (
-            <p className="text-sm text-[var(--ink-dim)]">
-              Empty. The engine proposes changes after each turn; if this stays empty, the
-              cheap model is not configured or is failing.
+        {data && (
+          <>
+            <p className="sheet-sub" style={{ marginTop: 0 }}>
+              This is what the narrator believes next turn. A wrong value here is not cosmetic —
+              it shapes the writing until it is corrected.
             </p>
-          )}
 
-          {FIELDS.map((field) => (
-            <label key={String(field.key)} className="block space-y-1">
-              <span className="flex items-baseline justify-between">
-                <span className="text-[var(--font-sm)] font-medium">{field.label}</span>
-                <span className="text-[var(--font-xs)] text-[var(--ink-faint)]">{field.hint}</span>
-              </span>
-              {field.list ? (
-                <textarea
-                  className="field"
-                  rows={3}
-                  value={currentValue(field.key, true)}
-                  onChange={(event) => setEdits({ ...edits, [String(field.key)]: event.target.value })}
-                  placeholder="one per line"
-                />
-              ) : (
-                <input
-                  className="field"
-                  value={currentValue(field.key)}
-                  onChange={(event) => setEdits({ ...edits, [String(field.key)]: event.target.value })}
-                />
-              )}
-            </label>
-          ))}
+            <p className="data" style={{ marginTop: 10 }}>
+              {data.updatedAt
+                ? `last written ${new Date(data.updatedAt).toLocaleString()}`
+                : 'never written — the engine runs after a completed turn'}
+              {' · '}
+              {data.tokens} tokens in the prompt tail
+            </p>
 
-          {state.conditions && Object.keys(state.conditions).length > 0 && (
-            <div className="space-y-1">
-              <span className="text-[var(--font-sm)] font-medium">Conditions</span>
-              <p className="text-[var(--font-sm)] text-[var(--ink-dim)]">
-                {Object.entries(state.conditions)
-                  .map(([who, what]) => `${who}: ${what}`)
-                  .join(' · ')}
+            {Object.keys(state).length === 0 && (
+              <div className="note" style={{ marginTop: 16 }}>
+                Nothing recorded yet. The engine proposes changes after each completed turn, so an
+                empty document on a fresh chat is correct. If it stays empty after several turns,
+                the cheap model is not configured or is failing.
+              </div>
+            )}
+
+            {GROUPS.map((group) => (
+              <section key={group.heading} className="section">
+                <span className="eyebrow">{group.heading}</span>
+                {group.fields.map((field) => (
+                  <label key={String(field.key)} className="form-row">
+                    <span className="form-label">
+                      <span>{field.label}</span>
+                      <span className="form-hint">{field.hint}</span>
+                    </span>
+                    {field.list ? (
+                      <textarea
+                        className="field"
+                        rows={3}
+                        value={currentValue(field.key, true)}
+                        onChange={(event) =>
+                          setEdits({ ...edits, [String(field.key)]: event.target.value })
+                        }
+                        placeholder="one per line"
+                      />
+                    ) : (
+                      <input
+                        className="field"
+                        value={currentValue(field.key)}
+                        onChange={(event) =>
+                          setEdits({ ...edits, [String(field.key)]: event.target.value })
+                        }
+                      />
+                    )}
+                  </label>
+                ))}
+              </section>
+            ))}
+
+            {state.conditions && Object.keys(state.conditions).length > 0 && (
+              <section className="section">
+                <span className="eyebrow">Conditions</span>
+                <div className="panel panel-pad">
+                  {Object.entries(state.conditions).map(([who, what]) => (
+                    <div key={who} style={{ display: 'flex', gap: 10 }}>
+                      <span style={{ minWidth: 90, color: 'var(--ink)' }}>{who}</span>
+                      <span style={{ color: 'var(--ink-dim)' }}>{what}</span>
+                    </div>
+                  ))}
+                </div>
+                <p className="form-hint" style={{ marginTop: 6 }}>
+                  Maintained per character by the engine. Edit them by describing the change in
+                  the chat rather than here.
+                </p>
+              </section>
+            )}
+
+            <section className="section">
+              <span className="eyebrow">As the narrator sees it</span>
+              <div className="panel panel-pad">
+                <pre
+                  className="data"
+                  style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: 1.65 }}
+                >
+                  {data.rendered || '(nothing — the block is omitted entirely when empty)'}
+                </pre>
+              </div>
+              <p className="form-hint" style={{ marginTop: 6 }}>
+                Rendered into the prompt tail, after the cached prefix, so changing it never costs
+                a cache miss.
               </p>
-              <p className="text-[var(--font-xs)] text-[var(--ink-faint)]">
-                Read-only here — the engine maintains conditions per character.
-              </p>
+            </section>
+
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 24 }}>
+              <button type="button" className="btn primary" onClick={() => void save()} disabled={busy}>
+                Save changes
+              </button>
+              <button type="button" className="btn danger" onClick={() => void clearAll()} disabled={busy}>
+                Clear everything
+              </button>
+              {status && <span className="form-hint">{status}</span>}
             </div>
-          )}
-
-          <section className="space-y-1">
-            <h2 className="text-[var(--font-sm)] font-semibold uppercase tracking-wide text-[var(--ink-dim)]">
-              As the model sees it
-            </h2>
-            <pre className="card overflow-x-auto p-3 text-[var(--font-xs)] whitespace-pre-wrap">
-              {data.rendered || '(nothing — the block is omitted entirely when empty)'}
-            </pre>
-          </section>
-
-          <div className="flex items-center gap-3">
-            <button type="button" className="btn primary" onClick={() => void save()} disabled={busy}>
-              Save
-            </button>
-            <button type="button" className="btn" onClick={() => void clearAll()} disabled={busy}>
-              Clear all
-            </button>
-            {status && <span className="text-[var(--font-sm)] text-[var(--ink-dim)]">{status}</span>}
-          </div>
-        </>
-      )}
-    </main>
+          </>
+        )}
+      </main>
+    </>
   );
 }

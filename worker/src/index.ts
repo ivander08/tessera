@@ -149,6 +149,12 @@ async function route(req: Request, env: Env, url: URL, ctx: ExecutionContext): P
   // `:id` route, or "fork" is captured as a character id and 404s.
   if (path === '/api/characters/fork' && method === 'POST') return forkCharacter(env, req);
 
+  const openingsMatch = /^\/api\/characters\/([^/]+)\/openings$/.exec(path);
+  if (openingsMatch) {
+    if (method !== 'GET') return notFound();
+    return listOpenings(env, decodeURIComponent(openingsMatch[1]));
+  }
+
   const avatarMatch = /^\/api\/characters\/([^/]+)\/avatar$/.exec(path);
   if (avatarMatch) {
     const avatarId = decodeURIComponent(avatarMatch[1]);
@@ -290,7 +296,13 @@ async function listChats(env: Env): Promise<Response> {
 }
 
 async function createChat(env: Env, req: Request): Promise<Response> {
-  const body = await readJson<{ characterId?: string; personaId?: string; title?: string }>(req);
+  const body = await readJson<{
+    characterId?: string;
+    personaId?: string;
+    title?: string;
+    /** Which opening to start from: 0 is `first_mes`, then the alternates in order. */
+    greetingIndex?: number;
+  }>(req);
   if (!body?.characterId) return badRequest('characterId required');
 
   const character = await getCharacter(env, body.characterId);
@@ -298,7 +310,11 @@ async function createChat(env: Env, req: Request): Promise<Response> {
 
   const now = Date.now();
   const id = crypto.randomUUID();
-  const card = JSON.parse(character.card_json) as { firstMes?: string };
+  const card = JSON.parse(character.card_json) as {
+    firstMes?: string;
+    alternateGreetings?: string[];
+    nickname?: string;
+  };
 
   await env.DB.prepare(
     `INSERT INTO chats (id, character_id, persona_id, title, preset_id, window_start_seq, session_id, created_at, updated_at)
@@ -308,6 +324,8 @@ async function createChat(env: Env, req: Request): Promise<Response> {
       id,
       body.characterId,
       body.personaId ?? null,
+      // The chat's own title is the card's title, not the shown name — the library lists
+      // chats by the card, while the transcript calls the character by their nickname.
       body.title ?? character.name,
       // Minted once and reused for the chat's life. Without it OpenRouter only
       // pins a provider AFTER it has already seen a cache hit — the turn that missed.
@@ -317,17 +335,26 @@ async function createChat(env: Env, req: Request): Promise<Response> {
     )
     .run();
 
-  // The card's first greeting becomes the chat's first assistant message.
+  // Which opening the scene starts from. Index 0 is `first_mes`; the alternates follow in
+  // their stored order, which is the order the card editor lets you arrange them in.
   //
   // Macros are substituted HERE, at the point the text is stored, because the stored
   // value is what the reader sees. Substituting only on the way to the model left the
   // reader looking at a literal `{{user}}` in the opening line — the one message that is
   // guaranteed to be read. The persona is fixed for the chat's life, so baking it in
   // here cannot go stale.
-  if (card.firstMes) {
+  const openings = [card.firstMes ?? '', ...(card.alternateGreetings ?? [])].filter(
+    (entry) => entry.trim().length > 0,
+  );
+  const chosen = openings[body.greetingIndex ?? 0] ?? openings[0];
+
+  if (chosen) {
     const persona = body.personaId ? await loadPersonaRow(env, body.personaId) : null;
-    const greeting = substituteHead(card.firstMes, {
-      char: character.name,
+    // The shown name is what the narrator should call itself, so `{{char}}` resolves to
+    // the nickname when there is one — otherwise a card titled "Quill 25/09/2026" would
+    // have the character introduce itself by a date.
+    const greeting = substituteHead(chosen, {
+      char: card.nickname || character.name,
       user: persona?.name ?? null,
       persona: persona?.name ?? null,
     });
@@ -341,6 +368,23 @@ async function createChat(env: Env, req: Request): Promise<Response> {
   }
 
   return json(await getChat(env, id), 201);
+}
+
+/** The openings a chat could start from, for the picker on the character screen. */
+async function listOpenings(env: Env, characterId: string): Promise<Response> {
+  const character = await getCharacter(env, characterId);
+  if (!character) return notFound('character not found');
+
+  const card = JSON.parse(character.card_json) as {
+    firstMes?: string;
+    alternateGreetings?: string[];
+  };
+
+  const openings = [card.firstMes ?? '', ...(card.alternateGreetings ?? [])]
+    .map((content, index) => ({ index, content }))
+    .filter((entry) => entry.content.trim().length > 0);
+
+  return json(openings);
 }
 
 async function listMessages(env: Env, chatId: string): Promise<Response> {

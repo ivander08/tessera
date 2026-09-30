@@ -7,6 +7,7 @@ import { loadTokenCounter } from '../lib/tokenizerClient';
 import { messageOf, useAsync } from '../lib/hooks';
 import { GreetingsEditor } from '../components/GreetingsEditor';
 import { Avatar } from '../components/Avatar';
+import { AppBar, BackLink } from '../components/AppBar';
 
 interface CharacterDetail {
   id: string;
@@ -84,6 +85,24 @@ const FIELDS: Array<{ key: TextField; label: string; rows: number; cost: string 
 ];
 
 const PERMANENT: TextField[] = ['name', 'description', 'personality', 'scenario'];
+
+/**
+ * The form's sections, in the order a card is written rather than the order the JSON
+ * happens to list its keys: who they are, what they are, how the model is told, how the
+ * scene opens, what the world knows, and the card's own paperwork.
+ */
+const GROUPS: Array<{ title: string; fields: TextField[] }> = [
+  { title: 'Identity', fields: ['name', 'nickname'] },
+  { title: 'Definition', fields: ['description', 'personality', 'scenario'] },
+  { title: 'Prompt', fields: ['systemPrompt', 'mesExample', 'postHistoryInstructions'] },
+  { title: 'Greetings', fields: ['firstMes'] },
+  { title: 'Book', fields: [] },
+  { title: 'Meta', fields: ['creatorNotes'] },
+];
+
+const byKey: Partial<Record<TextField, (typeof FIELDS)[number]>> = Object.fromEntries(
+  FIELDS.map((field) => [field.key, field]),
+);
 
 export default function CharacterEdit() {
   const { id = '' } = useParams();
@@ -255,190 +274,270 @@ export default function CharacterEdit() {
   const storedAvatar = removeAvatar ? null : (data?.avatar ?? null);
 
   return (
-    <main className="mx-auto max-w-2xl space-y-5 p-4 pb-24">
-      <header className="flex items-center justify-between">
-        <h1 className="text-[var(--font-lg)] font-semibold">{data?.name ?? 'Character'}</h1>
-        <Link to="/characters" className="app-link">
-          ← Characters
-        </Link>
-      </header>
+    <>
+      <AppBar
+        lead={<BackLink to="/characters" label="Characters" />}
+        title={<span className="bar-title">{value('name') || data?.name || 'Character'}</span>}
+      />
 
-      {loading && <p className="text-sm text-[var(--ink-dim)]">Loading…</p>}
-      {error && <p className="text-sm text-[var(--danger)]">{error}</p>}
+      <main className="sheet">
+        {loading && <p className="sheet-sub">Loading…</p>}
+        {error && <div className="note danger">{error}</div>}
 
-      {data && !card && (
-        <section className="card space-y-2 p-3">
-          <p className="text-sm text-[var(--danger)]">
-            This character&rsquo;s stored card is not valid JSON, so the editor cannot show it as
-            fields. Nothing has been overwritten — the raw text is below. Re-import the card to
-            repair it.
-          </p>
-          <pre className="md-pre overflow-x-auto text-[var(--font-xs)] whitespace-pre-wrap">
-            {data.cardJson}
-          </pre>
-        </section>
-      )}
+        {data && !card && (
+          <>
+            <div className="sheet-head">
+              <div>
+                <h1 className="title">{data.name}</h1>
+                <p className="sheet-sub">
+                  source format <span className="data">{data.sourceFormat}</span> · added{' '}
+                  {new Date(data.createdAt).toLocaleDateString()}
+                </p>
+              </div>
+            </div>
+            <div className="note danger">
+              This character&rsquo;s stored card is not valid JSON, so the editor cannot show it as
+              fields. Nothing has been overwritten — the raw text is below. Re-import the card to
+              repair it.
+            </div>
+            <pre className="md-pre" style={{ marginTop: 14, whiteSpace: 'pre-wrap' }}>
+              {data.cardJson}
+            </pre>
+            <div style={{ marginTop: 16 }}>
+              <Link to="/characters/new" className="btn primary">
+                Import the card again
+              </Link>
+            </div>
+          </>
+        )}
 
-      {data && card && (
-        <>
-          <p className="text-[var(--font-xs)] text-[var(--ink-faint)]">
-            source format <span className="font-mono">{data.sourceFormat}</span> · added{' '}
-            {new Date(data.createdAt).toLocaleDateString()}
-          </p>
-
-          <section className="card flex items-center gap-3 p-3">
-            <Avatar
-              src={avatarPreview ?? storedAvatar}
-              name={value('name') || '?'}
-              className="chip"
-              style={{ width: 64, height: 64, fontSize: 'var(--text-lg)' }}
-            />
-            <div className="flex min-w-0 flex-1 flex-wrap gap-2">
-              <button type="button" className="btn" onClick={() => fileRef.current?.click()}>
-                {data.avatar ? 'Replace image' : 'Upload image'}
-              </button>
-              {(data.avatar || avatar) && !removeAvatar && (
+        {data && card && (
+          <>
+            <div className="sheet-head">
+              <div>
+                <h1 className="title">{value('name') || data.name}</h1>
+                <p className="sheet-sub">
+                  source format <span className="data">{data.sourceFormat}</span> · added{' '}
+                  {new Date(data.createdAt).toLocaleDateString()}
+                </p>
+              </div>
+              <div className="row-actions">
+                <button type="button" className="btn" onClick={() => void fork()} disabled={busy}>
+                  Fork
+                </button>
                 <button
                   type="button"
-                  className="btn"
-                  onClick={() => {
-                    setAvatar(null);
-                    setAvatarPreview(null);
-                    setRemoveAvatar(true);
+                  className="btn primary"
+                  onClick={() => void save()}
+                  disabled={busy}
+                >
+                  {busy ? 'Saving…' : 'Save changes'}
+                </button>
+              </div>
+            </div>
+
+            <div className="panel panel-pad" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+              <Avatar
+                src={avatarPreview ?? storedAvatar}
+                name={value('name') || '?'}
+                className="chip"
+                style={{ width: 64, height: 64, fontSize: 'var(--text-lg)' }}
+              />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div className="eyebrow">Portrait</div>
+                <div
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                    gap: 8,
+                    marginTop: 8,
                   }}
                 >
-                  Remove
-                </button>
-              )}
-              <input
-                ref={fileRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) void pickAvatar(file);
-                }}
-              />
-              {removeAvatar && (
-                <span className="self-center text-[var(--font-xs)] text-[var(--ink-dim)]">
-                  removed on save
-                </span>
-              )}
+                  <button type="button" className="btn" onClick={() => fileRef.current?.click()}>
+                    {data.avatar ? 'Replace image' : 'Upload image'}
+                  </button>
+                  {(data.avatar || avatar) && !removeAvatar && (
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => {
+                        setAvatar(null);
+                        setAvatarPreview(null);
+                        setRemoveAvatar(true);
+                      }}
+                    >
+                      Remove
+                    </button>
+                  )}
+                  {removeAvatar && <span className="form-hint">removed on save</span>}
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) void pickAvatar(file);
+                    }}
+                  />
+                </div>
+              </div>
             </div>
-          </section>
 
-          <section className="card space-y-1 p-3 text-[var(--font-sm)]">
-            <p>
-              <span className="font-mono text-[var(--accent)]">{ready ? permanent : '—'}</span>{' '}
-              permanent tokens — paid on every turn, forever.
-            </p>
-            <p className="text-[var(--font-xs)] text-[var(--ink-dim)]">
-              {ready ? perTurn : '—'} tokens per turn in total, including system_prompt,
-              mes_example, post_history_instructions
-              {ready && loreTokens > 0 && ` and ${loreTokens} of always-on character book`}.
-            </p>
-            <p className="text-[var(--font-xs)] text-[var(--ink-dim)]">
-              first_mes {ready ? tokensOf(value('firstMes')) : '—'} — one-time cost, it becomes the
-              opening message. mes_example and post_history_instructions are <em>not</em> one-time:
-              they are re-sent on every request.
-            </p>
-            {!ready && (
-              <p className="text-[var(--font-xs)] text-[var(--ink-faint)]">
-                Counting tokens — the exact vocabulary is a 2.3 MB download and loads only on this
-                screen.
-              </p>
-            )}
-          </section>
+            <section className="section">
+              <span className="eyebrow">What this costs</span>
+              <div className="panel panel-pad">
+                <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>
+                  <span
+                    className="data"
+                    style={{ fontSize: 'var(--text-lg)', color: 'var(--brass)' }}
+                  >
+                    {ready ? permanent : '—'}
+                  </span>{' '}
+                  permanent tokens — paid on every turn, forever.
+                </p>
+                <p className="form-hint" style={{ marginTop: 6 }}>
+                  {ready ? perTurn : '—'} tokens per turn in total, including system_prompt,
+                  mes_example, post_history_instructions
+                  {ready && loreTokens > 0 && ` and ${loreTokens} of always-on character book`}.
+                </p>
+                <p className="form-hint" style={{ marginTop: 6 }}>
+                  first_mes {ready ? tokensOf(value('firstMes')) : '—'} — one-time cost, it becomes
+                  the opening message. mes_example and post_history_instructions are <em>not</em>{' '}
+                  one-time: they are re-sent on every request.
+                </p>
+                {!ready && (
+                  <p className="form-hint" style={{ marginTop: 6 }}>
+                    Counting tokens — the exact vocabulary is a 2.3 MB download and loads only on
+                    this screen.
+                  </p>
+                )}
+              </div>
+            </section>
 
-          {FIELDS.map((field) => (
-            <label key={String(field.key)} className="block space-y-1">
-              <span className="flex items-baseline justify-between gap-2">
-                <span className="text-[var(--font-sm)] font-medium">{field.label}</span>
-                <span className="text-[var(--font-xs)] text-[var(--ink-faint)]">
-                  {field.cost} ·{' '}
-                  <span className="font-mono">
-                    {ready ? `${tokensOf(value(field.key))} tok` : '—'}
-                  </span>
-                </span>
-              </span>
-              {field.rows === 1 ? (
-                <input
-                  className="field"
-                  value={value(field.key)}
-                  onChange={(event) => setEdits({ ...edits, [String(field.key)]: event.target.value })}
-                />
-              ) : (
-                <textarea
-                  className="field"
-                  rows={field.rows}
-                  value={value(field.key)}
-                  onChange={(event) => setEdits({ ...edits, [String(field.key)]: event.target.value })}
-                />
-              )}
-            </label>
-          ))}
+            {GROUPS.map((group) => (
+              <section key={group.title} className="section">
+                <span className="eyebrow">{group.title}</span>
 
-          <label className="block space-y-1">
-            <span className="flex items-baseline justify-between gap-2">
-              <span className="text-[var(--font-sm)] font-medium">tags</span>
-              <span className="text-[var(--font-xs)] text-[var(--ink-faint)]">
-                never sent · comma separated
-              </span>
-            </span>
-            <input
-              className="field"
-              value={tagsText}
-              onChange={(event) => setTagsText(event.target.value)}
-              placeholder="cartographer, tavern"
-            />
-          </label>
+                {group.fields.map((key) => {
+                  const field = byKey[key];
+                  if (!field) return null;
+                  return (
+                    <label key={String(key)} className="form-row">
+                      <span className="form-label">
+                        <span>{field.label}</span>
+                        <span className="data">{ready ? `${tokensOf(value(key))} tok` : '—'}</span>
+                      </span>
+                      <span className="form-hint" style={{ display: 'block', marginBottom: 5 }}>
+                        {field.cost}
+                      </span>
+                      {field.rows === 1 ? (
+                        <input
+                          className="field"
+                          value={value(key)}
+                          onChange={(event) => setEdits({ ...edits, [String(key)]: event.target.value })}
+                        />
+                      ) : (
+                        <textarea
+                          className="field"
+                          rows={field.rows}
+                          value={value(key)}
+                          onChange={(event) => setEdits({ ...edits, [String(key)]: event.target.value })}
+                        />
+                      )}
+                    </label>
+                  );
+                })}
 
-          <GreetingsEditor
-            greetings={greetings}
-            onChange={setGreetings}
-            countTokens={(text) => tokensOf(text)}
-          />
+                {group.title === 'Greetings' && (
+                  <GreetingsEditor
+                    greetings={greetings}
+                    onChange={setGreetings}
+                    countTokens={(text) => tokensOf(text)}
+                  />
+                )}
 
-          <label className="block space-y-1">
-            <span className="flex items-baseline justify-between gap-2">
-              <span className="text-[var(--font-sm)] font-medium">character_book</span>
-              <span className="text-[var(--font-xs)] text-[var(--ink-faint)]">
-                JSON · always-on entries cost every turn
-              </span>
-            </span>
-            <textarea
-              className="field font-mono text-[var(--font-xs)]"
-              rows={6}
-              value={bookText}
-              onChange={(event) => setBookText(event.target.value)}
-              placeholder="{} — empty means no world info"
-            />
-            {parsedBook.error ? (
-              <span className="text-[var(--font-xs)] text-[var(--danger)]">{parsedBook.error}</span>
-            ) : (
-              <span className="text-[var(--font-xs)] text-[var(--ink-faint)]">
-                {parsedBook.value === null
-                  ? 'none'
-                  : `${parseLorebook(parsedBook.value).length} entries`}
-              </span>
-            )}
-          </label>
+                {group.title === 'Book' && (
+                  <label className="form-row">
+                    <span className="form-label">
+                      <span>character_book</span>
+                      <span className="data">
+                        {parsedBook.value === null
+                          ? '—'
+                          : `${parseLorebook(parsedBook.value).length} entries`}
+                      </span>
+                    </span>
+                    <span className="form-hint" style={{ display: 'block', marginBottom: 5 }}>
+                      JSON · always-on entries cost every turn
+                    </span>
+                    <textarea
+                      className="field"
+                      style={{ fontFamily: 'var(--font-data)', fontSize: 'var(--text-xs)' }}
+                      rows={6}
+                      value={bookText}
+                      onChange={(event) => setBookText(event.target.value)}
+                      placeholder="{} — empty means no world info"
+                    />
+                    {parsedBook.error ? (
+                      <span
+                        className="form-hint"
+                        style={{ display: 'block', marginTop: 5, color: 'var(--danger)' }}
+                      >
+                        {parsedBook.error}
+                      </span>
+                    ) : (
+                      <span className="form-hint" style={{ display: 'block', marginTop: 5 }}>
+                        {parsedBook.value === null
+                          ? 'none — the prompt carries no world info from this card'
+                          : `${parseLorebook(parsedBook.value).length} entries`}
+                      </span>
+                    )}
+                  </label>
+                )}
 
-          {failure && <p className="text-sm text-[var(--danger)]">{failure}</p>}
-          {status && <p className="text-sm text-[var(--ink-dim)]">{status}</p>}
+                {group.title === 'Meta' && (
+                  <label className="form-row">
+                    <span className="form-label">
+                      <span>tags</span>
+                    </span>
+                    <span className="form-hint" style={{ display: 'block', marginBottom: 5 }}>
+                      never sent · comma separated
+                    </span>
+                    <input
+                      className="field"
+                      value={tagsText}
+                      onChange={(event) => setTagsText(event.target.value)}
+                      placeholder="cartographer, tavern"
+                    />
+                  </label>
+                )}
+              </section>
+            ))}
 
-          <div className="flex flex-wrap items-center gap-3">
-            <button type="button" className="btn primary" onClick={() => void save()} disabled={busy}>
-              {busy ? 'Saving…' : 'Save'}
-            </button>
-            <button type="button" className="btn" onClick={() => void fork()} disabled={busy}>
-              Fork
-            </button>
-          </div>
-        </>
-      )}
-    </main>
+            {failure && <div className="note danger" style={{ marginTop: 20 }}>{failure}</div>}
+            {status && <div className="note" style={{ marginTop: 20 }}>{status}</div>}
+
+            <div className="row-actions" style={{ marginTop: 22 }}>
+              <button
+                type="button"
+                className="btn primary"
+                onClick={() => void save()}
+                disabled={busy}
+              >
+                {busy ? 'Saving…' : 'Save changes'}
+              </button>
+              <button type="button" className="btn" onClick={() => void fork()} disabled={busy}>
+                Fork
+              </button>
+              <Link to="/characters" className="btn quiet">
+                Back to the library
+              </Link>
+            </div>
+          </>
+        )}
+      </main>
+    </>
   );
 }
 

@@ -15,7 +15,6 @@ export default function ChatList() {
       <div className="sheet">
         <div className="sheet-head">
           <div>
-            <h1 className="title">Chats</h1>
             {data && data.length > 0 && (
               <p className="sheet-sub">
                 {data.length} {data.length === 1 ? 'scene' : 'scenes'}

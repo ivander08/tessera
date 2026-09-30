@@ -1,0 +1,68 @@
+name: Deploy
+
+# Runs the full check suite, then deploys. A commit that fails a test never reaches
+# production — which is the only reason auto-deploy is safe to have at all.
+on:
+  push:
+    branches: [main]
+  # So a broken deploy can be retried without pushing an empty commit.
+  workflow_dispatch:
+
+concurrency:
+  # A second push while the first is still deploying cancels the first. Without this,
+  # two deploys race and the older one can win.
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bunx tsc -b
+
+      - name: Typecheck tests
+        run: bunx tsc -p tsconfig.test.json --noEmit
+
+      - name: Test
+        run: bun test
+
+      - name: Lint
+        run: bunx oxlint src worker
+
+  deploy:
+    name: Deploy
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        # `build` typechecks and builds for the browser. Deliberately NOT `build:native`:
+        # that bakes the Worker origin into dist/, which is correct for the APK and wrong
+        # for the website, which is served BY the Worker.
+        run: bun run build
+
+      - name: Deploy to Cloudflare
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy

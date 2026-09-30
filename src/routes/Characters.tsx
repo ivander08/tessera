@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { apiJson } from '../lib/api';
-import { resolveAssetUrl } from '../lib/assets';
 import type { CharacterSummary } from '../lib/apiTypes';
 import { messageOf, useAsync } from '../lib/hooks';
+import { AppBar } from '../components/AppBar';
+import { Avatar } from '../components/Avatar';
 
 /** `chat_count` comes back from `GET /api/characters` alongside the summary columns. */
 interface CharacterRow extends CharacterSummary {
@@ -18,6 +19,10 @@ interface CharacterRow extends CharacterSummary {
  * The other actions sit beside it rather than inside it: a button nested in a link is
  * reachable only by whichever handler wins, and on touch that is a coin flip.
  *
+ * The row wraps rather than shrinks. Four buttons and a name do not fit on one 390px
+ * line, and a name ellipsised to nothing so that Delete can sit at the right margin is
+ * the wrong trade — the action bar drops to its own line instead.
+ *
  * Deleting a character deletes its chats too, so the confirmation says so by name and
  * count instead of asking "are you sure?" about an unstated thing.
  */
@@ -29,18 +34,20 @@ export default function Characters() {
   const navigate = useNavigate();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
 
-  async function startChat(characterId: string) {
-    setBusyId(characterId);
+  async function startChat(character: CharacterRow) {
+    setBusyId(character.id);
     setStatus(null);
+    setFailure(null);
     try {
       const chat = await apiJson<{ id: string }>('/api/chats', {
         method: 'POST',
-        body: JSON.stringify({ characterId }),
+        body: JSON.stringify({ characterId: character.id }),
       });
       navigate(`/chat/${chat.id}`);
     } catch (cause) {
-      setStatus(messageOf(cause));
+      setFailure(`Could not start a chat with ${character.name}: ${messageOf(cause)}`);
     } finally {
       setBusyId(null);
     }
@@ -51,6 +58,7 @@ export default function Characters() {
     if (name === null) return;
     setBusyId(character.id);
     setStatus(null);
+    setFailure(null);
     try {
       const created = await apiJson<{ id: string }>('/api/characters/fork', {
         method: 'POST',
@@ -58,7 +66,7 @@ export default function Characters() {
       });
       navigate(`/characters/${created.id}/edit`);
     } catch (cause) {
-      setStatus(messageOf(cause));
+      setFailure(`Could not fork ${character.name}: ${messageOf(cause)}`);
     } finally {
       setBusyId(null);
     }
@@ -73,102 +81,122 @@ export default function Characters() {
 
     setBusyId(character.id);
     setStatus(null);
+    setFailure(null);
     try {
       await apiJson(`/api/characters/${encodeURIComponent(character.id)}`, { method: 'DELETE' });
       setStatus(`Deleted ${character.name}.`);
       reload();
     } catch (cause) {
-      setStatus(messageOf(cause));
+      setFailure(`Could not delete ${character.name}: ${messageOf(cause)}`);
     } finally {
       setBusyId(null);
     }
   }
 
   return (
-    <main className="mx-auto max-w-2xl p-4">
-      <header className="mb-4 flex items-center justify-between">
-        <h1 className="text-[var(--font-lg)] font-semibold">Characters</h1>
-        <nav className="flex gap-3 text-[var(--font-sm)]">
-          <Link to="/characters/new" className="app-link">
-            Import
-          </Link>
-          <Link to="/" className="app-link">
-            Chats
-          </Link>
-        </nav>
-      </header>
+    <>
+      <AppBar title={<span className="bar-title">Characters</span>} />
 
-      {loading && <p className="text-sm text-[var(--ink-dim)]">Loading…</p>}
-      {error && <p className="text-sm text-[var(--danger)]">{error}</p>}
-      {status && <p className="mb-3 text-sm text-[var(--ink-dim)]">{status}</p>}
-
-      {data && data.length === 0 && (
-        <p className="text-sm text-[var(--ink-dim)]">
-          Nothing imported yet.{' '}
-          <Link to="/characters/new" className="text-[var(--accent)]">
+      <main className="sheet">
+        <div className="sheet-head">
+          <div>
+            {data && data.length > 0 && (
+              <p className="sheet-sub">
+                {data.length} {data.length === 1 ? 'card' : 'cards'} in the library
+              </p>
+            )}
+          </div>
+          <Link to="/characters/new" className="btn">
             Import a card
           </Link>
-          .
-        </p>
-      )}
+        </div>
 
-      <ul className="divide-y divide-[var(--line)]">
-        {data?.map((character) => (
-          <li key={character.id} className="space-y-2 py-3">
-            <Link
-              to={`/characters/${character.id}/edit`}
-              className="flex items-center gap-3"
-            >
-              {character.avatar ? (
-                <img
-                  src={resolveAssetUrl(character.avatar) ?? undefined}
-                  alt=""
-                  className="h-10 w-10 shrink-0 rounded-full object-cover"
-                />
-              ) : (
-                <div className="h-10 w-10 shrink-0 rounded-full bg-[var(--surface-overlay)]" />
-              )}
-              <div className="min-w-0 flex-1">
-                <p className="truncate font-medium">{character.name}</p>
-                <p className="text-[var(--font-xs)] text-[var(--ink-dim)]">
-                  {character.source_format} · {character.tokens ?? 0} permanent tokens
-                  {character.chat_count > 0 && ` · ${character.chat_count} chats`}
-                </p>
-              </div>
+        {loading && <p className="sheet-sub">Loading…</p>}
+        {error && <div className="note danger">{error}</div>}
+        {failure && <div className="note danger">{failure}</div>}
+        {status && <div className="note">{status}</div>}
+
+        {data && data.length === 0 && (
+          <div className="empty">
+            No characters yet.
+            <br />
+            <Link to="/characters/new" className="md-link">
+              Import a card
+            </Link>{' '}
+            or{' '}
+            <Link to="/forge" className="md-link">
+              write one from a premise
             </Link>
+            .
+          </div>
+        )}
 
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => void startChat(character.id)}
-                disabled={busyId === character.id}
-                className="btn min-h-10"
-              >
-                New chat
-              </button>
-              <Link to={`/characters/${character.id}/edit`} className="btn min-h-10 no-underline">
-                Edit
-              </Link>
-              <button
-                type="button"
-                onClick={() => void fork(character)}
-                disabled={busyId === character.id}
-                className="btn min-h-10"
-              >
-                Fork
-              </button>
-              <button
-                type="button"
-                onClick={() => void remove(character)}
-                disabled={busyId === character.id}
-                className="btn min-h-10 text-[var(--danger)]"
-              >
-                Delete
-              </button>
-            </div>
-          </li>
-        ))}
-      </ul>
-    </main>
+        <div style={failure || status ? { marginTop: 14 } : undefined}>
+          {data?.map((character) => {
+            const shown = character.shownName ?? character.name;
+            const busy = busyId === character.id;
+            return (
+              <div key={character.id} className="row" style={{ flexWrap: 'wrap', rowGap: 10 }}>
+                <Link
+                  to={`/characters/${character.id}/edit`}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    flex: '1 1 220px',
+                    minWidth: 0,
+                    color: 'inherit',
+                    textDecoration: 'none',
+                  }}
+                >
+                  <Avatar src={character.avatar} name={shown} />
+                  <div className="row-main">
+                    <div className="row-title">{shown}</div>
+                    <div className="row-sub">
+                      {character.name !== shown && `${character.name} · `}
+                      {character.source_format} ·{' '}
+                      <span className="data">{character.tokens ?? 0}</span> permanent tokens
+                      {character.chat_count > 0 && (
+                        <>
+                          {' · '}
+                          <span className="data">{character.chat_count}</span>{' '}
+                          {character.chat_count === 1 ? 'chat' : 'chats'}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </Link>
+
+                <div className="row-actions" style={{ marginLeft: 'auto', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={() => void startChat(character)}
+                    disabled={busy}
+                    className="btn primary"
+                  >
+                    New chat
+                  </button>
+                  <Link to={`/characters/${character.id}/edit`} className="btn">
+                    Edit
+                  </Link>
+                  <button type="button" onClick={() => void fork(character)} disabled={busy} className="btn">
+                    Fork
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void remove(character)}
+                    disabled={busy}
+                    className="btn danger"
+                    style={{ color: 'var(--danger)' }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </main>
+    </>
   );
 }

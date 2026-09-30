@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { CardParseError, parseCardFile } from '../lib/cards/import';
 import type { ParsedCard } from '../lib/cards/types';
 import { loadTokenCounter } from '../lib/tokenizerClient';
 import { apiJson } from '../lib/api';
 import { messageOf } from '../lib/hooks';
+import { AppBar, BackLink } from '../components/AppBar';
 
 /**
  * Per-field token counts matter because most of these fields are paid on every single
@@ -17,6 +18,31 @@ import { messageOf } from '../lib/hooks';
  * holds a character constant while varying token count, so no such claim is made.
  */
 const PERMANENT = ['name', 'description', 'personality', 'scenario'] as const;
+
+/** The editable string fields, grouped the way the edit screen groups them. */
+const GROUPS: Array<{ title: string; hint: string; fields: Array<keyof ParsedCard> }> = [
+  {
+    title: 'Identity',
+    hint: 'the card’s title, and what the transcript calls them',
+    fields: ['name', 'nickname'],
+  },
+  {
+    title: 'Definition',
+    hint: 'every turn, forever',
+    fields: ['description', 'personality', 'scenario'],
+  },
+  {
+    title: 'Prompt',
+    hint: 'mes_example sits in the prompt head, post_history_instructions in the tail — both every turn',
+    fields: ['systemPrompt', 'mesExample', 'postHistoryInstructions'],
+  },
+  {
+    title: 'Greetings',
+    hint: 'first_mes is one-time — it becomes the opening message',
+    fields: ['firstMes'],
+  },
+  { title: 'Meta', hint: 'never sent', fields: ['creatorNotes'] },
+];
 
 export default function CharacterNew() {
   const [card, setCard] = useState<ParsedCard | null>(null);
@@ -67,7 +93,7 @@ export default function CharacterNew() {
       });
       navigate(`/characters?created=${encodeURIComponent(created.id)}`);
     } catch (cause) {
-      setError(messageOf(cause));
+      setError(`Could not save the card: ${messageOf(cause)}`);
     } finally {
       setSaving(false);
     }
@@ -75,137 +101,272 @@ export default function CharacterNew() {
 
   if (!card) {
     return (
-      <Frame>
-        <div
-          onDragOver={(event) => {
-            event.preventDefault();
-            setDragging(true);
-          }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={(event) => {
-            event.preventDefault();
-            setDragging(false);
-            const file = event.dataTransfer.files[0];
-            if (file) void load(file);
-          }}
-          onClick={() => inputRef.current?.click()}
-          className={`flex h-56 cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6 text-center ${
-            dragging ? 'border-accent bg-accent/10' : 'border-white/15'
-          }`}
-        >
-          <p className="text-sm">Drop a card here — PNG, JSON, or CharX</p>
-          <p className="text-xs text-ink-dim">or click to choose a file</p>
-          <input
-            ref={inputRef}
-            type="file"
-            accept=".png,.json,.charx,.zip"
-            className="hidden"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
+      <>
+        <AppBar
+          lead={<BackLink to="/characters" label="Characters" />}
+          title={<span className="bar-title">Import a card</span>}
+        />
+        <main className="sheet">
+          <div className="sheet-head">
+            <div>
+              <h1 className="title">Import a card</h1>
+              <p className="sheet-sub">
+                The card keeps everything it arrived with: every field is parsed, shown and
+                editable before it is stored.
+              </p>
+            </div>
+          </div>
+
+          <div
+            onDragOver={(event) => {
+              event.preventDefault();
+              setDragging(true);
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(event) => {
+              event.preventDefault();
+              setDragging(false);
+              const file = event.dataTransfer.files[0];
               if (file) void load(file);
             }}
-          />
-        </div>
-        {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
-      </Frame>
+            onClick={() => inputRef.current?.click()}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                inputRef.current?.click();
+              }
+            }}
+            className="empty"
+            style={{
+              cursor: 'pointer',
+              borderStyle: 'dashed',
+              borderColor: dragging ? 'var(--brass)' : 'var(--line-strong)',
+              background: dragging
+                ? 'color-mix(in srgb, var(--brass) 7%, transparent)'
+                : 'transparent',
+              padding: '48px 20px',
+              transition: 'border-color 120ms ease, background-color 120ms ease',
+            }}
+          >
+            <span
+              className="eyebrow"
+              style={{ display: 'block', color: dragging ? 'var(--brass)' : undefined }}
+            >
+              Drop a card here
+            </span>
+            <span
+              style={{ display: 'block', marginTop: 10, fontSize: 'var(--text-sm)' }}
+            >
+              PNG, JSON or CharX. The portrait inside a PNG card comes with it.
+            </span>
+            <span
+              className="form-hint"
+              style={{ display: 'block', marginTop: 6 }}
+            >
+              or tap to choose a file
+            </span>
+            <input
+              ref={inputRef}
+              type="file"
+              accept=".png,.json,.charx,.zip"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void load(file);
+              }}
+            />
+          </div>
+
+          {error && (
+            <div className="note danger" style={{ marginTop: 14 }}>
+              {error}
+            </div>
+          )}
+        </main>
+      </>
     );
   }
 
   const tokensOf = count ?? (() => 0);
+  const ready = count !== null;
   const permanent = PERMANENT.reduce((sum, field) => sum + tokensOf(card[field]), 0);
 
+  function value(field: keyof ParsedCard): string {
+    const raw = card?.[field];
+    return typeof raw === 'string' ? raw : '';
+  }
+
+  function set(field: keyof ParsedCard, text: string) {
+    setCard((current) => (current ? { ...current, [field]: text } : current));
+  }
+
   return (
-    <Frame>
-      <p className="text-xs text-ink-dim">
-        source format <span className="font-mono">{card.sourceFormat}</span>
-      </p>
+    <>
+      <AppBar
+        lead={<BackLink to="/characters" label="Characters" />}
+        title={<span className="bar-title">{value('name') || 'Import a card'}</span>}
+      />
 
-      <div className="rounded border border-white/10 bg-surface-raised p-3 text-sm">
-        <p>
-          <span className="font-mono text-accent">{permanent}</span> permanent tokens — paid on every
-          turn, forever.
-        </p>
-        <p className="mt-1 text-xs text-ink-dim">
-          first_mes {tokensOf(card.firstMes)} — one-time cost, it becomes the opening message.
-        </p>
-        <p className="mt-1 text-xs text-ink-dim">
-          mes_example {tokensOf(card.mesExample)} — paid on <em>every</em> turn; it sits in the
-          prompt head. post_history_instructions {tokensOf(card.postHistoryInstructions)} — every
-          turn, in the tail.
-        </p>
-      </div>
+      <main className="sheet">
+        <div className="sheet-head">
+          <div>
+            <h1 className="title">{value('name') || 'Untitled card'}</h1>
+            <p className="sheet-sub">
+              source format <span className="data">{card.sourceFormat}</span> · avatar{' '}
+              {avatar ? 'extracted from the card' : 'none'}
+            </p>
+          </div>
+          <div className="row-actions">
+            <button
+              type="button"
+              className="btn quiet"
+              onClick={() => {
+                setCard(null);
+                setAvatar(null);
+                setError(null);
+              }}
+            >
+              Choose another file
+            </button>
+            <button
+              type="button"
+              onClick={() => void save()}
+              disabled={saving || card.name.trim().length === 0}
+              className="btn primary"
+            >
+              {saving ? 'Saving…' : 'Save character'}
+            </button>
+          </div>
+        </div>
 
-      {PERMANENT.map((field) => (
-        <Field key={field} label={field} tokens={tokensOf(card[field])}>
-          <textarea
-            value={card[field]}
-            onChange={(event) => setCard({ ...card, [field]: event.target.value })}
-            rows={field === 'name' ? 1 : 3}
-            className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 text-sm outline-none focus:border-accent"
-          />
-        </Field>
-      ))}
+        <div className="panel panel-pad">
+          <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>
+            <span className="data" style={{ fontSize: 'var(--text-lg)', color: 'var(--brass)' }}>
+              {ready ? permanent : '—'}
+            </span>{' '}
+            permanent tokens — paid on every turn, forever.
+          </p>
+          <p className="form-hint" style={{ marginTop: 6 }}>
+            first_mes {ready ? tokensOf(card.firstMes) : '—'} — one-time cost, it becomes the
+            opening message.
+          </p>
+          <p className="form-hint" style={{ marginTop: 6 }}>
+            mes_example {ready ? tokensOf(card.mesExample) : '—'} — paid on <em>every</em> turn; it
+            sits in the prompt head. post_history_instructions{' '}
+            {ready ? tokensOf(card.postHistoryInstructions) : '—'} — every turn, in the tail.
+          </p>
+          {!ready && (
+            <p className="form-hint" style={{ marginTop: 6 }}>
+              Counting tokens — the exact vocabulary is a 2.3 MB download and loads only on this
+              screen.
+            </p>
+          )}
+        </div>
 
-      {(['firstMes', 'mesExample', 'creatorNotes'] as const).map((field) => (
-        <Field key={field} label={field} tokens={tokensOf(card[field])}>
-          <textarea
-            value={card[field]}
-            onChange={(event) => setCard({ ...card, [field]: event.target.value })}
-            rows={4}
-            className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 text-sm outline-none focus:border-accent"
-          />
-        </Field>
-      ))}
+        {GROUPS.map((group) => (
+          <section key={group.title} className="section">
+            <span className="eyebrow">{group.title}</span>
 
-      <div className="space-y-1 text-xs text-ink-dim">
-        <p>tags: {card.tags.length > 0 ? card.tags.join(', ') : '—'}</p>
-        <p>alternate greetings: {card.alternateGreetings.length}</p>
-        <p>character book: {card.characterBook ? 'present' : '—'}</p>
-        <p>avatar: {avatar ? 'extracted from PNG' : 'none'}</p>
-      </div>
+            {group.fields.map((field) => (
+              <Field
+                key={String(field)}
+                label={String(field)}
+                hint={group.hint}
+                tokens={ready ? tokensOf(value(field)) : null}
+              >
+                <textarea
+                  value={value(field)}
+                  onChange={(event) => set(field, event.target.value)}
+                  rows={field === 'name' || field === 'nickname' ? 1 : 4}
+                  className="field"
+                />
+              </Field>
+            ))}
 
-      {error && <p className="text-sm text-red-400">{error}</p>}
+            {group.title === 'Meta' && (
+              <>
+                <div className="form-row">
+                  <span className="form-label">
+                    <span>tags</span>
+                    <span className="data">
+                      {card.tags.length > 0 ? card.tags.length : '—'}
+                    </span>
+                  </span>
+                  <span className="form-hint" style={{ display: 'block', marginBottom: 5 }}>
+                    {card.tags.length > 0 ? card.tags.join(', ') : 'none on this card'}
+                  </span>
+                </div>
+                <div className="form-row">
+                  <span className="form-label">
+                    <span>alternate greetings</span>
+                    <span className="data">{card.alternateGreetings.length}</span>
+                  </span>
+                  <span className="form-hint" style={{ display: 'block' }}>
+                    each is a separate opening; they carry over as they arrived, and the edit
+                    screen is where they are changed
+                  </span>
+                </div>
+                <div className="form-row">
+                  <span className="form-label">
+                    <span>character_book</span>
+                    <span className="data">{card.characterBook ? 'present' : '—'}</span>
+                  </span>
+                  <span className="form-hint" style={{ display: 'block' }}>
+                    {card.characterBook
+                      ? 'stored with the card; always-on entries cost every turn'
+                      : 'this card carries no world info'}
+                  </span>
+                </div>
+              </>
+            )}
+          </section>
+        ))}
 
-      <button
-        type="button"
-        onClick={() => void save()}
-        disabled={saving || card.name.trim().length === 0}
-        className="rounded bg-accent px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
-      >
-        {saving ? 'Saving…' : 'Save character'}
-      </button>
-    </Frame>
-  );
-}
+        {error && (
+          <div className="note danger" style={{ marginTop: 20 }}>
+            {error}
+          </div>
+        )}
 
-function Frame({ children }: { children: React.ReactNode }) {
-  return (
-    <main className="mx-auto max-w-2xl space-y-4 p-4">
-      <header className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold">Import a character</h1>
-        <Link to="/characters" className="text-sm text-ink-dim hover:text-ink">
-          ← Characters
-        </Link>
-      </header>
-      {children}
-    </main>
+        <div className="row-actions" style={{ marginTop: 22 }}>
+          <button
+            type="button"
+            onClick={() => void save()}
+            disabled={saving || card.name.trim().length === 0}
+            className="btn primary"
+          >
+            {saving ? 'Saving…' : 'Save character'}
+          </button>
+          <Link to="/characters" className="btn quiet">
+            Back to the library
+          </Link>
+        </div>
+      </main>
+    </>
   );
 }
 
 function Field({
   label,
+  hint,
   tokens,
   children,
 }: {
   label: string;
-  tokens: number;
-  children: React.ReactNode;
+  hint: string;
+  tokens: number | null;
+  children: ReactNode;
 }) {
   return (
-    <label className="block space-y-1">
-      <span className="flex items-baseline justify-between text-xs text-ink-dim">
+    <label className="form-row">
+      <span className="form-label">
         <span>{label}</span>
-        <span className="font-mono">{tokens} tok</span>
+        <span className="data">{tokens === null ? '—' : `${tokens} tok`}</span>
+      </span>
+      <span className="form-hint" style={{ display: 'block', marginBottom: 5 }}>
+        {hint}
       </span>
       {children}
     </label>

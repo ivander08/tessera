@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { Link } from 'react-router';
 import { apiJson } from '../lib/api';
-import { resolveAssetUrl } from '../lib/assets';
 import { messageOf, useAsync } from '../lib/hooks';
+import { AppBar } from '../components/AppBar';
+import { Avatar } from '../components/Avatar';
 import type { PersonaSummary } from '../components/PersonaPicker';
 
 /**
@@ -68,21 +68,12 @@ export default function Personas() {
   }
 
   return (
-    <main className="mx-auto max-w-2xl space-y-5 p-4 pb-24">
-      <header className="flex items-center justify-between">
-        <h1 className="text-[var(--font-lg)] font-semibold">Personas</h1>
-        <nav className="flex gap-3">
-          <Link to="/" className="app-link inline-flex min-h-10 items-center">
-            Chats
-          </Link>
-          <Link to="/settings" className="app-link inline-flex min-h-10 items-center">
-            Settings
-          </Link>
-        </nav>
-      </header>
+    <>
+      <AppBar title={<span className="bar-title">Personas</span>} />
 
-      <p className="card p-3 text-[var(--font-sm)] text-[var(--ink-dim)]">
-        A persona is <span className="text-[var(--ink)]">you</span> — the name and description
+      <main className="sheet">
+      <p className="note">
+        A persona is <span style={{ color: 'var(--ink)' }}>you</span> — the name and description
         the character is talking to. Cards written with <code className="md-code">{'{{user}}'}</code>{' '}
         get that placeholder replaced with the persona's name. With no persona set it is left
         visible rather than guessed at, so a card that says{' '}
@@ -104,20 +95,20 @@ export default function Personas() {
         onError={setProblem}
       />
 
-      {loading && <p className="text-sm text-[var(--ink-dim)]">Loading…</p>}
-      {error && <p className="text-sm text-[var(--danger)]">{error}</p>}
-      {problem && <p className="text-sm text-[var(--danger)]">{problem}</p>}
-      {status && <p className="text-sm text-[var(--ink-dim)]">{status}</p>}
+      {loading && <p className="sheet-sub">Loading…</p>}
+      {error && <div className="note danger">{error}</div>}
+      {problem && <div className="note danger">{problem}</div>}
+      {status && <p className="form-hint">{status}</p>}
 
       {data && data.length === 0 && (
-        <p className="text-sm text-[var(--ink-dim)]">
+        <p className="sheet-sub">
           No personas yet. Add one above and attach it to a chat from the chat header.
         </p>
       )}
 
-      <ul className="space-y-2">
+      <div>
         {data?.map((persona) => (
-          <li key={persona.id} className="card p-3">
+          <div key={persona.id} className="panel panel-pad" style={{ marginBottom: 10 }}>
             {editingId === persona.id ? (
               <PersonaForm
                 initial={persona}
@@ -140,26 +131,26 @@ export default function Personas() {
               />
             ) : (
               <div className="flex items-start gap-3">
-                <Avatar persona={persona} />
+                <PersonaChip persona={persona} />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate font-medium">{persona.name}</p>
+                  <p className="row-title">{persona.name}</p>
                   {persona.description ? (
-                    <p className="text-[var(--font-sm)] whitespace-pre-wrap text-[var(--ink-dim)]">
+                    <p className="sheet-sub" style={{ whiteSpace: 'pre-wrap' }}>
                       {persona.description}
                     </p>
                   ) : (
-                    <p className="text-[var(--font-sm)] text-[var(--ink-faint)]">No description.</p>
+                    <p className="form-hint">No description.</p>
                   )}
-                  <p className="text-[var(--font-xs)] text-[var(--ink-faint)]">
+                  <p className="form-hint">
                     {persona.chat_count === 0
                       ? 'Not used by any chat'
                       : `Used by ${persona.chat_count} ${persona.chat_count === 1 ? 'chat' : 'chats'}`}
                   </p>
                 </div>
-                <div className="flex shrink-0 flex-col gap-1 text-[var(--font-sm)]">
+                <div className="row-actions" style={{ flexDirection: 'column' }}>
                   <button
                     type="button"
-                    className="app-link min-h-10 text-left"
+                    className="btn quiet"
                     onClick={() => setEditingId(persona.id)}
                     disabled={busy}
                   >
@@ -167,7 +158,7 @@ export default function Personas() {
                   </button>
                   <button
                     type="button"
-                    className="min-h-10 text-left text-[var(--ink-dim)]"
+                    className="btn quiet danger"
                     onClick={() => void remove(persona)}
                     disabled={busy}
                   >
@@ -176,23 +167,17 @@ export default function Personas() {
                 </div>
               </div>
             )}
-          </li>
+          </div>
         ))}
-      </ul>
-    </main>
+      </div>
+      </main>
+    </>
   );
 }
 
-function Avatar({ persona }: { persona: PersonaSummary }) {
-  const url = resolveAssetUrl(persona.avatar);
-  if (url) {
-    return <img src={url} alt="" className="h-10 w-10 shrink-0 rounded-full object-cover" />;
-  }
-  return (
-    <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[var(--surface-overlay)] text-[var(--font-xs)] text-[var(--ink-faint)]">
-      {persona.name.slice(0, 1).toUpperCase()}
-    </div>
-  );
+/** The persona's chip: their image when they have one, otherwise their initial. */
+function PersonaChip({ persona }: { persona: PersonaSummary }) {
+  return <Avatar src={persona.avatar} name={persona.name} />;
 }
 
 function NewPersona({
@@ -205,10 +190,8 @@ function NewPersona({
   onError: (message: string | null) => void;
 }) {
   return (
-    <section className="space-y-2">
-      <h2 className="text-[var(--font-sm)] font-semibold uppercase tracking-wide text-[var(--ink-dim)]">
-        New persona
-      </h2>
+    <section className="section">
+      <span className="eyebrow">New persona</span>
       <PersonaForm
         submitLabel="Create"
         busy={busy}
