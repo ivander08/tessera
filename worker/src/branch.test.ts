@@ -51,6 +51,7 @@ function row(
     swipe_group: null,
     speaker: null,
     state_json: null,
+    deleted: 0,
     created_at: 0,
   };
 }

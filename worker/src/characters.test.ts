@@ -177,10 +177,12 @@ describe('greetingStates on a card', () => {
     const { env } = makeEnv();
     // Position is the only thing tying a scene to its opening, so an unreadable field
     // must not shift the entries after it.
-    const id = await store(
-      env,
-      card({ name: 'Ada', greetingStates: [{ time: 42, location: 'The Compass Rose' }, { weather: 'Rain' }] }),
-    );
+    //
+    // The cast is the point of the test: `time: 42` is not a `GreetingState`, and the
+    // reader is what has to survive that. Typing the fixture honestly would mean not
+    // testing the case at all.
+    const malformed = [{ time: 42, location: 'The Compass Rose' }, { weather: 'Rain' }] as unknown as GreetingState[];
+    const id = await store(env, card({ name: 'Ada', greetingStates: malformed }));
 
     expect((await readCardOf(env, id)).greetingStates).toEqual([
       { time: '', location: 'The Compass Rose' },
