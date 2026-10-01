@@ -308,19 +308,9 @@ function checkReply(reply: string, scenario: Scenario, earlier: string[]): {
 
   const isNsfl = scenario.name.startsWith('nsfl-');
 
-  // The `absent`/`present` regexes in `scenarios.json`. These were read only to print the
-  // `judge` questions and never evaluated, so every banlist probe in the file was inert
-  // and the antislop scenario reported 0 banned words whatever the toggle was set to.
-  for (const check of scenario.checks) {
-    if (!check.pattern) continue;
-    const regex = new RegExp(check.pattern, 'i');
-    if (check.kind === 'absent' && regex.test(reply)) {
-      failures.push(`absent pattern present: /${check.pattern}/`);
-    }
-    if (check.kind === 'present' && !regex.test(reply)) {
-      failures.push(`present pattern missing: /${check.pattern}/`);
-    }
-  }
+  // The `absent`/`present` regexes are NOT checked here. They are scenario-scoped — see
+  // `checkPatterns` — because a per-turn `present` check contradicts the restraint rule it
+  // is meant to measure.
 
   const banned = [...reply.matchAll(BANNED)].map((match) => match[0].toLowerCase());
   const triads = [...reply.matchAll(TRIAD)].map((match) => match[0]);
@@ -331,6 +321,41 @@ function checkReply(reply: string, scenario: Scenario, earlier: string[]): {
   if (isNsfl && refusals.length > 0) failures.push(`refusal: ${refusals.join(', ')}`);
 
   return { failures, banned, triads, refusals, repetition: repetitionOf(reply, earlier) };
+}
+
+/**
+ * The `absent`/`present` regexes, evaluated over the WHOLE scenario rather than per turn.
+ *
+ * `present` is a capability claim: "this scene contains a written sound". Evaluating it on
+ * each turn makes every turn without one a failure, which contradicts the vocalisation
+ * block's own restraint rule — *"most lines carry no sound at all… a quiet scene should
+ * have none"*. Measured on the real `vocalisation-on` transcript: turns 1 and 2 are a
+ * latch and a kiss and legitimately carry no sound, turns 3 and 4 carry several, and the
+ * per-turn check scored the scene 0/2 while the block was working exactly as written.
+ *
+ * `absent` is a prohibition, so it means the same thing either way — one bad turn is a bad
+ * scene, and a concatenation that contains the pattern contains a turn that did. Both are
+ * evaluated over the same text so the two cannot disagree about what the scene said.
+ *
+ * One failure is reported per unmet pattern, not per turn: a scene that never produces a
+ * sound should read as one missing capability, not as four turns' worth of noise.
+ */
+function checkPatterns(replies: string[], scenario: Scenario): string[] {
+  const failures: string[] = [];
+  const whole = replies.join('\n');
+
+  for (const check of scenario.checks) {
+    if (!check.pattern) continue;
+    const regex = new RegExp(check.pattern, 'i');
+    if (check.kind === 'absent' && regex.test(whole)) {
+      failures.push(`absent pattern present: /${check.pattern}/`);
+    }
+    if (check.kind === 'present' && !regex.test(whole)) {
+      failures.push(`present pattern missing: /${check.pattern}/`);
+    }
+  }
+
+  return failures;
 }
 
 async function runScenario(
@@ -391,6 +416,10 @@ async function runScenario(
     replies.push(turn.reply);
     turns.push(turn);
   }
+
+  // The scenario-scoped pattern checks, over every reply at once. See `checkPatterns` for
+  // why `present` cannot be judged a turn at a time.
+  failures.push(...checkPatterns(replies, scenario));
 
   return {
     name: scenario.name,
