@@ -27,6 +27,8 @@ type SectionKey =
   | 'conditions'
   | 'outfits'
   | 'inventory'
+  | 'bonds'
+  | 'threads'
   | 'notes';
 
 interface Section {
@@ -39,6 +41,11 @@ interface Section {
  * facts a scene cannot be written without, so they are the last to go.
  */
 const DROP_ORDER: SectionKey[] = [
+  // Bonds and threads shed first: they are the least load-bearing of the tracked facts —
+  // a scene can be written without either — and they are the newest, so they are the
+  // least proven.
+  'threads',
+  'bonds',
   'notes',
   'inventory',
   'conditions',
@@ -65,8 +72,13 @@ export function renderStateBlock(
   state: WorldState,
   maxTokens: number = DEFAULT_STATE_BUDGET,
   count: (text: string) => number = estimateTokens,
+  /**
+   * Which optional sections to render. Defaults to both ON so an existing caller that does
+   * not know about craft keeps its current output exactly.
+   */
+  options: { bonds?: boolean; threads?: boolean } = { bonds: true, threads: true },
 ): string {
-  const sections = collect(state);
+  const sections = collect(state, options);
   if (sections.length === 0 || maxTokens <= 0) return '';
 
   const renderText = (list: Section[]): string =>
@@ -91,7 +103,7 @@ export function renderStateBlock(
 }
 
 /** Sections in fixed emission order, most load-bearing facts first. Empty ones omitted. */
-function collect(state: WorldState): Section[] {
+function collect(state: WorldState, options: { bonds?: boolean; threads?: boolean }): Section[] {
   const out: Section[] = [];
   const add = (key: SectionKey, text: string): void => {
     if (text.length > 0) out.push({ key, text });
@@ -125,6 +137,30 @@ function collect(state: WorldState): Section[] {
   // What everyone is wearing. Sits after `conditions` because the two are the same kind
   // of fact — a short note about a named character — and a narrator reads them together.
   add('outfits', renderOutfits(state.outfits));
+
+  // Bonds and threads are gated on the craft toggle: with the toggle off the engine is not
+  // asked to maintain them, so rendering a stale entry would be a fact the reader turned
+  // off coming back.
+  if (options.bonds !== false) {
+    const bondLines = Object.entries(state.bonds ?? {})
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([pair, values]) => {
+        const parts = (['bond', 'sparks', 'grudge'] as const)
+          .filter((field) => typeof values[field] === 'number' && values[field] !== 0)
+          .map((field) => `${field} ${values[field]}`);
+        return parts.length > 0 ? `- ${pair.replace('|', ' ↔ ')} | ${parts.join(', ')}` : '';
+      })
+      .filter(Boolean);
+    add('bonds', bondLines.length > 0 ? `Bonds:\n${bondLines.join('\n')}` : '');
+  }
+
+  if (options.threads !== false) {
+    const threadLines = (state.threads ?? [])
+      .filter((thread) => thread.status !== 'dropped')
+      .sort((a, b) => a.text.localeCompare(b.text))
+      .map((thread) => `- [${thread.status ?? 'open'}] ${thread.text}`);
+    add('threads', threadLines.length > 0 ? `Threads:\n${threadLines.join('\n')}` : '');
+  }
 
   // Notes are whole sentences, so they get their own lines rather than being
   // comma-joined into a fragment.

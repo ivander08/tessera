@@ -4,6 +4,10 @@ import { apiJson } from '../lib/api';
 import type { WorldState } from '../lib/state/schema';
 import { messageOf, useAsync } from '../lib/hooks';
 import { AppBar, BackLink } from '../components/AppBar';
+import { BondMeters, ThreadList } from '../components/StateMeters';
+
+type Bonds = NonNullable<WorldState['bonds']>;
+type Threads = NonNullable<WorldState['threads']>;
 
 interface StatePayload {
   chatId: string;
@@ -20,6 +24,8 @@ interface Field {
   list?: boolean;
   /** A map of name -> text, edited as `Name: text` lines. */
   map?: boolean;
+  /** A structured value edited by a dedicated widget rather than a text box. */
+  kind?: 'bonds' | 'threads';
 }
 
 /**
@@ -60,6 +66,23 @@ const GROUPS: Array<{ heading: string; fields: Field[] }> = [
     heading: 'Notes',
     fields: [{ key: 'notes', label: 'What not to forget', hint: 'One per line.', list: true }],
   },
+  {
+    heading: 'Relationships and threads',
+    fields: [
+      {
+        key: 'bonds',
+        label: 'Relationships',
+        hint: 'How two characters feel about each other. The engine maintains these when the craft toggle is on.',
+        kind: 'bonds',
+      },
+      {
+        key: 'threads',
+        label: 'Plot threads',
+        hint: 'What the scene raised and has not resolved.',
+        kind: 'threads',
+      },
+    ],
+  },
 ];
 
 const ALL_FIELDS: Field[] = GROUPS.flatMap((group) => group.fields);
@@ -83,6 +106,9 @@ export default function State({ embedded = false }: { embedded?: boolean } = {})
   );
 
   const [edits, setEdits] = useState<Record<string, string>>({});
+  // The meters write here rather than into `edits`, which is `Record<string, string>` and
+  // cannot hold a structured value.
+  const [structured, setStructured] = useState<{ bonds?: Bonds; threads?: Threads }>({});
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -138,6 +164,27 @@ export default function State({ embedded = false }: { embedded?: boolean } = {})
       }
     }
 
+    // The structured values, merged after the text fields. `ALL_FIELDS` filters the text
+    // loop by key, and bonds/threads are not text — without this they would be silently
+    // dropped and the edit would look like it worked.
+    //
+    // Empty rows are dropped rather than sent: `validatePatch` rejects the whole patch on
+    // an empty thread text, which would discard the reader's other edits with it. An
+    // empty result clears the key, which is what emptying the panel means.
+    if (structured.threads !== undefined) {
+      const kept = structured.threads.filter((thread) => thread.text.trim().length > 0);
+      patch.threads = kept.length > 0 ? kept : null;
+    }
+    if (structured.bonds !== undefined) {
+      const kept: Bonds = {};
+      for (const [pair, values] of Object.entries(structured.bonds)) {
+        const names = pair.split('|').map((name) => name.trim()).filter(Boolean);
+        if (names.length !== 2) continue;
+        kept[pair] = values;
+      }
+      patch.bonds = Object.keys(kept).length > 0 ? kept : null;
+    }
+
     if (Object.keys(patch).length === 0) {
       setBusy(false);
       setStatus('Nothing changed.');
@@ -150,6 +197,7 @@ export default function State({ embedded = false }: { embedded?: boolean } = {})
         body: JSON.stringify({ chatId: id, patch }),
       });
       setEdits({});
+      setStructured({});
       setStatus('Saved. The next turn will use this.');
       reload();
     } catch (cause) {
@@ -165,6 +213,7 @@ export default function State({ embedded = false }: { embedded?: boolean } = {})
     try {
       await apiJson(`/api/state/${encodeURIComponent(id)}`, { method: 'DELETE' });
       setEdits({});
+      setStructured({});
       setStatus('Cleared.');
       reload();
     } catch (cause) {
@@ -221,7 +270,17 @@ export default function State({ embedded = false }: { embedded?: boolean } = {})
                       <span>{field.label}</span>
                       <span className="form-hint">{field.hint}</span>
                     </span>
-                    {field.list || field.map ? (
+                    {field.kind === 'bonds' ? (
+                      <BondMeters
+                        value={structured.bonds ?? state.bonds ?? {}}
+                        onChange={(next) => setStructured({ ...structured, bonds: next })}
+                      />
+                    ) : field.kind === 'threads' ? (
+                      <ThreadList
+                        value={structured.threads ?? state.threads ?? []}
+                        onChange={(next) => setStructured({ ...structured, threads: next })}
+                      />
+                    ) : field.list || field.map ? (
                       <textarea
                         className="field"
                         rows={3}

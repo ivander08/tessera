@@ -21,6 +21,7 @@ export type TokenCounter = (messages: WireMessage[]) => number;
  *   3. system      — mesExample, if non-empty
  *   4. system      — persona block, if present
  *   5. system...   — one per lorebook entry, sorted by id
+ *   5b. system     — craftBlock, if present (Tessera's craft settings)
  *   6. history     — verbatim, oldest first
  *   ---- tailStart ----
  *   7. system      — memoryBlock, if present      (M4)
@@ -42,6 +43,10 @@ export function assemble(input: AssembleInput, countChatTokens: TokenCounter): A
     for (const segment of input.presetHead) {
       pushIfNonEmpty(head, segment.role, segment.content);
     }
+    // A preset's prompt list does not know about Tessera's craft settings, and a reader
+    // who set them expects them to apply regardless. Last in the head, so it reads as the
+    // most recent instruction before the conversation.
+    pushIfNonEmpty(head, 'system', input.craftBlock);
   } else {
     pushIfNonEmpty(head, 'system', input.systemPrompt);
     pushIfNonEmpty(head, 'system', renderCharacter(input.character));
@@ -52,6 +57,10 @@ export function assemble(input: AssembleInput, countChatTokens: TokenCounter): A
     // to perturb the prefix.
     const lorebook = [...input.lorebook].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     for (const entry of lorebook) pushIfNonEmpty(head, 'system', entry.content);
+
+    // After the lorebook and before the history: the craft instruction is the most recent
+    // thing the model reads before the conversation.
+    pushIfNonEmpty(head, 'system', input.craftBlock);
   }
 
   const body: WireMessage[] = input.history.map((message) => ({
@@ -74,6 +83,10 @@ export function assemble(input: AssembleInput, countChatTokens: TokenCounter): A
   // is what the script form is written against.
   pushIfNonEmpty(tail, 'system', input.tail.castBlock);
   pushIfNonEmpty(tail, 'system', input.tail.loreBlock);
+  // The content policy sits here — the last system text before the user's message — so it
+  // is the most recent instruction the model reads. In the prefix the same text was
+  // refused; see `CONTENT_POLICY` in `craftBlock.ts`.
+  pushIfNonEmpty(tail, 'system', input.tail.contentPolicy);
   pushIfNonEmpty(tail, 'system', input.tail.authorsNote);
   pushIfNonEmpty(tail, 'system', input.tail.postHistoryInstructions);
   // The mode's instruction, when the turn is not an ordinary reply. A system line rather

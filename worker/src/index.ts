@@ -486,7 +486,7 @@ async function createChat(env: Env, req: Request, ctx: ExecutionContext): Promis
                 name: card.nickname || character.name,
                 description: typeof card.description === 'string' ? card.description : '',
               },
-              setup.timePace,
+              setup,
             );
           })
           .catch((error: unknown) => {

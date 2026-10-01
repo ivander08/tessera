@@ -51,6 +51,19 @@ export interface WorldState {
    */
   outfits?: Record<string, string>;
   notes?: string[];
+  /**
+   * Character-to-character relationship values.
+   *
+   * Keyed `"A|B"` with the two names SORTED, so the same pair is one key however the model
+   * orders them. Without sorting, `"Ada|Bram"` and `"Bram|Ada"` are two entries that
+   * disagree, and the narrator reads both.
+   */
+  bonds?: Record<string, { bond?: number; sparks?: number; grudge?: number }>;
+  /**
+   * Plot threads the scene has raised and not resolved, so the narrator can pay them off
+   * later instead of losing them.
+   */
+  threads?: Array<{ text: string; status?: 'open' | 'paid' | 'dropped' }>;
 }
 
 /**
@@ -258,6 +271,82 @@ export function validatePatch(current: WorldState, patch: unknown): ValidationRe
         break;
       }
 
+      case 'bonds': {
+        if (value === null) {
+          delete next.bonds;
+          break;
+        }
+        const map = asRecord(value);
+        if (!map) {
+          return { ok: false, reason: `"bonds" must be an object or null, got ${describe(value)}` };
+        }
+        const bonds: Record<string, { bond?: number; sparks?: number; grudge?: number }> = {};
+        for (const [pair, entry] of Object.entries(map)) {
+          const fields = asRecord(entry);
+          if (!fields) {
+            return {
+              ok: false,
+              reason: `"bonds.${pair}" must be an object, got ${describe(entry)}`,
+            };
+          }
+          const out: { bond?: number; sparks?: number; grudge?: number } = {};
+          for (const field of ['bond', 'sparks', 'grudge'] as const) {
+            const raw = fields[field];
+            if (raw === undefined || raw === null) continue;
+            if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+              return {
+                ok: false,
+                reason: `"bonds.${pair}.${field}" must be a number, got ${describe(raw)}`,
+              };
+            }
+            // Clamped, not rejected: a model that writes 999 has the right idea and the
+            // wrong scale, and refusing the whole patch would discard every other change
+            // with it.
+            out[field] = Math.max(-20, Math.min(20, Math.round(raw)));
+          }
+          if (Object.keys(out).length === 0) continue;
+          bonds[sortPair(pair)] = out;
+        }
+        if (Object.keys(bonds).length > 0) next.bonds = bonds;
+        else delete next.bonds;
+        break;
+      }
+
+      case 'threads': {
+        if (value === null) {
+          delete next.threads;
+          break;
+        }
+        if (!Array.isArray(value)) {
+          return { ok: false, reason: `"threads" must be an array or null, got ${describe(value)}` };
+        }
+        const threads: Array<{ text: string; status?: 'open' | 'paid' | 'dropped' }> = [];
+        for (const entry of value) {
+          const record = asRecord(entry);
+          if (!record) {
+            return {
+              ok: false,
+              reason: `each "threads" entry must be an object, got ${describe(entry)}`,
+            };
+          }
+          const text = typeof record.text === 'string' ? record.text.trim() : '';
+          if (text.length === 0) {
+            return { ok: false, reason: 'each "threads" entry needs a non-empty "text"' };
+          }
+          const status = record.status;
+          if (status !== undefined && status !== 'open' && status !== 'paid' && status !== 'dropped') {
+            return {
+              ok: false,
+              reason: `"threads.status" must be open, paid or dropped, got ${describe(status)}`,
+            };
+          }
+          threads.push(status === undefined ? { text } : { text, status });
+        }
+        if (threads.length > 0) next.threads = threads;
+        else delete next.threads;
+        break;
+      }
+
       default:
         return { ok: false, reason: `unknown state key "${key}"` };
     }
@@ -303,6 +392,19 @@ export function validatePatch(current: WorldState, patch: unknown): ValidationRe
   }
 
   return { ok: true, next: next as WorldState };
+}
+
+/**
+ * `"Bram|Ada"` -> `"Ada|Bram"`.
+ *
+ * The key is the pair, so it must not depend on the order the model wrote them in. A
+ * pair written both ways would otherwise be two entries whose values disagree, and the
+ * narrator reads both.
+ */
+function sortPair(pair: string): string {
+  const parts = pair.split('|').map((part) => part.trim()).filter(Boolean);
+  if (parts.length !== 2) return pair.trim();
+  return [...parts].sort((a, b) => a.localeCompare(b)).join('|');
 }
 
 function stringList(value: unknown): string[] | null {

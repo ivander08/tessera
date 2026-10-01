@@ -104,6 +104,65 @@ describe('validatePatch', () => {
   });
 });
 
+describe('validatePatch — bonds and threads', () => {
+  test('a bond round-trips', () => {
+    const result = validatePatch({}, { bonds: { 'Ada|Bram': { bond: 4 } } });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.next.bonds).toEqual({ 'Ada|Bram': { bond: 4 } });
+  });
+
+  test('a pair written the other way round is stored sorted', () => {
+    // Otherwise "Ada|Bram" and "Bram|Ada" are two entries that disagree, and the
+    // narrator reads both.
+    const result = validatePatch({}, { bonds: { 'Bram|Ada': { bond: 4 } } });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(Object.keys(result.next.bonds!)).toEqual(['Ada|Bram']);
+  });
+
+  test('a value out of range is clamped, not rejected', () => {
+    // The model has the right idea and the wrong scale; refusing would discard the rest
+    // of the patch with it.
+    const high = validatePatch({}, { bonds: { 'A|B': { bond: 9999 } } });
+    expect(high.ok).toBe(true);
+    if (high.ok) expect(high.next.bonds!['A|B'].bond).toBe(20);
+
+    const low = validatePatch({}, { bonds: { 'A|B': { bond: -9999 } } });
+    expect(low.ok).toBe(true);
+    if (low.ok) expect(low.next.bonds!['A|B'].bond).toBe(-20);
+  });
+
+  test('a malformed bond is rejected with a reason naming the pair', () => {
+    const result = validatePatch({}, { bonds: { 'Ada|Bram': 'close' } });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('bonds.Ada|Bram');
+  });
+
+  test('a thread round-trips, and an empty one is rejected', () => {
+    const ok = validatePatch({}, { threads: [{ text: 'the letter' }] });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.next.threads).toEqual([{ text: 'the letter' }]);
+
+    const empty = validatePatch({}, { threads: [{ text: '' }] });
+    expect(empty.ok).toBe(false);
+
+    const badStatus = validatePatch({}, { threads: [{ text: 'x', status: 'maybe' }] });
+    expect(badStatus.ok).toBe(false);
+  });
+
+  test('null clears both keys', () => {
+    const current: WorldState = {
+      bonds: { 'A|B': { bond: 3 } },
+      threads: [{ text: 'the letter' }],
+    };
+    const result = validatePatch(current, { bonds: null, threads: null });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect('bonds' in result.next).toBe(false);
+      expect('threads' in result.next).toBe(false);
+    }
+  });
+});
+
 describe('renderStateBlock', () => {
   test('returns an empty string for an empty state', () => {
     expect(renderStateBlock({})).toBe('');
@@ -524,5 +583,62 @@ describe('world state: conditions versus presence', () => {
     const back = validatePatch(away.ok ? away.next : {}, { present: ['Ada'], conditions: { Ada: 'wary' } });
     expect(back.ok).toBe(true);
     if (back.ok) expect(back.next.conditions).toEqual({ Ada: 'wary' });
+  });
+});
+
+describe('world state: bonds and threads rendering', () => {
+  test('bonds render sorted, joined with an arrow, and omit a zero value', () => {
+    const block = renderStateBlock({
+      bonds: { 'Ada|Zoe': { bond: 3, sparks: 0 }, 'Ada|Bram': { grudge: 2 } },
+    });
+    expect(block).toContain('Bonds:');
+    // Sorted by key, so the insertion order of the map cannot leak out.
+    expect(block).toContain('- Ada ↔ Bram | grudge 2');
+    expect(block).toContain('- Ada ↔ Zoe | bond 3');
+    // sparks is zero, so it is not shown.
+    expect(block).not.toContain('sparks 0');
+  });
+
+  test('threads render open and paid, and omit dropped', () => {
+    const block = renderStateBlock({
+      threads: [
+        { text: 'the letter' },
+        { text: 'the meeting', status: 'paid' },
+        { text: 'the rumour', status: 'dropped' },
+      ],
+    });
+    expect(block).toContain('Threads:');
+    expect(block).toContain('- [open] the letter');
+    expect(block).toContain('- [paid] the meeting');
+    expect(block).not.toContain('the rumour');
+  });
+
+  test('both sections can be switched off, and the default keeps them on', () => {
+    const state = {
+      location: 'The workshop',
+      bonds: { 'A|B': { bond: 3 } },
+      threads: [{ text: 'the letter' }],
+    };
+    const off = renderStateBlock(state, 800, estimateTokens, { bonds: false, threads: false });
+    expect(off).not.toContain('Bonds:');
+    expect(off).not.toContain('Threads:');
+    expect(off).toContain('Location: The workshop');
+
+    // Backwards compatibility: a caller that does not pass options keeps both.
+    const dflt = renderStateBlock(state);
+    expect(dflt).toContain('Bonds:');
+    expect(dflt).toContain('Threads:');
+  });
+
+  test('is deterministic under differing insertion order', () => {
+    const first = renderStateBlock({
+      bonds: { 'B|A': { bond: 1 }, 'D|C': { bond: 2 } },
+      threads: [{ text: 'z' }, { text: 'a' }],
+    });
+    const second = renderStateBlock({
+      bonds: { 'D|C': { bond: 2 }, 'B|A': { bond: 1 } },
+      threads: [{ text: 'a' }, { text: 'z' }],
+    });
+    expect(first).toBe(second);
   });
 });

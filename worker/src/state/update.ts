@@ -51,7 +51,7 @@ const SYSTEM = [
   '                their clothing is established or changes. Record what the text says:',
   '                colours, layers, notable items. Do not invent an outfit, and do not',
   '                restate one that has not changed.',
-  '  "notes"      array of short factual notes worth remembering',
+  '  "notes"      array of short factual notes worth remembering{{BONDS_KEY}}{{THREADS_KEY}}',
   '',
   'Rules:',
   '- Emit a key ONLY when the exchange actually establishes a new value for it.',
@@ -109,6 +109,30 @@ const TIME_KEY: Record<SceneSetup['timePace'], string> = {
   ].join('\n'),
 };
 
+/**
+ * The `bonds` key description, spliced in only when `craft.bonds` is on.
+ *
+ * An instruction the model is not being asked to follow must not be in the prompt: a
+ * described key with no consumer invites the model to fill it, and the renderer would then
+ * have to throw the result away.
+ */
+const BONDS_KEY = [
+  '\n  "bonds"      object mapping "Name|Name" — the two names SORTED alphabetically, joined',
+  '                by a pipe — to {"bond": -20..20, "sparks": 0..20, "grudge": 0..20}.',
+  '                bond is trust and affection, sparks is attraction, grudge is resentment.',
+  '                Include a pair only when the exchange changes it, and include only the',
+  '                value that changed.',
+].join('\n');
+
+/** The `threads` key description, spliced in only when `craft.threads` is on. */
+const THREADS_KEY = [
+  '\n  "threads"    array of {"text": "...", "status": "open"|"paid"|"dropped"}. A thread is',
+  '                something the scene raised and has not resolved: an unanswered question,',
+  '                a promised meeting, an object that will matter. Add one when the',
+  '                exchange raises it; set "paid" when it is resolved, "dropped" when it',
+  '                is abandoned. Keep the text short and factual.',
+].join('\n');
+
 /** The recording rule for the Rules block, per pace. */
 const TIME_BULLET: Record<SceneSetup['timePace'], string> = {
   minute: [
@@ -151,14 +175,18 @@ const EXPLICIT_TIME_RULE = [
 ].join('\n');
 
 /**
- * The system prompt for one pace: `SYSTEM` with the time key and its rule spliced in.
+ * The system prompt for one setup: `SYSTEM` with the time key, its rule, and the optional
+ * bonds/threads keys spliced in.
  *
  * `SYSTEM` keeps a placeholder for each, so the rest of the prompt is written once and the
- * two time lines are the only part that varies.
+ * varying lines are the only part that differs. An unset placeholder becomes '', which is
+ * why each optional key carries its own leading newline.
  */
-function buildSystemPrompt(pace: SceneSetup['timePace']): string {
-  return SYSTEM.replace('{{TIME_KEY}}', TIME_KEY[pace])
-    .replace('{{TIME_BULLET}}', TIME_BULLET[pace])
+function buildSystemPrompt(setup: SceneSetup): string {
+  return SYSTEM.replace('{{TIME_KEY}}', TIME_KEY[setup.timePace])
+    .replace('{{TIME_BULLET}}', TIME_BULLET[setup.timePace])
+    .replace('{{BONDS_KEY}}', setup.craft.bonds ? BONDS_KEY : '')
+    .replace('{{THREADS_KEY}}', setup.craft.threads ? THREADS_KEY : '')
     .concat('\n', EXPLICIT_TIME_RULE);
 }
 
@@ -181,7 +209,7 @@ export async function updateState(
     const current = await loadState(env, chatId);
 
     const reply = await complete(env, {
-      system: buildSystemPrompt(setup.timePace),
+      system: buildSystemPrompt(setup),
       user: [
         'Current state:',
         JSON.stringify(current),
@@ -252,14 +280,14 @@ export async function seedOpeningState(
   chatId: string,
   openingContent: string,
   card: { name: string; description: string },
-  pace: SceneSetup['timePace'],
+  setup: SceneSetup,
 ): Promise<{ applied: boolean; reason?: string }> {
   try {
     // Nothing to seed from, and a call with no user text is a wasted one.
     if (openingContent.trim().length === 0) return { applied: false, reason: 'no greeting' };
 
     const reply = await complete(env, {
-      system: `${buildSystemPrompt(pace)}\n${OPENING_RULE}`,
+      system: `${buildSystemPrompt(setup)}\n${OPENING_RULE}`,
       user: [
         'Current state:',
         '{}',

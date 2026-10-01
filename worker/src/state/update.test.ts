@@ -210,9 +210,33 @@ describe('updateState: the pace rule', () => {
 
       expect(sent[0].system).not.toContain('{{TIME_KEY}}');
       expect(sent[0].system).not.toContain('{{TIME_BULLET}}');
+      expect(sent[0].system).not.toContain('{{BONDS_KEY}}');
+      expect(sent[0].system).not.toContain('{{THREADS_KEY}}');
       // The key is described exactly once, by the entry that replaced the placeholder.
       expect(sent[0].system.match(/"time" {7}string/g)).toHaveLength(1);
     }
+  });
+
+  test('the bonds and threads keys appear only when the craft toggle asks for them', async () => {
+    // An instruction the model is not being asked to follow must not be in the prompt.
+    const off = makeEnv();
+    stubProvider(off.sent, '{}');
+    await updateState(off.env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('scene'));
+    expect(off.sent[0].system).not.toContain('"bonds"');
+    expect(off.sent[0].system).not.toContain('"threads"');
+
+    const on = makeEnv();
+    stubProvider(on.sent, '{}');
+    await updateState(
+      on.env,
+      'chat-1',
+      { user: 'u', assistant: 'a' },
+      { ...setupWith('scene'), craft: { ...setupWith('scene').craft, bonds: true, threads: true } },
+    );
+    expect(on.sent[0].system).toContain('"bonds"');
+    expect(on.sent[0].system).toContain('"threads"');
+    // And the description is the one the renderer understands.
+    expect(on.sent[0].system).toContain('SORTED alphabetically');
   });
 
   test('stores a valid patch', async () => {
@@ -266,7 +290,7 @@ describe('seedOpeningState', () => {
         name: 'Quill',
         description: 'A lighthouse keeper.',
       },
-      'scene',
+      setupWith('scene'),
     );
 
     expect(result.applied).toBe(true);
@@ -290,7 +314,7 @@ describe('seedOpeningState', () => {
         name: 'Quill',
         description: 'A lighthouse keeper.',
       },
-      'scene',
+      setupWith('scene'),
     );
 
     const system = sent[0].system;
@@ -313,7 +337,7 @@ describe('seedOpeningState', () => {
       'chat-1',
       'It is nearly dawn when the door opens.',
       { name: 'Quill', description: '' },
-      'manual',
+      setupWith('manual'),
     );
 
     expect(sent[0].system).toContain('When the pace is manual, omit "time" entirely.');
@@ -334,7 +358,7 @@ describe('seedOpeningState', () => {
         name: 'Quill',
         description: '',
       },
-      'scene',
+      setupWith('scene'),
     );
 
     expect(result.applied).toBe(false);
@@ -345,7 +369,7 @@ describe('seedOpeningState', () => {
     const { env, sent } = makeEnv();
     stubProvider(sent, '{}');
 
-    const result = await seedOpeningState(env, 'chat-1', '   ', { name: 'Q', description: '' }, 'scene');
+    const result = await seedOpeningState(env, 'chat-1', '   ', { name: 'Q', description: '' }, setupWith('scene'));
     expect(result.applied).toBe(false);
     expect(sent).toHaveLength(0);
   });
@@ -365,7 +389,7 @@ describe('seedOpeningState', () => {
         name: 'Q',
         description: '',
       },
-      'scene',
+      setupWith('scene'),
     );
     expect(result.applied).toBe(false);
     expect(result.reason).toContain('provider down');

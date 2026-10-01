@@ -858,3 +858,78 @@ The actual reply.' WHERE id = 'm2'`,
     expect(prompt.messages.some((m) => m.content === 'line 3 of the scene')).toBe(true);
   });
 });
+
+/**
+ * The craft block, split across two positions.
+ *
+ * The prefix carries the person, the register and the quality rules; the content policy
+ * goes in the TAIL, last, because position decides whether the model complies. These
+ * tests pin both halves and the fact that they are in the two different regions.
+ */
+describe('the craft block reaches the prompt', () => {
+  const options = { mode: 'send' as const, userSeq: null, userContent: 'hello', tailExtra: '' };
+
+  function setSceneSetup(db: Database, craft: unknown): void {
+    exec(
+      db,
+      'INSERT INTO chat_scene_setup (chat_id, json, updated_at) VALUES (?, ?, ?)',
+      CHAT_ID,
+      JSON.stringify({ craft }),
+      Date.now(),
+    );
+  }
+
+  /** The tail messages, which is where the content policy lives. */
+  function tailOf(prompt: { messages: Array<{ role: string; content: string }>; tailStart: number }) {
+    return prompt.messages.slice(prompt.tailStart).map((message) => message.content);
+  }
+
+  test('a chat with no scene setup still sends the content policy, in the tail', async () => {
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    seedChain(db, 2);
+
+    const prompt = await buildPrompt(env, chat, settings(8000), options);
+    const tail = tailOf(prompt).join('\n');
+    expect(tail).toContain('<craft_content>');
+    expect(tail).toContain('unrestricted adult fiction');
+    // And NOT in the cached prefix: that is the position that was refused.
+    const prefix = prompt.messages.slice(0, prompt.tailStart).map((m) => m.content).join('\n');
+    expect(prefix).not.toContain('<craft_content>');
+  });
+
+  test('turning the content policy off removes it from the prompt', async () => {
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    seedChain(db, 2);
+    setSceneSetup(db, { contentPolicy: false });
+
+    const prompt = await buildPrompt(env, chat, settings(8000), options);
+    expect(prompt.messages.some((m) => m.content.includes('<craft_content>'))).toBe(false);
+  });
+
+  test('the craft rules are in the cached prefix, so changing one changes the hash', async () => {
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    seedChain(db, 2);
+
+    const before = await buildPrompt(env, chat, settings(8000), options);
+    setSceneSetup(db, { pov: 'third' });
+    const after = await buildPrompt(env, chat, settings(8000), options);
+
+    expect(
+      after.messages.some((m) => m.content.includes("Write the reader's character in the third person")),
+    ).toBe(true);
+    expect(after.prefixHash).not.toBe(before.prefixHash);
+  });
+
+  test('the same setup assembles the same prefix hash', async () => {
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    seedChain(db, 2);
+
+    const first = await buildPrompt(env, chat, settings(8000), options);
+    const second = await buildPrompt(env, chat, settings(8000), options);
+    expect(first.prefixHash).toBe(second.prefixHash);
+  });
+});

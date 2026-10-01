@@ -13,8 +13,10 @@ import type { CharacterCardJson } from '../../src/lib/cards/types';
 import { renderMemoryBlock } from '../../src/lib/prompt/memoryBlock';
 import { dynamicMacrosIn, substituteHead, substituteTail } from '../../src/lib/prompt/macros';
 import { renderStateBlock } from '../../src/lib/prompt/stateBlock';
+import { renderCraftBlock, renderContentPolicy } from '../../src/lib/prompt/craftBlock';
 import { recall } from './memory/recall';
 import { loadState } from './state/update';
+import { loadSceneSetup } from './scene';
 import { loadPathTail, type BranchRow } from './branch';
 import { loadCast, type CastRow } from './cast';
 import { asNumber } from '../../src/lib/json';
@@ -56,6 +58,12 @@ export async function buildPrompt(
   if (!character) throw new Error('chat has no character');
   const card = JSON.parse(character.card_json) as CharacterCardJson;
   const personaRow = chat.persona_id ? await getPersona(env, chat.persona_id) : null;
+
+  // The craft document lives in `chat_scene_setup`, not on the chat row. One D1 row read,
+  // the same read `maybeUpdateState` already performs after every turn.
+  const setup = await loadSceneSetup(env, chat.id);
+  // Rendered once: the same text feeds the head measurement and the assembled head.
+  const craftBlock = renderCraftBlock(setup.craft);
 
   // The history is the VISIBLE PATH through the conversation tree, not every active row.
   //
@@ -142,7 +150,13 @@ export async function buildPrompt(
   // assembled after the window is chosen and its size is not known yet; the reservation
   // covers the memory block, the state block, the lore block, the notes and the reply.
   const headTokens = estimateChatTokens(
-    headMessages(card, personaRow, settings, presetActive ? presetResolved!.head : null),
+    headMessages(
+      card,
+      personaRow,
+      settings,
+      presetActive ? presetResolved!.head : null,
+      craftBlock,
+    ),
   );
   const historyBudget = Math.max(
     MIN_HISTORY_BUDGET,
@@ -230,7 +244,10 @@ export async function buildPrompt(
   // moves; putting either in the head would rewrite the cached prefix every turn.
   const [memoryBlock, stateBlock] = await Promise.all([
     buildMemoryBlock(env, chat.id, recallQuery, calibration),
-    buildStateBlock(env, chat.id, calibration),
+    buildStateBlock(env, chat.id, calibration, {
+      bonds: setup.craft.bonds,
+      threads: setup.craft.threads,
+    }),
   ]);
 
   // The cast block, when there is more than one speaker. It names the SHOWN name — the
@@ -318,6 +335,7 @@ export async function buildPrompt(
       id: entry.id,
       content: substituteHead(entry.content, macroContext),
     })),
+    craftBlock,
     // The preset's resolved segments. Macros are substituted here because a preset may
     // write `{{char}}`/`{{user}}` in its prompt text, and both are fixed for the chat's
     // life — so this stays static and the cached prefix holds.
@@ -365,6 +383,7 @@ export async function buildPrompt(
       stateBlock: substituteTail(stateBlock, macroContext),
       castBlock: substituteTail(castBlock, macroContext),
       loreBlock: substituteTail(loreBlock, macroContext),
+      contentPolicy: renderContentPolicy(setup.craft),
       authorsNote: substituteTail(settings.authorsNote, macroContext),
       // Precedence, per the CCv2/v3 spec: the CARD's post-history instructions replace
       // the user's global setting. That is what the field is for — it is the card's own
@@ -479,6 +498,8 @@ function headMessages(
   settings: EffectiveSettings,
   /** The preset's resolved head, when it has one. Replaces the standard composition. */
   presetHead?: Array<{ role: string; content: string }> | null,
+  /** Tessera's craft settings, emitted last in the head. Empty when every block is off. */
+  craftBlock?: string,
 ): Array<{ role: string; content: string }> {
   // A preset with a prompt list owns the head. Measuring the STANDARD head for a chat
   // whose real head is the preset's would under-count by however large the preset is —
@@ -487,7 +508,9 @@ function headMessages(
   // head were the card alone, and the assembled prompt would run far past the context
   // window it was told to fit.
   if (presetHead && presetHead.length > 0) {
-    return presetHead.map((segment) => ({ role: segment.role, content: segment.content }));
+    const head = presetHead.map((segment) => ({ role: segment.role, content: segment.content }));
+    if (craftBlock) head.push({ role: 'system', content: craftBlock });
+    return head;
   }
 
   const out: Array<{ role: string; content: string }> = [];
@@ -514,6 +537,9 @@ function headMessages(
   }
 
   for (const entry of alwaysOnLore(parseLorebook(card.characterBook))) push(entry.content);
+
+  // Last, mirroring `assemble`.
+  push(craftBlock);
 
   return out;
 }
@@ -601,10 +627,15 @@ function withSpeakerName(
  *
  * Returns '' when there is no state yet, so `assemble` omits the segment entirely.
  */
-async function buildStateBlock(env: Env, chatId: string, calibration: number): Promise<string> {
+async function buildStateBlock(
+  env: Env,
+  chatId: string,
+  calibration: number,
+  options: { bonds?: boolean; threads?: boolean },
+): Promise<string> {
   try {
     const state = await loadState(env, chatId);
-    return renderStateBlock(state, Math.round(800 * calibration));
+    return renderStateBlock(state, Math.round(800 * calibration), undefined, options);
   } catch (error) {
     console.warn(`[state] render failed for chat=${chatId}: ${messageOf(error)}`);
     return '';

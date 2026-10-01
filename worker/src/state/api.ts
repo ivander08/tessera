@@ -3,6 +3,7 @@ import { validatePatch, type WorldState } from '../../../src/lib/state/schema';
 import { loadState } from './update';
 import { renderStateBlock } from '../../../src/lib/prompt/stateBlock';
 import { estimateTokens } from '../../../src/lib/tokenEstimate';
+import { loadSceneSetup } from '../scene';
 
 /**
  * The world-state viewer.
@@ -19,6 +20,10 @@ import { estimateTokens } from '../../../src/lib/tokenEstimate';
 
 export async function getState(env: Env, chatId: string): Promise<Response> {
   const state = await loadState(env, chatId);
+  // The same setup the prompt builder reads, so the panel shows exactly what the model
+  // sees — including which optional sections the craft toggles turn off.
+  const setup = await loadSceneSetup(env, chatId);
+  const options = { bonds: setup.craft.bonds, threads: setup.craft.threads };
 
   const { results } = await env.DB.prepare(
     'SELECT json, updated_at FROM state WHERE chat_id = ?',
@@ -33,8 +38,8 @@ export async function getState(env: Env, chatId: string): Promise<Response> {
     updatedAt: row?.updated_at ?? null,
     // Rendered here rather than on the client so the viewer shows exactly what the model
     // receives, not an approximation of it.
-    rendered: renderStateBlock(state, 800),
-    tokens: estimateTokens(renderStateBlock(state, 800)),
+    rendered: renderStateBlock(state, 800, undefined, options),
+    tokens: estimateTokens(renderStateBlock(state, 800, undefined, options)),
   });
 }
 

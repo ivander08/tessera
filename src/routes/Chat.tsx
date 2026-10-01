@@ -12,6 +12,7 @@ import { MessageActions } from '../components/MessageActions';
 import { Modal } from '../components/Modal';
 import { SceneBar } from '../components/SceneBar';
 import { CastPanel } from '../components/CastPanel';
+import { CraftPanel } from '../components/CraftPanel';
 import { SearchPanel } from '../components/SearchPanel';
 import { AppearancePanel } from '../components/AppearancePanel';
 import StatePanel from './State';
@@ -91,7 +92,7 @@ export default function Chat() {
   const [truncatedId, setTruncatedId] = useState<string | null>(null);
   // Which side panel is open over the chat, if any. These used to be separate routes,
   // which meant leaving the scene to read the state it is in.
-  const [panel, setPanel] = useState<'state' | 'cast' | 'memory' | 'appearance' | 'search' | null>(null);
+  const [panel, setPanel] = useState<'state' | 'cast' | 'craft' | 'memory' | 'appearance' | 'search' | null>(null);
 
   // Drives the jump-to-latest control. A ref is enough for the auto-follow logic, but the
   // button has to render, so the same fact is mirrored into state on the scroll handler.
@@ -623,6 +624,7 @@ export default function Chat() {
             <MenuSep />
             <MenuAction label="World state" onClick={() => setPanel('state')} />
             <MenuAction label="Cast" onClick={() => setPanel('cast')} />
+            <MenuAction label="How it's written" onClick={() => setPanel('craft')} />
             <MenuAction label="Memory" onClick={() => setPanel('memory')} />
             <MenuAction label="Appearance" onClick={() => setPanel('appearance')} />
             <MenuSep />
@@ -818,27 +820,32 @@ export default function Chat() {
               ? 'World state'
               : panel === 'cast'
                 ? 'Cast'
-                : panel === 'memory'
-                  ? 'Memory'
-                  : panel === 'search'
-                    ? 'Find in this scene'
-                    : 'Appearance'
+                : panel === 'craft'
+                  ? "How it's written"
+                  : panel === 'memory'
+                    ? 'Memory'
+                    : panel === 'search'
+                      ? 'Find in this scene'
+                      : 'Appearance'
           }
           subtitle={
             panel === 'state'
               ? 'What the narrator believes right now. Written automatically after each completed turn.'
               : panel === 'cast'
                 ? 'Everyone who has spoken in this scene, and what they are called.'
-                : panel === 'memory'
-                  ? 'What this chat carries forward. Written automatically as the scene runs.'
-                  : panel === 'search'
-                    ? 'Every turn in this scene, ranked by how well it matches.'
-                    : 'Type, colour and layout. Applies as you change it, on every device.'
+                : panel === 'craft'
+                  ? 'Content policy, prose register, and how the NPCs behave. Per chat, so one scene can be a thriller and another a romance.'
+                  : panel === 'memory'
+                    ? 'What this chat carries forward. Written automatically as the scene runs.'
+                    : panel === 'search'
+                      ? 'Every turn in this scene, ranked by how well it matches.'
+                      : 'Type, colour and layout. Applies as you change it, on every device.'
           }
           onClose={() => setPanel(null)}
         >
           {panel === 'state' && <StatePanel embedded />}
           {panel === 'cast' && <CastPanel chatId={id} onChanged={castReload.current} />}
+          {panel === 'craft' && <CraftPanel chatId={id} />}
           {panel === 'memory' && <MemoryPanel embedded />}
           {panel === 'search' && (
             <SearchPanel

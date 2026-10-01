@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { DEFAULT_SCENE_SETUP, parseSceneSetup, type SceneSetup } from './setup';
+import { DEFAULT_CRAFT, DEFAULT_SCENE_SETUP, parseSceneSetup, type SceneSetup } from './setup';
 
 /**
  * The setup document is read from a JSON column and from request bodies, so every value
@@ -19,7 +19,12 @@ describe('parseSceneSetup', () => {
   });
 
   test('keeps a valid document', () => {
-    const setup: SceneSetup = { timePace: 'hour', stateMode: 'off', generateOpeningState: false };
+    const setup: SceneSetup = {
+      timePace: 'hour',
+      stateMode: 'off',
+      generateOpeningState: false,
+      craft: DEFAULT_CRAFT,
+    };
     expect(parseSceneSetup(setup)).toEqual(setup);
   });
 
@@ -52,10 +57,69 @@ describe('parseSceneSetup', () => {
   test('a supplied fallback replaces the built-in default for invalid fields', () => {
     // This is what the PATCH merge relies on: an invalid value in a patch must land on
     // the STORED value, not on the built-in default, or a typo would undo a choice.
-    const stored = { timePace: 'hour', stateMode: 'manual', generateOpeningState: false } as const;
+    const stored: SceneSetup = {
+      timePace: 'hour',
+      stateMode: 'manual',
+      generateOpeningState: false,
+      craft: DEFAULT_CRAFT,
+    };
     expect(parseSceneSetup({ timePace: 'bogus' }, { ...stored }).timePace).toBe('hour');
     expect(parseSceneSetup(null, { ...stored })).toEqual(stored);
     // And a valid value still wins over the fallback.
     expect(parseSceneSetup({ timePace: 'minute' }, { ...stored }).timePace).toBe('minute');
+  });
+});
+
+describe('parseSceneSetup — craft', () => {
+  test('an empty document carries the default craft', () => {
+    expect(parseSceneSetup({}).craft).toEqual(DEFAULT_CRAFT);
+  });
+
+  test('a patch that mentions one field leaves the others at the fallback', () => {
+    const parsed = parseSceneSetup({ craft: { pov: 'third' } });
+    expect(parsed.craft.pov).toBe('third');
+    expect(parsed.craft.register).toBe(DEFAULT_CRAFT.register);
+  });
+
+  test('an unknown enum member falls back to the FALLBACK, not the built-in default', () => {
+    // The whole reason the craft parse threads `fallback` through: a client that does not
+    // know about a field must not silently reset a choice the reader made.
+    const custom: SceneSetup = {
+      ...DEFAULT_SCENE_SETUP,
+      craft: { ...DEFAULT_CRAFT, pov: 'first', register: 'plain' },
+    };
+    const parsed = parseSceneSetup({ craft: { pov: 'nonsense' } }, custom);
+    expect(parsed.craft.pov).toBe('first');
+    expect(parsed.craft.register).toBe('plain');
+  });
+
+  test('a wrong-typed boolean keeps the fallback boolean', () => {
+    expect(parseSceneSetup({ craft: { antiSlop: 'yes' } }).craft.antiSlop).toBe(
+      DEFAULT_CRAFT.antiSlop,
+    );
+  });
+
+  test('round-trips through JSON', () => {
+    const setup: SceneSetup = {
+      timePace: 'hour',
+      stateMode: 'manual',
+      generateOpeningState: false,
+      craft: {
+        contentPolicy: false,
+        pov: 'third',
+        register: 'literary',
+        antiSlop: false,
+        interiority: true,
+        earnedKnowledge: false,
+        independentNpcs: true,
+        bonds: true,
+        threads: false,
+      },
+    };
+    expect(parseSceneSetup(JSON.parse(JSON.stringify(setup)))).toEqual(setup);
+  });
+
+  test('the content policy is a flag on craft, not a separate document', () => {
+    expect('nsfw' in parseSceneSetup({}).craft).toBe(false);
   });
 });

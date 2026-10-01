@@ -153,6 +153,7 @@ describe('scene setup: writing', () => {
       timePace: 'hour',
       stateMode: 'off',
       generateOpeningState: DEFAULT_SCENE_SETUP.generateOpeningState,
+      craft: DEFAULT_SCENE_SETUP.craft,
     });
     expect(await loadSceneSetup(env, chatId)).toEqual(payload.setup);
   });

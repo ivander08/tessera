@@ -32,6 +32,11 @@ export interface AssembleInput {
   persona: { name: string; description: string } | null;
   /** Always-on, FIXED order by id. */
   lorebook: Array<{ id: string; content: string }>;
+  /**
+   * How the scene should be written. Static for the chat's life, so it lives in the cached
+   * prefix; changing it costs one cache miss, which is correct for a deliberate act.
+   */
+  craftBlock?: string;
   /** Oldest -> newest, from `window_start_seq`. */
   history: Array<{ role: Role; content: string }>;
   tail: {
@@ -46,6 +51,14 @@ export interface AssembleInput {
     castBlock?: string;
     /** Keyword-triggered lorebook entries that fired this turn. */
     loreBlock?: string;
+    /**
+     * The unrestricted-content policy, when the reader has it on.
+     *
+     * Tail-only, and deliberately: measured against the local model, the same text in the
+     * cached prefix was refused and in the tail was complied with. Read last, as the final
+     * system text before the reader's message, it outweighs the conversation that follows.
+     */
+    contentPolicy?: string;
     authorsNote?: string;
     /** Card `post_history_instructions`. Tail-only: cannot perturb the cached prefix. */
     postHistoryInstructions?: string;
