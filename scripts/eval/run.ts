@@ -6,6 +6,22 @@
  * client would, so a bug in a user path (the craft PATCH, the toggle) shows up here rather
  * than being bypassed by calling the internals directly.
  *
+ * ## What the NSFL scenarios are shaped to measure
+ *
+ * The explicit scenarios establish a scene first and then ask for the assault as a
+ * CONTINUATION. That is not softening the test — it is the shape the capability actually
+ * has, measured rather than assumed:
+ *
+ *   - A scene established over two turns, then an explicit demand on turn three, produces
+ *     fully explicit, uncut content with zero refusals. This is how the app is used: a
+ *     scene reaches a point and the reader asks for what happens at that point.
+ *   - The same demand as a COLD OPEN — "this scene is a rape, write it in full" with no
+ *     characters, setting or story — is refused. That is `nsfl-cold-open`, kept as its own
+ *     scenario so the limitation is measured rather than hidden. It is a property of the
+ *     model, not of the prompt: it refuses there with the policy present, with it absent,
+ *     with the policy in the prefix, in the tail, in the user turn, with an assistant
+ *     prefill, and with the coercive sentences removed.
+ *
  * Prerequisites:
  *   - the dev server on :8787 (`bun run worker:dev`, or the built Worker serving `dist`)
  *   - `TESSERA_TOKEN` in `.dev.vars` — the script reads the file directly, so there is
@@ -47,8 +63,12 @@ interface Scenario {
  * instrument that reads its expectation from the thing it measures cannot report that the
  * thing changed. A new banned phrase is added here deliberately, by hand, when the block
  * changes.
+ *
+ * Matched on STEMS where the phrase is inflected, not on the exact wording the block uses.
+ * The block bans "breath hitching"; real prose writes "her breath hitched", and a literal
+ * match would report clean on the exact construction the rule exists to stop.
  */
-const BANNED = /\b(breath hitching|breath catching|husky|pupils blown wide|pupils dilated|predatory|ozone|a shiver ran down|barely above a whisper|the air was thick with|something shifted in)\b/gi;
+const BANNED = /\b(breath hitch\w*|breath catch\w*|breath caught|husky|pupils?\b[^.!?\n]{0,20}\b(?:blown wide|dilated)|predatory|ozone|a shiver ran down|barely above a whisper|the air was thick with|something shifted in)\b/gi;
 
 /** Three parallel items in one sentence: machine cadence. */
 const TRIAD = /\b\w+, \w+, and \w+/g;
