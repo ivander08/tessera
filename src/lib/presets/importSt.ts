@@ -1,5 +1,5 @@
 import { asArray, asRecord, asString } from '../json';
-import type { NormalizedPreset, PromptEntry, RegexScript } from './types';
+import type { NormalizedPreset, PromptEntry, PromptOrderEntry, RegexScript } from './types';
 
 /** A file that is not a recognisable preset is an error, not an empty preset. */
 export class PresetParseError extends Error {}
@@ -133,6 +133,7 @@ export function parsePresetFile(file: { name: string; json: unknown }): Normaliz
     knobs,
     regex: resolveRegexScripts(source, root),
     prompts: parsePromptEntries(source.prompts ?? root.prompts),
+    order: parsePromptOrder(source.prompt_order ?? root.prompt_order),
     dropped,
   };
 }
@@ -270,7 +271,12 @@ export function parseRegexScripts(value: unknown): RegexScript[] {
     });
 }
 
-/** ST's Prompt Manager entry shape, as carried by `prompts`. */
+/**
+ * ST's Prompt Manager entry shape, as carried by `prompts` in an imported FILE.
+ *
+ * For a list coming back OUT of the database, use `parseStoredPrompts` — the stored shape
+ * is already normalized, and running this over it drops the injection fields.
+ */
 export function parsePromptEntries(value: unknown): PromptEntry[] {
   return asArray(value)
     .map((entry) => asRecord(entry))
@@ -286,6 +292,83 @@ export function parsePromptEntries(value: unknown): PromptEntry[] {
       const role = asString(entry.role);
       if (role) prompt.role = role;
       if (typeof entry.enabled === 'boolean') prompt.enabled = entry.enabled;
+      // The injection fields decide WHERE a prompt goes, which is the difference between
+      // a prompt that behaves as its author intended and one that lands in the wrong
+      // place. `0` is "relative to the end of the chat" and `1` is "at a fixed index".
+      if (typeof entry.injection_position === 'number') {
+        prompt.injectionPosition = entry.injection_position;
+      }
+      if (typeof entry.injection_depth === 'number') {
+        prompt.injectionDepth = entry.injection_depth;
+      }
+      if (entry.marker === true) prompt.marker = true;
       return prompt;
     });
+}
+
+/**
+ * The stored prompt list, read back out of `presets.prompt_json`.
+ *
+ * A shape check rather than a re-parse: the column already holds the normalized
+ * `PromptEntry[]` the importer wrote, so ST's reader would drop fields it does not know
+ * the names of. A malformed row yields `[]` rather than throwing — a hand-edited preset
+ * must not be able to break the editor or the prompt.
+ */
+export function parseStoredPrompts(value: unknown): PromptEntry[] {
+  // Accepts the raw column text as well as an already-parsed array. Every caller so far
+  // had the string, and handing a string to `asArray` yields `[]` — a silent empty that
+  // looks like "this preset has no prompts" rather than "this call was wrong".
+  let raw = value;
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  }
+  return asArray(raw)
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is Record<string, unknown> => entry !== null)
+    .map((entry) => {
+      const prompt: PromptEntry = {
+        identifier: asString(entry.identifier),
+        name: asString(entry.name),
+        content: asString(entry.content),
+      };
+      const role = asString(entry.role);
+      if (role) prompt.role = role;
+      if (typeof entry.enabled === 'boolean') prompt.enabled = entry.enabled;
+      // The normalized names, which is what is stored. ST's snake_case belongs to the
+      // import path above and would read as `undefined` here.
+      if (typeof entry.injectionPosition === 'number') {
+        prompt.injectionPosition = entry.injectionPosition;
+      }
+      if (typeof entry.injectionDepth === 'number') prompt.injectionDepth = entry.injectionDepth;
+      if (entry.marker === true) prompt.marker = true;
+      return prompt;
+    })
+    .filter((entry) => entry.identifier.length > 0);
+}
+
+/**
+ * ST's `prompt_order`, flattened to one list.
+ *
+ * The file stores it as an array of `{ character_id, order }` — one block per character,
+ * plus a block keyed by a sentinel for the global order. Tessera has one order per
+ * preset and no per-character prompt overrides, so the FIRST block is taken: it is the
+ * one ST applies when the preset is used without a character-specific override, which is
+ * how these presets ship.
+ */
+export function parsePromptOrder(value: unknown): PromptOrderEntry[] {
+  const blocks = asArray(value);
+  const first = blocks.map((entry) => asRecord(entry)).find((entry) => entry !== null);
+  if (!first) return [];
+  return asArray(first.order)
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is Record<string, unknown> => entry !== null)
+    .map((entry) => ({
+      identifier: asString(entry.identifier),
+      enabled: entry.enabled === true,
+    }))
+    .filter((entry) => entry.identifier.length > 0);
 }

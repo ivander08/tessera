@@ -1,5 +1,5 @@
 import { asRecord, asString } from '../json';
-import { parsePromptEntries, resolveRegexScripts } from './importSt';
+import { parsePromptEntries, parsePromptOrder, resolveRegexScripts } from './importSt';
 import type { NormalizedPreset } from './types';
 
 /**
@@ -20,7 +20,12 @@ import type { NormalizedPreset } from './types';
  * stay in the prompt on every subsequent turn. The regex pack is part of the preset,
  * not an optional extra — hence `requiresRegexPack`.
  */
-export function parseFf5(entry: { prompts?: unknown; regex?: unknown; name?: string }): NormalizedPreset {
+export function parseFf5(entry: {
+  prompts?: unknown;
+  regex?: unknown;
+  name?: string;
+  prompt_order?: unknown;
+}): NormalizedPreset {
   // The raw FF file keeps its scripts at `extensions.regex_scripts`, and the standalone
   // "FF5 Regex Suite" download is a flat array. `resolveRegexScripts` accepts every
   // shape, so the caller can hand over whichever file it has.
@@ -33,6 +38,9 @@ export function parseFf5(entry: { prompts?: unknown; regex?: unknown; name?: str
     knobs: {},
     regex,
     prompts: parsePromptEntries(entry.prompts),
+    // An FF5 archive carries the prompt list; the order lives alongside it in the same
+    // object when the export includes it, and is empty otherwise.
+    order: parsePromptOrder(entry.prompt_order),
     dropped: [],
   };
 }

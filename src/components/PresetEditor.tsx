@@ -4,7 +4,9 @@ import type { ModelInfo } from '../lib/apiTypes';
 import { messageOf, useAsync } from '../lib/hooks';
 import type { PresetConfig, ResponseLength } from '../lib/presets/presetConfig';
 import { RESPONSE_LENGTHS } from '../lib/presets/presetConfig';
+import type { PromptEntry } from '../lib/presets/types';
 import { KnobEditor } from './KnobEditor';
+import { PromptListEditor } from './PromptListEditor';
 
 /** One preset, as `/api/presets/:id` returns it. */
 export interface PresetDetail {
@@ -15,7 +17,8 @@ export interface PresetDetail {
   /** Always complete: the Worker runs `parsePresetConfig` before it answers. */
   config: PresetConfig;
   regex: unknown[];
-  prompts: unknown[];
+  /** The imported prompt list, rendered as the tick list. */
+  prompts: PromptEntry[];
   created_at: number;
   updated_at: number;
 }
@@ -228,6 +231,12 @@ export function PresetEditor({
           onChange={(value) => setConfig({ ...config, assistantPrefill: value })}
           rows={1}
         />
+        <PromptListEditor
+          entries={preset.prompts}
+          order={config.promptOrder ?? []}
+          onChange={(next) => setConfig({ ...config, promptOrder: next })}
+        />
+
         <ConfigText
           label="Stop strings"
           hint="One per line. Up to 32; blanks are dropped."

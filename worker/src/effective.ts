@@ -1,6 +1,8 @@
 import { getSettings, loadChatSettings } from './db';
 import type { ChatSettings } from './db';
 import { responseLengthRule, type ResponseLength } from '../../src/lib/presets/presetConfig';
+import { parseStoredPrompts } from '../../src/lib/presets/importSt';
+import type { PromptEntry, PromptOrderEntry } from '../../src/lib/presets/types';
 
 /**
  * Effective generation settings for one chat: the chat's preset layered over the global
@@ -23,6 +25,18 @@ export interface EffectiveSettings extends ChatSettings {
   /** Replaces the card's post-history instructions when the preset sets them. */
   presetPostHistory: string;
   presetSystemPrompt: string;
+  /**
+   * The preset's imported prompt list and its toggle state, when it has one.
+   *
+   * Carried together because they are meaningless apart: the list is what CAN be
+   * emitted, the order is what IS. Null for a preset with no prompt list, which is every
+   * preset that only ever carried sampler values — those assemble exactly as Tessera did
+   * before this existed.
+   */
+  presetPrompts: {
+    entries: PromptEntry[];
+    order: PromptOrderEntry[];
+  } | null;
 }
 
 export async function loadEffectiveSettings(
@@ -39,15 +53,16 @@ export async function loadEffectiveSettings(
     responseLengthRule: '',
     presetPostHistory: '',
     presetSystemPrompt: '',
+    presetPrompts: null,
   };
 
   if (!presetId) return effective;
 
   const row = await env.DB.prepare(
-    'SELECT knobs_json, config_json FROM presets WHERE id = ?',
+    'SELECT knobs_json, config_json, prompt_json FROM presets WHERE id = ?',
   )
     .bind(presetId)
-    .first<{ knobs_json: string; config_json: string | null }>();
+    .first<{ knobs_json: string; config_json: string | null; prompt_json: string | null }>();
   if (!row) return effective;
 
   // Sampler knobs from the preset replace the global ones wholesale. Merging them
@@ -93,6 +108,24 @@ export async function loadEffectiveSettings(
       if (typeof config.loreScanDepth === 'number') effective.loreScanDepth = config.loreScanDepth;
       if (typeof config.loreTokenBudget === 'number') effective.loreTokenBudget = config.loreTokenBudget;
       if (typeof config.loreRecursive === 'boolean') effective.loreRecursive = config.loreRecursive;
+
+      // The prompt list is only meaningful when the preset actually carries one. A
+      // preset with toggles but no list (or a list but no toggles) is left null so the
+      // prompt assembles the way it always has, rather than emitting nothing.
+      //
+      // `prompt_json` is a stored STRING and is parsed first. Passing the raw string to
+      // `parsePromptEntries` yields `[]` — `asArray` of a string is `[]` — which fails
+      // this very check silently, leaving the preset inert while everything looks right.
+      const entries = parseStoredPrompts(row.prompt_json);
+      if (entries.length > 0) {
+        const order = Array.isArray(config.promptOrder)
+          ? (config.promptOrder as PromptOrderEntry[]).filter(
+              (row): row is PromptOrderEntry =>
+                !!row && typeof row === 'object' && typeof row.identifier === 'string',
+            )
+          : [];
+        effective.presetPrompts = { entries, order };
+      }
     } catch {
       // Same reasoning as the knobs above.
     }

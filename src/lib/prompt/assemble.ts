@@ -35,15 +35,24 @@ export type TokenCounter = (messages: WireMessage[]) => number;
 export function assemble(input: AssembleInput, countChatTokens: TokenCounter): AssembledPrompt {
   const head: WireMessage[] = [];
 
-  pushIfNonEmpty(head, 'system', input.systemPrompt);
-  pushIfNonEmpty(head, 'system', renderCharacter(input.character));
-  pushIfNonEmpty(head, 'system', input.character.mesExample);
-  if (input.persona) pushIfNonEmpty(head, 'system', renderPersona(input.persona));
+  // A preset with a prompt list owns the head: its order decides where the card, the
+  // persona and the examples go, and Tessera's own composition is skipped. Everything
+  // here is static (the preset text, the card) so the cached prefix is still stable.
+  if (input.presetHead) {
+    for (const segment of input.presetHead) {
+      pushIfNonEmpty(head, segment.role, segment.content);
+    }
+  } else {
+    pushIfNonEmpty(head, 'system', input.systemPrompt);
+    pushIfNonEmpty(head, 'system', renderCharacter(input.character));
+    pushIfNonEmpty(head, 'system', input.character.mesExample);
+    if (input.persona) pushIfNonEmpty(head, 'system', renderPersona(input.persona));
 
-  // Sorted by id, never by insertion order: lorebook loading order must not be able
-  // to perturb the prefix.
-  const lorebook = [...input.lorebook].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  for (const entry of lorebook) pushIfNonEmpty(head, 'system', entry.content);
+    // Sorted by id, never by insertion order: lorebook loading order must not be able
+    // to perturb the prefix.
+    const lorebook = [...input.lorebook].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    for (const entry of lorebook) pushIfNonEmpty(head, 'system', entry.content);
+  }
 
   const body: WireMessage[] = input.history.map((message) => ({
     role: message.role,
@@ -51,6 +60,14 @@ export function assemble(input: AssembleInput, countChatTokens: TokenCounter): A
   }));
 
   const tail: WireMessage[] = [];
+
+  // Preset entries positioned after the history. They precede Tessera's own tail blocks
+  // so the app's per-turn state (memory, world state, cast) is the last thing the model
+  // reads before the reply, which is where it is most likely to be honoured.
+  for (const segment of input.presetAfterHistory ?? []) {
+    pushIfNonEmpty(tail, segment.role, segment.content);
+  }
+
   pushIfNonEmpty(tail, 'system', input.tail.memoryBlock);
   pushIfNonEmpty(tail, 'system', input.tail.stateBlock);
   // Before the lore block: who is in the scene is the more immediate fact, and the cast
@@ -100,7 +117,7 @@ function renderCharacter(character: AssembleInput['character']): string {
   return lines.join('\n');
 }
 
-function renderPersona(persona: { name: string; description: string }): string {
+export function renderPersona(persona: { name: string; description: string }): string {
   const lines: string[] = [];
   if (persona.name.length > 0) lines.push(`Name: ${persona.name}`);
   if (persona.description.length > 0) lines.push(`Description: ${persona.description}`);

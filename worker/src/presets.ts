@@ -1,8 +1,9 @@
 import { badRequest, json, notFound, readJson } from './http';
-import { PresetParseError, parsePresetFile } from '../../src/lib/presets/importSt';
+import { PresetParseError, parsePresetFile, parseStoredPrompts } from '../../src/lib/presets/importSt';
 import { parseFf5, requiresRegexPack } from '../../src/lib/presets/ff5';
 import { asRecord } from '../../src/lib/json';
-import { parsePresetConfig } from '../../src/lib/presets/presetConfig';
+import { DEFAULT_PRESET_CONFIG, parsePresetConfig } from '../../src/lib/presets/presetConfig';
+import type { PresetConfig } from '../../src/lib/presets/presetConfig';
 
 interface ImportBody {
   name?: string;
@@ -55,7 +56,16 @@ function presetPayload(row: PresetRow) {
     knobs: JSON.parse(row.knobs_json) as Record<string, number | string | string[]>,
     config: parsePresetConfig(row.config_json),
     regex: row.regex_json ? (JSON.parse(row.regex_json) as unknown[]) : [],
-    prompts: row.prompt_json ? (JSON.parse(row.prompt_json) as unknown[]) : [],
+    // Typed rather than `unknown[]`: the editor renders these as a tick list, and a
+    // client that has to guess the shape is a client that renders a blank panel when the
+    // guess is wrong.
+    //
+    // Read straight through, NOT re-parsed by `parsePromptEntries`. `prompt_json` already
+    // holds the NORMALIZED shape the importer produced — camelCase `injectionPosition`,
+    // not ST's `injection_position` — so running the ST reader over it would silently
+    // drop every injection field, moving depth-injected prompts into the static head.
+    // `parsePromptEntries` is for a file coming IN; this is a row coming OUT.
+    prompts: parseStoredPrompts(row.prompt_json),
     created_at: row.created_at,
     updated_at: row.updated_at ?? row.created_at,
   };
@@ -87,9 +97,23 @@ export async function importPreset(env: Env, req: Request): Promise<Response> {
 
   const id = crypto.randomUUID();
   const now = Date.now();
+
+  // The preset's own ticks are seeded into the config, so an imported preset arrives
+  // with exactly the prompts its author shipped turned on. Without this the reader would
+  // have to re-tick twenty boxes in the editor to get the preset they downloaded, and
+  // any preset whose behaviour IS its prompt list would be inert on arrival — which is
+  // exactly what this feature exists to fix.
+  //
+  // The order is also the emission order, so storing it preserves the author's sequence
+  // as well as their choices.
+  const seededConfig: PresetConfig = {
+    ...DEFAULT_PRESET_CONFIG,
+    ...(preset.order.length > 0 ? { promptOrder: preset.order } : {}),
+  };
+
   await env.DB.prepare(
     `INSERT INTO presets (id, name, kind, knobs_json, regex_json, prompt_json, config_json, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
@@ -98,10 +122,16 @@ export async function importPreset(env: Env, req: Request): Promise<Response> {
       JSON.stringify(preset.knobs),
       preset.regex.length > 0 ? JSON.stringify(preset.regex) : null,
       preset.prompts.length > 0 ? JSON.stringify(preset.prompts) : null,
+      JSON.stringify(seededConfig),
       now,
       now,
     )
     .run();
+
+  // How many of the shipped prompts are actually on. The difference between "95 prompt
+  // entries imported" and "10 of them are on" is the difference between a preset that
+  // works and one that looks like it does, so both numbers are reported.
+  const enabledCount = preset.order.filter((row) => row.enabled).length;
 
   return json(
     {
@@ -109,14 +139,13 @@ export async function importPreset(env: Env, req: Request): Promise<Response> {
       name: preset.name,
       kind: preset.kind,
       knobs: preset.knobs,
-      // A fresh import has no config yet; the editor creates one on first save. Sent
-      // already complete so the client never has to guess the defaults.
-      config: parsePresetConfig(null),
+      config: seededConfig,
       // Surfaced rather than swallowed: a knob the preset declared but that could not
       // be carried over is the thing the user needs to know about.
       dropped: preset.dropped,
       regexCount: preset.regex.length,
       promptCount: preset.prompts.length,
+      promptEnabled: enabledCount,
       // An FF5-style preset without its regex pack does not run as designed.
       needsRegexPack: requiresRegexPack(preset),
     },

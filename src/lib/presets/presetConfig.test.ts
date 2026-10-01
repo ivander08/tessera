@@ -128,7 +128,39 @@ describe('parsePresetConfig — stop strings', () => {
 describe('parsePresetConfig — a complete config', () => {
   test('every field is present after parsing a partial record', () => {
     const config = parsePresetConfig(JSON.stringify({ systemPrompt: 'x' }));
-    expect(Object.keys(config).sort()).toEqual(Object.keys(DEFAULT_PRESET_CONFIG).sort());
+    // `promptOrder` is the one field that is deliberately OPTIONAL rather than defaulted:
+    // absent means "this preset has no prompt list", while `[]` means "the reader turned
+    // every prompt off". Collapsing the two would make turning the last prompt off
+    // silently restore the default prompt, so it is excluded from the completeness rule.
+    const keys = Object.keys(config).sort().filter((key) => key !== 'promptOrder');
+    expect(keys).toEqual(
+      Object.keys(DEFAULT_PRESET_CONFIG)
+        .sort()
+        .filter((key) => key !== 'promptOrder'),
+    );
+    expect(config.promptOrder).toBeUndefined();
+  });
+
+  test('a stored promptOrder survives a round trip', () => {
+    const config = parsePresetConfig(
+      JSON.stringify({
+        promptOrder: [
+          { identifier: 'main', enabled: true },
+          { identifier: 'jailbreak', enabled: false },
+        ],
+      }),
+    );
+    expect(config.promptOrder).toEqual([
+      { identifier: 'main', enabled: true },
+      { identifier: 'jailbreak', enabled: false },
+    ]);
+  });
+
+  test('a malformed promptOrder is undefined rather than a broken list', () => {
+    expect(parsePresetConfig(JSON.stringify({ promptOrder: 'nope' })).promptOrder).toBeUndefined();
+    expect(
+      parsePresetConfig(JSON.stringify({ promptOrder: [{ enabled: true }, 'x'] })).promptOrder,
+    ).toEqual([]);
   });
 
   test('a round trip through JSON preserves a fully specified config', () => {

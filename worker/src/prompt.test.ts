@@ -196,6 +196,7 @@ function settings(contextBudget: number): EffectiveSettings {
     responseLengthRule: '',
     presetPostHistory: '',
     presetSystemPrompt: '',
+    presetPrompts: null,
   };
 }
 
@@ -546,5 +547,211 @@ describe('buildPrompt: the cast and includeNames', () => {
     // The same row, prefixed identically, and the prefix hash is unchanged with it.
     expect(after.messages.find((m) => m.content === 'Olivia: line 2 of the scene')).toEqual(beforeRow);
     expect(after.prefixHash).toBe(before.prefixHash);
+  });
+});
+
+/**
+ * The preset's prompt list, which used to be parsed, stored, counted and never emitted.
+ *
+ * These are integration tests against the real `buildPrompt` rather than unit tests of
+ * the resolver, because the failure this feature fixes was never in the resolver — it was
+ * that nothing called one. A test that only exercises `resolvePrompts` would pass while
+ * the model still received none of it.
+ */
+describe('a preset with a prompt list reaches the model', () => {
+  const options = { mode: 'send' as const, userSeq: null, userContent: 'hello', tailExtra: '' };
+
+  function withPrompts(
+    entries: Array<{ identifier: string; name: string; content: string; role?: string; marker?: boolean; injectionPosition?: number; injectionDepth?: number }>,
+    order: Array<{ identifier: string; enabled: boolean }>,
+  ): EffectiveSettings {
+    return { ...settings(8000), presetPrompts: { entries, order } };
+  }
+
+  test('an enabled prompt is emitted, and its text is on the wire', async () => {
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    seedChain(db, 2);
+
+    const prompt = await buildPrompt(
+      env,
+      chat,
+      withPrompts(
+        [{ identifier: 'main', name: 'Main', content: 'NEVER BREAK CHARACTER.' }],
+        [{ identifier: 'main', enabled: true }],
+      ),
+      options,
+    );
+
+    expect(prompt.messages.some((m) => m.content.includes('NEVER BREAK CHARACTER.'))).toBe(true);
+  });
+
+  test('a disabled prompt is not emitted', async () => {
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    seedChain(db, 2);
+
+    const prompt = await buildPrompt(
+      env,
+      chat,
+      withPrompts(
+        [{ identifier: 'main', name: 'Main', content: 'SECRET INSTRUCTION.' }],
+        [{ identifier: 'main', enabled: false }],
+      ),
+      options,
+    );
+
+    expect(prompt.messages.some((m) => m.content.includes('SECRET INSTRUCTION.'))).toBe(false);
+  });
+
+  test('the preset head replaces the standard one rather than duplicating it', async () => {
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    seedChain(db, 2);
+
+    const prompt = await buildPrompt(
+      env,
+      chat,
+      withPrompts(
+        [{ identifier: 'main', name: 'Main', content: 'PRESET SYSTEM.' }],
+        [{ identifier: 'main', enabled: true }],
+      ),
+      options,
+    );
+
+    // The global system prompt is gone, and the preset's is present: two system prompts
+    // saying different things is the failure this replaces.
+    expect(prompt.messages.some((m) => m.content === 'You are a narrator.')).toBe(false);
+    expect(prompt.messages.some((m) => m.content.includes('PRESET SYSTEM.'))).toBe(true);
+  });
+
+  test('a charDescription marker emits the card, so the card is not lost', async () => {
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    seedChain(db, 2);
+
+    const prompt = await buildPrompt(
+      env,
+      chat,
+      withPrompts(
+        [
+          { identifier: 'main', name: 'Main', content: 'PRESET SYSTEM.' },
+          { identifier: 'charDescription', name: 'Char Description', content: '', marker: true },
+        ],
+        [
+          { identifier: 'main', enabled: true },
+          { identifier: 'charDescription', enabled: true },
+        ],
+      ),
+      options,
+    );
+
+    // The card's own description, placed by the preset's order.
+    expect(prompt.messages.some((m) => m.content.includes('A scribe.'))).toBe(true);
+  });
+
+  test('with every prompt off, Tessera falls back to its standard head', async () => {
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    seedChain(db, 2);
+
+    const prompt = await buildPrompt(
+      env,
+      chat,
+      withPrompts(
+        [{ identifier: 'main', name: 'Main', content: 'PRESET SYSTEM.' }],
+        [{ identifier: 'main', enabled: false }],
+      ),
+      options,
+    );
+
+    // Not an empty prompt: the default system prompt stands, which is what makes the
+    // All-off button safe to press.
+    expect(prompt.messages.some((m) => m.content === 'You are a narrator.')).toBe(true);
+    expect(prompt.messages.some((m) => m.content.includes('PRESET SYSTEM.'))).toBe(false);
+  });
+
+  test('a depth-injected prompt lands inside the history, not in the head', async () => {
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    seedChain(db, 4);
+
+    const prompt = await buildPrompt(
+      env,
+      chat,
+      withPrompts(
+        [
+          { identifier: 'main', name: 'Main', content: 'HEAD TEXT.' },
+          {
+            identifier: 'deep',
+            name: 'Deep',
+            content: 'INJECTED NEAR THE END.',
+            injectionPosition: 0,
+            injectionDepth: 1,
+          },
+        ],
+        [
+          { identifier: 'main', enabled: true },
+          { identifier: 'deep', enabled: true },
+        ],
+      ),
+      options,
+    );
+
+    const injected = prompt.messages.findIndex((m) => m.content.includes('INJECTED NEAR THE END.'));
+    const head = prompt.messages.findIndex((m) => m.content.includes('HEAD TEXT.'));
+    const lastHistory = prompt.messages.map((m) => m.content).lastIndexOf('line 3 of the scene');
+
+    expect(injected).toBeGreaterThan(head);
+    // Depth 1 is the gap immediately before the newest history message, so the injected
+    // prompt sits directly above it and below everything else.
+    expect(injected).toBe(lastHistory - 1);
+  });
+
+  test('the injected prompt is inside the cacheable prefix, so tailStart accounts for it', async () => {
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    seedChain(db, 4);
+
+    const prompt = await buildPrompt(
+      env,
+      chat,
+      withPrompts(
+        [{ identifier: 'deep', name: 'Deep', content: 'INJECTED.', injectionPosition: 0, injectionDepth: 0 }],
+        [{ identifier: 'deep', enabled: true }],
+      ),
+      options,
+    );
+
+    // `tailStart` must still name the first TAIL message. If the splice shifted it
+    // without adjusting, the prefix hash would be computed over the wrong messages and
+    // the provider cache would silently miss on every turn.
+    const injectedAt = prompt.messages.findIndex((m) => m.content.includes('INJECTED.'));
+    expect(injectedAt).toBeLessThan(prompt.tailStart);
+  });
+
+  test('a preset head is measured into the budget, so a huge preset does not overflow', async () => {
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    seedChain(db, 200, 20);
+
+    // A preset head of roughly 4,000 tokens. With the standard head measured instead,
+    // the history budget would be ~4,000 tokens too large and the window would run past
+    // the context the chat was told to fit.
+    const huge = 'x'.repeat(16_000);
+    const prompt = await buildPrompt(
+      env,
+      chat,
+      withPrompts([{ identifier: 'main', name: 'Main', content: huge }], [{ identifier: 'main', enabled: true }]),
+      options,
+    );
+
+    const history = prompt.messages
+      .slice(0, prompt.tailStart)
+      .filter((m) => /^line \d+ of the scene$/.test(m.content));
+    // 8,000 budget − ~4,000 head − 3,000 reserve leaves ~1,000 tokens, which at 20
+    // tokens a row is at most 50 rows. Generously bounded here: the assertion is that
+    // the head was subtracted at all, which a 200-row window would disprove.
+    expect(history.length).toBeLessThan(120);
   });
 });
