@@ -12,6 +12,19 @@ export interface RegexScript {
   findRegex: string;
   replaceString: string;
   disabled?: boolean;
+  /**
+   * Which side(s) this script applies to: `1` is the reader's message, `2` the model's
+   * output. An array, because ST 1.13+ lets one script target both.
+   */
+  placement?: number[];
+  /** Apply to the prompt but not to what the reader sees. */
+  promptOnly?: boolean;
+  /** Apply to what the reader sees but not to the prompt. */
+  markdownOnly?: boolean;
+  /** Only run on messages at least this far from the end of the conversation. */
+  minDepth?: number;
+  /** Only run on messages at most this far from the end. */
+  maxDepth?: number;
 }
 
 export interface PromptEntry {

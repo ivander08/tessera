@@ -3,6 +3,7 @@ import type { ChatRow } from './db';
 import type { EffectiveSettings } from './effective';
 import { assemble, renderPersona } from '../../src/lib/prompt/assemble';
 import { injectAtDepth, resolvePrompts } from '../../src/lib/presets/resolvePrompts';
+import { applyScripts, placementForRole } from '../../src/lib/presets/regexScripts';
 import type { AssembledPrompt } from '../../src/lib/prompt/types';
 import type { AssembleInput } from '../../src/lib/prompt/input';
 import { computeWindowStart } from '../../src/lib/prompt/window';
@@ -332,13 +333,31 @@ export async function buildPrompt(
           content: substituteTail(segment.content, macroContext),
         }))
       : null,
-    history: history.map((row) => ({
-      role: row.role,
-      content: substituteHead(
-        includeNames ? withSpeakerName(row, character.name, personaRow?.name ?? null) : row.content,
-        macroContext,
-      ),
-    })),
+    // The prompt side of the preset's regex scripts, applied per row.
+    //
+    // This is what stops the previous reply poisoning the next one. Without it, a reply
+    // whose chain-of-thought was never stripped becomes HISTORY, the model reads its own
+    // `Scene: … Done` block as an example of how to answer, and every subsequent turn
+    // reproduces it. Measured on the Douyin preset: three consecutive replies opened with
+    // the reasoning block, each one training the next.
+    //
+    // The depth is the row's distance from the end, which is what `minDepth`/`maxDepth`
+    // are written against. Counted over the window being sent, because that is the only
+    // "conversation" the model can see.
+    history: history.map((row, index) => {
+      const depth = history.length - 1 - index;
+      const stripped = applyScripts(row.content, settings.presetRegex, 'prompt', {
+        placement: placementForRole(row.role),
+        depth,
+      });
+      return {
+        role: row.role,
+        content: substituteHead(
+          includeNames ? withSpeakerName({ ...row, content: stripped }, character.name, personaRow?.name ?? null) : stripped,
+          macroContext,
+        ),
+      };
+    }),
     tail: {
       // The tail gets both tiers: it is after `tailStart`, so it cannot disturb the
       // cached prefix however much it changes.

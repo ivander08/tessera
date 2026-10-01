@@ -197,6 +197,7 @@ function settings(contextBudget: number): EffectiveSettings {
     presetPostHistory: '',
     presetSystemPrompt: '',
     presetPrompts: null,
+    presetRegex: [],
   };
 }
 
@@ -753,5 +754,107 @@ describe('a preset with a prompt list reaches the model', () => {
     // tokens a row is at most 50 rows. Generously bounded here: the assertion is that
     // the head was subtracted at all, which a 200-row window would disprove.
     expect(history.length).toBeLessThan(120);
+  });
+});
+
+/**
+ * The prompt side of a preset's regex scripts.
+ *
+ * A reply whose reasoning block was never stripped becomes HISTORY, and the model reads
+ * its own scaffolding as an example of how to answer. Measured on the Douyin preset before
+ * this existed: three consecutive replies opened with the `Scene: … Done` block, each one
+ * training the next.
+ */
+describe('preset regex scripts clean the history', () => {
+  const options = { mode: 'send' as const, userSeq: null, userContent: 'hello', tailExtra: '' };
+
+  test('a promptOnly strip removes the block from history', async () => {
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    seedChain(db, 4);
+    exec(
+      db,
+      `UPDATE messages SET content = 'REASONING BLOCK
+The actual reply.' WHERE id = 'm2'`,
+    );
+
+    const withScripts: EffectiveSettings = {
+      ...settings(8000),
+      presetRegex: [
+        {
+          scriptName: 'strip reasoning',
+          findRegex: '/^REASONING BLOCK\\n/',
+          replaceString: '',
+          placement: [2],
+          promptOnly: true,
+        },
+      ],
+    };
+
+    const prompt = await buildPrompt(env, chat, withScripts, options);
+    const contents = prompt.messages.map((m) => m.content);
+    expect(contents).toContain('The actual reply.');
+    expect(contents.some((c) => c.includes('REASONING BLOCK'))).toBe(false);
+  });
+
+  test('without the script, the block stays in history — the behaviour being fixed', async () => {
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    seedChain(db, 4);
+    exec(
+      db,
+      `UPDATE messages SET content = 'REASONING BLOCK
+The actual reply.' WHERE id = 'm2'`,
+    );
+
+    const prompt = await buildPrompt(env, chat, settings(8000), options);
+    expect(prompt.messages.some((m) => m.content.includes('REASONING BLOCK'))).toBe(true);
+  });
+
+  test('a display-only script never touches the prompt', async () => {
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    seedChain(db, 4);
+
+    const displayOnly: EffectiveSettings = {
+      ...settings(8000),
+      presetRegex: [
+        {
+          scriptName: 'colourise',
+          findRegex: '/line (\\d+)/g',
+          replaceString: 'LINE $1',
+          placement: [2],
+          markdownOnly: true,
+        },
+      ],
+    };
+
+    const prompt = await buildPrompt(env, chat, displayOnly, options);
+    // A cosmetic script must not spend prompt tokens.
+    expect(prompt.messages.some((m) => m.content.includes('LINE 1'))).toBe(false);
+  });
+
+  test('the reader’s own rows are left alone by an AI-placement script', async () => {
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    seedChain(db, 4);
+
+    const aiOnly: EffectiveSettings = {
+      ...settings(8000),
+      presetRegex: [
+        {
+          scriptName: 'strip',
+          findRegex: '/line/g',
+          replaceString: 'STRIPPED',
+          placement: [2],
+        },
+      ],
+    };
+
+    const prompt = await buildPrompt(env, chat, aiOnly, options);
+    // `m1` and `m3` are the user rows. Their text must survive untouched: the same words
+    // might be exactly what the reader typed.
+    expect(prompt.messages.some((m) => m.content === 'line 1 of the scene')).toBe(true);
+    expect(prompt.messages.some((m) => m.content === 'line 3 of the scene')).toBe(true);
   });
 });

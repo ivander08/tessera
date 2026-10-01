@@ -259,14 +259,31 @@ export function parseRegexScripts(value: unknown): RegexScript[] {
     .map((entry) => asRecord(entry))
     .filter((entry): entry is Record<string, unknown> => entry !== null)
     .map((entry) => {
-      // ST also carries `placement`, `promptOnly` and `minDepth`; the pinned
-      // `RegexScript` shape does not, so they are not carried.
       const script: RegexScript = {
         scriptName: asString(entry.scriptName),
         findRegex: asString(entry.findRegex),
         replaceString: asString(entry.replaceString),
       };
       if (typeof entry.disabled === 'boolean') script.disabled = entry.disabled;
+
+      // `placement` is an ARRAY in ST 1.13+. Older files carry a bare number, so both
+      // shapes are read — a number-only reader silently drops the targeting of every
+      // modern script, which is the difference between a colouriser and a mangled prompt.
+      const placement = entry.placement;
+      if (Array.isArray(placement)) {
+        const values = placement.filter((value): value is number => typeof value === 'number');
+        if (values.length > 0) script.placement = values;
+      } else if (typeof placement === 'number') {
+        script.placement = [placement];
+      }
+
+      // The two axes that decide which SIDE a script applies to. Read explicitly rather
+      // than defaulted here: `undefined` and `false` mean the same thing to the engine,
+      // and collapsing them at import time would lose the distinction for a round trip.
+      if (typeof entry.promptOnly === 'boolean') script.promptOnly = entry.promptOnly;
+      if (typeof entry.markdownOnly === 'boolean') script.markdownOnly = entry.markdownOnly;
+      if (typeof entry.minDepth === 'number') script.minDepth = entry.minDepth;
+      if (typeof entry.maxDepth === 'number') script.maxDepth = entry.maxDepth;
       return script;
     });
 }

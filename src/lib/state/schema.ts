@@ -60,11 +60,23 @@ export interface WorldState {
  * the narrator then has to decide who "me" is, and the reader's own name never appears.
  * Rejecting these is cheap and the failure it prevents is a scene where the user is
  * invisible to the world model.
+ *
+ * The second group are the world-state block's own field labels. They are here because
+ * they were observed doing real damage: a reply that began with a state block — the model
+ * echoing the block it was shown — reads to the speaker parser as a script, because
+ * `Time: late night, same day` is exactly `name: text`. One such reply added FIVE cast
+ * members named `Time`, `Location`, `Present`, `Inventory` and `Outfits`, each with its own
+ * voice colour, and they then rendered into the prompt's cast block as
+ * "Time (a supporting character)". No story has a character called `Present`, and the cost
+ * of refusing one is nil against that.
  */
 const NOT_A_NAME: Record<string, true> = {
   me: true, i: true, you: true, them: true, him: true, her: true, us: true, we: true,
   they: true, someone: true, anyone: true, everyone: true, nobody: true, user: true,
   'the user': true, myself: true, yourself: true,
+  // The state block's field labels, as rendered by `renderStateBlock`.
+  'world state': true, time: true, location: true, weather: true, present: true,
+  away: true, conditions: true, outfits: true, inventory: true, notes: true,
 };
 
 /**

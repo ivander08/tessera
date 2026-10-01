@@ -40,6 +40,8 @@ import { exportChat } from './export';
 import { seedOpeningState } from './state/update';
 import { loadAlternatives, loadPathTail } from './branch';
 import { substituteHead } from '../../src/lib/prompt/macros';
+import { applyScripts, placementForRole } from '../../src/lib/presets/regexScripts';
+import { loadEffectiveSettings } from './effective';
 import { EMPTY_STATE, validatePatch } from '../../src/lib/state/schema';
 import type { WorldState } from '../../src/lib/state/schema';
 import {
@@ -571,13 +573,28 @@ async function listMessages(env: Env, chatId: string, url: URL): Promise<Respons
   // chat: 616 of the 617 `swipes` arrays held nothing but the row's own id, which was
   // 32 KB of the response carrying no information. Absent and "length 1" mean the same
   // thing to the client, so the common case pays nothing.
-  const messages = path.map((row) => {
+  // The preset's display-side regex scripts. Applied HERE rather than at write time so
+  // the stored row stays exactly what the model produced — the reader can always see the
+  // raw reply by looking at the database or the export, and a preset's cleanup can be
+  // retuned without rewriting history.
+  //
+  // Depth is the row's distance from the newest, which is what `minDepth`/`maxDepth`
+  // target. Computed over the returned window, so it agrees with what is on screen.
+  const presetRegex = chat.preset_id
+    ? (await loadEffectiveSettings(env, chat.preset_id)).presetRegex
+    : [];
+
+  const messages = path.map((row, index) => {
     const alternatives = siblings.get(row.parent_id ?? '') ?? [];
+    const depth = path.length - 1 - index;
     const base = {
       seq: row.seq,
       id: row.id,
       role: row.role,
-      content: row.content,
+      content: applyScripts(row.content, presetRegex, 'display', {
+        placement: placementForRole(row.role),
+        depth,
+      }),
       content_tokens: row.content_tokens,
       prompt_tokens: row.prompt_tokens,
       completion_tokens: row.completion_tokens,

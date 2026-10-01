@@ -58,6 +58,35 @@ describe('speakersIn: what counts as a name', () => {
     expect(speakersIn('NARRATION\n"Quoted line"', [])).toEqual([]);
   });
 
+  test('a world-state block is not a script', () => {
+    // The bug this guards, measured on a real chat: the model echoed Tessera's own state
+    // block back as its reply, and every field label read as a speaker because
+    // `Time: late night, same day` is exactly `name: text`. One reply added FIVE cast
+    // members — Time, Location, Present, Inventory, Outfits — each with a voice colour,
+    // and they then rendered into the prompt as "Time (a supporting character)".
+    //
+    // These labels are refused by `isName` rather than by a shape rule, because no shape
+    // rule can tell this apart from a legitimate two-speaker reply (see the case above,
+    // where each name speaks exactly once).
+    const leaked = [
+      'Time: late night, same day',
+      'Location: the flat, West Jakarta',
+      'Present: Sydney',
+      'Inventory: laptop bag, phone',
+      'Outfits: Sydney: oversized tee',
+    ].join('\n');
+
+    expect(speakersIn(leaked, [])).toEqual([]);
+  });
+
+  test('a state label is refused even when it is written like a real speaker line', () => {
+    // The exact shape that fooled it: `Present: Sydney` is indistinguishable from a
+    // character named Present saying "Sydney".
+    expect(speakersIn('Present: Sydney', [])).toEqual([]);
+    expect(speakersIn('Time: late, same day', [])).toEqual([]);
+    expect(speakersIn('Notes: he is asleep', [])).toEqual([]);
+  });
+
   test('a multi-word name is found once however often it speaks', () => {
     expect(speakersIn('WS-G Probe: one\nWS-G Probe: two\nOlivia: three', [])).toEqual([
       'WS-G Probe',

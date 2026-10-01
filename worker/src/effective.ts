@@ -1,8 +1,25 @@
 import { getSettings, loadChatSettings } from './db';
 import type { ChatSettings } from './db';
 import { responseLengthRule, type ResponseLength } from '../../src/lib/presets/presetConfig';
-import { parseStoredPrompts } from '../../src/lib/presets/importSt';
-import type { PromptEntry, PromptOrderEntry } from '../../src/lib/presets/types';
+import { parseRegexScripts, parseStoredPrompts } from '../../src/lib/presets/importSt';
+import type { PromptEntry, PromptOrderEntry, RegexScript } from '../../src/lib/presets/types';
+
+/**
+ * The stored regex scripts, read back.
+ *
+ * Accepts the raw column text as well as an array, for the same reason
+ * `parseStoredPrompts` does: handing a string to an array reader yields `[]`, which here
+ * would mean "this preset has no cleanup" — silently, and with the preset's output
+ * leaking into every reply.
+ */
+function parseStoredRegex(raw: string | null): RegexScript[] {
+  if (!raw) return [];
+  try {
+    return parseRegexScripts(JSON.parse(raw) as unknown);
+  } catch {
+    return [];
+  }
+}
 
 /**
  * Effective generation settings for one chat: the chat's preset layered over the global
@@ -37,6 +54,17 @@ export interface EffectiveSettings extends ChatSettings {
     entries: PromptEntry[];
     order: PromptOrderEntry[];
   } | null;
+  /**
+   * The preset's regex scripts, applied to text entering and leaving the model.
+   *
+   * A preset's prompt half tells the model what to write; this half cleans up what it
+   * wrote. Shipping only the first is why an imported Frankenstein preset leaks its own
+   * `Scene: … Done` chain-of-thought to the reader — the script that strips it exists in
+   * the file and nothing runs it.
+   *
+   * Empty for a preset with none, which is every preset that only carries sampler values.
+   */
+  presetRegex: RegexScript[];
 }
 
 export async function loadEffectiveSettings(
@@ -54,16 +82,26 @@ export async function loadEffectiveSettings(
     presetPostHistory: '',
     presetSystemPrompt: '',
     presetPrompts: null,
+    presetRegex: [],
   };
 
   if (!presetId) return effective;
 
   const row = await env.DB.prepare(
-    'SELECT knobs_json, config_json, prompt_json FROM presets WHERE id = ?',
+    'SELECT knobs_json, config_json, prompt_json, regex_json FROM presets WHERE id = ?',
   )
     .bind(presetId)
-    .first<{ knobs_json: string; config_json: string | null; prompt_json: string | null }>();
+    .first<{
+      knobs_json: string;
+      config_json: string | null;
+      prompt_json: string | null;
+      regex_json: string | null;
+    }>();
   if (!row) return effective;
+
+  // The scripts are read before the config block, because they do not depend on it and a
+  // preset whose config is malformed should still get its cleanup.
+  effective.presetRegex = parseStoredRegex(row.regex_json);
 
   // Sampler knobs from the preset replace the global ones wholesale. Merging them
   // key-by-key would leave a stale global value in play for any knob the preset omits,
