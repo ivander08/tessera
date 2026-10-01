@@ -3,6 +3,7 @@ import { Markdown } from './Markdown';
 import { Avatar } from './Avatar';
 import { MessageActions } from './MessageActions';
 import { SPEAKER_LINE, splitSpeakers } from '../lib/transcript/speakers';
+import { substituteHead, type MacroContext } from '../lib/prompt/macros';
 import type { WorldState } from '../lib/state/schema';
 
 /**
@@ -59,8 +60,22 @@ export interface TurnProps {
    * scene, which renders exactly as it did before casts existed.
    */
   cast?: CastVoice[];
-  /** The state as of the PREVIOUS turn, so an unchanged scene renders nothing. */
-  previousState?: WorldState | null;
+  /**
+   * Names for `{{user}}` and `{{char}}` inside the turn's text.
+   *
+   * Applied when rendering, never when storing: the row keeps whatever the model wrote,
+   * and a persona attached after the reply was generated still resolves. Without this a
+   * reply that echoed a literal `{{user}}` — which happens whenever the chat had no
+   * persona at prompt time, because the head deliberately leaves the placeholder visible
+   * — displayed the placeholder verbatim forever.
+   */
+  macros: MacroContext;
+  /**
+   * The scene as of THIS turn — the state in force at this row, inherited from the last
+   * snapshot. Not the previous row's own snapshot: a row only carries one when something
+   * changed, so the raw value is absent on most turns and the line would vanish.
+   */
+  sceneState?: WorldState | null;
   /** The reply hit the provider's output cap and stops mid-sentence. */
   truncated?: boolean;
   /** Appends another turn continuing this one. Omitted when the turn cannot be continued. */
@@ -84,7 +99,8 @@ export function Turn({
   dropCap = false,
   zoomAvatar = false,
   cast,
-  previousState,
+  macros,
+  sceneState,
   truncated = false,
   onContinue,
   editing = false,
@@ -96,6 +112,11 @@ export function Turn({
 }: TurnProps) {
   const isUser = message.role === 'user';
 
+  // Every use of the content below is a display use: the drop cap, the speaker split and
+  // the markdown all render what the reader sees. `TurnEditor` deliberately keeps
+  // `message.content` so an edit cannot bake a resolved name into the row.
+  const display = substituteHead(message.content, macros);
+
   // A drop cap only makes sense on prose that opens with a letter. Cards routinely open
   // with `*action beats*`, em-dashes or quotes, and a floated punctuation mark is just a
   // stray glyph in the margin.
@@ -104,14 +125,14 @@ export function Turn({
   // first letter of the RENDERED line — `*Quill looks up.*` renders as "Quill looks up."
   // inside an `<em>`, so the cap lands on the Q. Testing the raw source would refuse
   // every card that opens with an action beat, which is most of them.
-  const opening = message.content.trimStart().replace(/^[*_`~\-—–"'(<\s]+/, '');
+  const opening = display.trimStart().replace(/^[*_`~\-—–"'(<\s]+/, '');
   const cap = dropCap && /^[\p{L}\p{N}]/u.test(opening) ? ' drop-cap' : '';
 
   // Splitting happens only when the cast actually has more than one member. A
   // single-character scene takes the original path untouched, which is what keeps every
   // existing scene pixel-identical — and a reply that happens to contain a `Name:` line
   // is not retroactively reinterpreted.
-  const segments = !isUser && cast && cast.length > 1 ? splitSpeakers(message.content) : null;
+  const segments = !isUser && cast && cast.length > 1 ? splitSpeakers(display) : null;
   const multi = segments !== null && segments.some((segment) => segment.speaker !== null);
 
   // A row's own speaker overrides the chat's character when it is set. Null is the
@@ -207,7 +228,7 @@ export function Turn({
                 if (event.detail === 1 && window.matchMedia('(hover: none)').matches) onEditStart?.();
               }}
             >
-              <Markdown content={message.content} />
+              <Markdown content={display} />
               {streaming && <span className="caret" aria-hidden="true" />}
             </div>
           </>
@@ -224,7 +245,7 @@ export function Turn({
             )}
           </p>
         )}
-        <TurnState message={message} previous={previousState} />
+        <TurnState message={message} state={sceneState} />
         <TurnMeta message={message} />
       </div>
     </article>
@@ -238,34 +259,30 @@ export function Turn({
  * is the only way to answer "where was I when that happened" — the live document has been
  * overwritten many times since.
  *
- * Rendered only when it DIFFERS from the previous turn's state, and only for the fields a
- * reader uses to orient. A line repeating the same time and place under every reply would
- * be noise; a line that appears when the scene moves is information. Nothing is shown for
- * a turn whose state did not change, which is most of them.
+ * Rendered from the state in force at the row, on every one of the character's replies. A
+ * line that appeared only when the scene had moved was indistinguishable from a line
+ * attached to the wrong turn, which is what it was reported as: the reader saw `16:36` on
+ * one reply and nothing on the next, and read the second as misplaced rather than as
+ * unchanged.
  */
 function TurnState({
   message,
-  previous,
+  state,
 }: {
   message: TurnView;
-  previous?: WorldState | null;
+  state?: WorldState | null;
 }) {
-  const state = message.state;
+  // Only the character's replies carry a scene line. The reader's own line is a prompt,
+  // not a scene report, and repeating the same line under it doubles the noise.
+  if (message.role !== 'assistant') return null;
   if (!state) return null;
 
   // Only the fields that move. Inventory and notes change constantly and would make this
-  // line appear on almost every turn, which is the noise it exists to avoid.
+  // line unusable.
   const parts = [state.location, state.time, state.weather]
     .map((part) => part?.trim())
     .filter((part): part is string => !!part && part.length > 0);
   if (parts.length === 0) return null;
-
-  const before = [previous?.location, previous?.time, previous?.weather]
-    .map((part) => part?.trim())
-    .filter((part): part is string => !!part && part.length > 0);
-
-  // Unchanged since the previous turn: nothing to say.
-  if (before.join(' · ') === parts.join(' · ')) return null;
 
   return (
     <p className="turn-state" title="The scene as it stood at this turn">

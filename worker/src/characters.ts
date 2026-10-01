@@ -2,7 +2,7 @@ import { badRequest, json, notFound, readJson } from './http';
 import { getCharacter as loadCharacter } from './db';
 import { forkCard } from '../../src/lib/cards/fork';
 import { asRecord, asString, asStringArray } from '../../src/lib/json';
-import type { CharacterCardJson, ParsedCard } from '../../src/lib/cards/types';
+import type { CharacterCardJson, GreetingState, ParsedCard } from '../../src/lib/cards/types';
 import { estimateTokens } from '../../src/lib/tokenEstimate';
 
 /**
@@ -31,6 +31,9 @@ const STRING_FIELDS = [
 
 /** Card fields that are lists of strings. */
 const LIST_FIELDS = ['alternateGreetings', 'tags'] as const;
+
+/** Card fields that are a list of `{ time?, location?, weather? }`. */
+const GREETING_STATE_FIELDS = ['time', 'location', 'weather'] as const;
 
 export interface CharacterDetail {
   id: string;
@@ -414,7 +417,28 @@ const EMPTY_CARD: Omit<CharacterCardJson, 'name'> = {
   creatorNotes: '',
   tags: [],
   characterBook: null,
+  greetingStates: [],
 };
+
+/**
+ * `greetingStates`, or null when the value is not an array of objects.
+ *
+ * A malformed entry becomes `{}` rather than failing the whole save: the field is
+ * optional decoration on a card whose prose is the part that matters, and refusing the
+ * write would lose the edit the reader actually made.
+ */
+function greetingStates(value: unknown): GreetingState[] | null {
+  if (!Array.isArray(value)) return null;
+  return value.map((entry) => {
+    const record = asRecord(entry);
+    if (!record) return {};
+    const out: GreetingState = {};
+    for (const field of GREETING_STATE_FIELDS) {
+      if (field in record) out[field] = asString(record[field]);
+    }
+    return out;
+  });
+}
 
 /**
  * Type-checks a card as it crosses the HTTP boundary, or as it comes back out of the
@@ -444,6 +468,9 @@ function readCard(value: unknown, base: CharacterCardJson | null = null): Charac
   if ('nickname' in record) out.nickname = asString(record.nickname);
   if ('creatorNotesMultilingual' in record) {
     out.creatorNotesMultilingual = record.creatorNotesMultilingual;
+  }
+  if ('greetingStates' in record) {
+    out.greetingStates = greetingStates(record.greetingStates) ?? out.greetingStates;
   }
 
   return out;

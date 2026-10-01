@@ -1,3 +1,10 @@
+/** The opening scene for one greeting. Every field is optional. */
+export interface GreetingState {
+  time?: string;
+  location?: string;
+  weather?: string;
+}
+
 /**
  * The stored shape of `characters.card_json`.
  *
@@ -18,6 +25,14 @@ export interface CharacterCardJson {
   creatorNotes: string;
   tags: string[];
   characterBook: unknown | null;
+  /**
+   * The scene each opening starts in, index-aligned with `[firstMes, ...alternateGreetings]`.
+   *
+   * Index-aligned rather than folded into the greeting text: the greeting is prose the
+   * model reads, and a machine-readable time and place must not be part of it. An entry
+   * may be absent, or may set only some of the three fields.
+   */
+  greetingStates?: GreetingState[];
   /** v3 only. */
   nickname?: string;
   /** v3 only. */

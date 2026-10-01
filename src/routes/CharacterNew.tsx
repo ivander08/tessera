@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { CardParseError, parseCardFile } from '../lib/cards/import';
+import { CARD_FIELD_ROWS } from '../lib/cards/fields';
 import type { ParsedCard } from '../lib/cards/types';
 import { loadTokenCounter } from '../lib/tokenizerClient';
 import { apiJson } from '../lib/api';
@@ -43,27 +44,6 @@ const GROUPS: Array<{ title: string; hint: string; fields: Array<keyof ParsedCar
   },
   { title: 'Meta', hint: 'never sent', fields: ['creatorNotes'] },
 ];
-
-/**
- * How tall each prose field is, in rows.
- *
- * `description` is where most cards keep the whole character, so it gets a page rather
- * than a slot — the field a reader spends real time in should not be the one they scroll
- * inside of. `first_mes` is the second: it is the scene's opening, and it is written and
- * rewritten the way prose is. The short fields stay short so the screen is scannable.
- */
-const FIELD_ROWS: Partial<Record<keyof ParsedCard, number>> = {
-  name: 1,
-  nickname: 1,
-  description: 22,
-  personality: 6,
-  scenario: 5,
-  systemPrompt: 5,
-  mesExample: 12,
-  postHistoryInstructions: 4,
-  firstMes: 16,
-  creatorNotes: 3,
-};
 
 /** What each field is for. The two that are genuinely confusable get a real sentence. */
 const FIELD_HINTS: Partial<Record<keyof ParsedCard, string>> = {
@@ -387,7 +367,7 @@ export default function CharacterNew() {
                 <textarea
                   value={value(field)}
                   onChange={(event) => set(field, event.target.value)}
-                  rows={FIELD_ROWS[field] ?? 4}
+                  rows={CARD_FIELD_ROWS[field] ?? 4}
                   className="field"
                 />
               </Field>

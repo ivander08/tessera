@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { AppBar, BackLink, CrumbSep } from '../components/AppBar';
+import { ConfirmPrompt } from '../components/ConfirmPrompt';
 import { apiJson } from '../lib/api';
 import { messageOf, useAsync } from '../lib/hooks';
 import { parseFf5 } from '../lib/presets/ff5';
@@ -48,6 +49,8 @@ export default function Presets() {
   const [dragging, setDragging] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // The preset the reader has asked to delete, held until they confirm.
+  const [confirming, setConfirming] = useState<PresetSummary | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   async function importFile(file: File) {
@@ -139,15 +142,11 @@ export default function Presets() {
   }
 
   async function remove(preset: PresetSummary) {
-    // Confirmed by name, not by a generic "are you sure": the rows are similar and a
-    // mis-tap here is unrecoverable.
-    if (!window.confirm(`Delete "${preset.name}"? Chats using it fall back to the global settings.`)) {
-      return;
-    }
     setStatus(null);
     setBusy(true);
     try {
       await apiJson(`/api/presets/${encodeURIComponent(preset.id)}`, { method: 'DELETE' });
+      setConfirming(null);
       reload();
     } catch (cause) {
       setStatus(messageOf(cause));
@@ -314,7 +313,7 @@ export default function Presets() {
                 <button
                   type="button"
                   className="btn quiet danger"
-                  onClick={() => void remove(preset)}
+                  onClick={() => setConfirming(preset)}
                   disabled={busy}
                 >
                   Delete
@@ -325,6 +324,18 @@ export default function Presets() {
         ))}
       </div>
       </main>
+
+      {confirming && (
+        <ConfirmPrompt
+          title="Delete this preset"
+          message={`Delete "${confirming.name}"? Chats using it fall back to the global settings.`}
+          confirmLabel="Delete"
+          busy={busy}
+          danger
+          onConfirm={() => void remove(confirming)}
+          onCancel={() => setConfirming(null)}
+        />
+      )}
     </>
   );
 }

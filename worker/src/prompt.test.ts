@@ -32,6 +32,7 @@ const MIGRATIONS = [
   '0008_cast.sql',
   '0009_message_speaker.sql',
   '0011_message_state.sql',
+  '0012_message_deleted.sql',
 ];
 
 interface Recorded {

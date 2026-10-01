@@ -50,14 +50,22 @@ async function loadMessage(env: Env, chatId: string, id: string): Promise<Messag
     .first<MessageRow>();
 }
 
-/** Every version of one position: the rows answering the same parent. */
+/**
+ * Every version of one position: the rows answering the same parent.
+ *
+ * Removed versions are excluded. `active = 0` alone cannot say "gone" — it also means "a
+ * version you can swipe back to" — so a deleted row carries `deleted = 1` and leaves this
+ * set entirely. Without that, deleting the current version promotes a survivor, and
+ * deleting THAT one promotes the first back: a reader deleting through three versions
+ * watches the one they removed first reappear.
+ */
 async function siblingsOf(env: Env, chatId: string, parentId: string | null): Promise<BranchRow[]> {
   // Targeted rather than a scan of the chat. This runs on every swipe, and a chat with a
   // long history should not pay for its length to move one position.
   if (parentId === null) {
     const { results } = await env.DB.prepare(
       `SELECT ${BRANCH_COLUMNS} FROM messages
-        WHERE chat_id = ?1 AND parent_id IS NULL ORDER BY seq`,
+        WHERE chat_id = ?1 AND parent_id IS NULL AND deleted = 0 ORDER BY seq`,
     )
       .bind(chatId)
       .all<BranchRow>();
@@ -66,7 +74,7 @@ async function siblingsOf(env: Env, chatId: string, parentId: string | null): Pr
 
   const { results } = await env.DB.prepare(
     `SELECT ${BRANCH_COLUMNS} FROM messages
-      WHERE chat_id = ?1 AND parent_id = ?2 ORDER BY seq`,
+      WHERE chat_id = ?1 AND parent_id = ?2 AND deleted = 0 ORDER BY seq`,
   )
     .bind(chatId, parentId)
     .all<BranchRow>();
@@ -212,6 +220,21 @@ export async function editMessage(env: Env, req: Request): Promise<Response> {
   // An edit is a new version of the same position, not a rewrite. The old text stays
   // swipable, which is what makes an accidental edit recoverable.
   const id = await addVersion(env, body.chatId, message.parent_id ?? null, message.role, body.content.trim());
+
+  // Everything that answered the OLD row now answers the new one. Without this the edit
+  // deactivates the row its continuation was parented to, the walk cannot reach past it,
+  // and the reply the reader was reading vanishes — which is exactly what a reader sees
+  // as "editing my line deleted the character's answer".
+  //
+  // The children are reparented, not copied: a continuation is a fact about the position,
+  // not about the version of the text that happened to sit there. The old row is left
+  // inactive and childless, still swipable back to.
+  await env.DB.prepare(
+    'UPDATE messages SET parent_id = ? WHERE chat_id = ? AND parent_id = ?',
+  )
+    .bind(id, body.chatId, message.id)
+    .run();
+
   return json({ ok: true, id });
 }
 
@@ -221,15 +244,31 @@ interface DeleteBody {
 }
 
 /**
- * Deleting deactivates the whole position rather than removing rows.
+ * Deleting removes ONE version of a position, not the whole position.
  *
- * Deactivating every version means the path walk stops there, so the message and
- * everything after it leave the transcript together. That is the behaviour a reader
- * expects from "delete this turn" — and because nothing is removed, the deletion is
- * recoverable by swiping back.
+ * It used to deactivate every version at the position, on the reasoning that "delete this
+ * turn" should take the turn and its continuation out together. That is right for the LAST
+ * version and wrong for every other one: X on a swipe alternative destroyed the whole turn
+ * and everything written after it, which a reader experiences as their scene silently
+ * truncating. Measured on a real chat: deleting one of three versions of a reply removed
+ * the reply AND the four turns that followed it.
  *
- * A hard DELETE would fire the FTS delete trigger, so recall would lose the message, and
- * it would leave a hole in `seq` that the windowing walk has to reason about.
+ * The removal is recorded as `deleted = 1`, not as `active = 0`. Those are different facts
+ * — "gone" versus "not the current version" — and conflating them makes deleting twice
+ * impossible: with only `active`, removing the current version promotes a survivor, and
+ * removing that one promotes the first back. A reader deleting through three versions
+ * would watch the one they removed first reappear.
+ *
+ * So:
+ *
+ *  - Other versions remain -> mark this one deleted, hand the continuation to the newest
+ *    survivor, and the reader swipes on. The turn stays.
+ *  - This was the last version -> mark it deleted, which empties the position and takes the
+ *    turn out of the transcript with everything after it.
+ *
+ * Nothing is removed from the table either way. A hard DELETE would fire the FTS delete
+ * trigger, so recall would lose the message, and it would leave a hole in `seq` that the
+ * windowing walk has to reason about.
  */
 export async function deleteMessage(env: Env, req: Request): Promise<Response> {
   const body = await readJson<DeleteBody>(req);
@@ -238,12 +277,51 @@ export async function deleteMessage(env: Env, req: Request): Promise<Response> {
   const message = await loadMessage(env, body.chatId, body.id);
   if (!message) return notFound('message not found');
 
-  // Deactivating every version is what empties the position, so the path walk stops there
-  // and the message leaves the transcript with everything after it.
-  await deactivatePosition(env, body.chatId, message.parent_id ?? null).run();
+  const parentId = message.parent_id ?? null;
+  const siblings = await siblingsOf(env, body.chatId, parentId);
+  const survivors = siblings.filter((row) => row.id !== message.id);
 
-  // The position is empty now, so the UI drops it rather than leaving a blank slot.
-  return json({ ok: true, groupEmpty: true });
+  // The last version: the position empties, so the path walk stops there and the message
+  // leaves the transcript with everything after it. `groupEmpty` tells the UI there is no
+  // version left to show.
+  if (survivors.length === 0) {
+    await env.DB.prepare('UPDATE messages SET deleted = 1, active = 0 WHERE id = ? AND chat_id = ?')
+      .bind(message.id, body.chatId)
+      .run();
+    return json({ ok: true, groupEmpty: true });
+  }
+
+  // Another version takes over. The newest survivor is the natural successor: it is the
+  // most recently written text at this position, which is what the reader last asked for.
+  const successor = survivors[survivors.length - 1];
+
+  // Only an ACTIVE row needs a successor promoted. X-ing an inactive version is a pure
+  // removal — promoting anything would leave two active children of one parent.
+  if (message.active !== 1) {
+    await env.DB.prepare('UPDATE messages SET deleted = 1 WHERE id = ? AND chat_id = ?')
+      .bind(message.id, body.chatId)
+      .run();
+    return json({ ok: true, groupEmpty: false, id: successor.id });
+  }
+
+  // Deactivate the position, then promote the successor. Doing it by position rather than
+  // by id is what keeps the one-active-child invariant even on a chat that already has two
+  // active children from before this fix — the same self-healing shape `swipeMessage` uses.
+  await env.DB.batch([
+    deactivatePosition(env, body.chatId, parentId),
+    env.DB.prepare('UPDATE messages SET deleted = 1 WHERE id = ? AND chat_id = ?')
+      .bind(message.id, body.chatId),
+    env.DB.prepare('UPDATE messages SET active = 1 WHERE id = ? AND chat_id = ?')
+      .bind(successor.id, body.chatId),
+    // The continuation followed the row that just left, so it follows the one that
+    // replaced it. Without this the reply the reader was reading drops off the walk —
+    // the same failure an edit had, reached by a different door.
+    env.DB.prepare('UPDATE messages SET parent_id = ? WHERE chat_id = ? AND parent_id = ?')
+      .bind(successor.id, body.chatId, message.id),
+  ]);
+
+  // Not empty: the turn is still on screen, showing a different version.
+  return json({ ok: true, groupEmpty: false, id: successor.id });
 }
 
 interface AddSwipeBody {

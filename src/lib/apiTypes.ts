@@ -80,6 +80,8 @@ export interface ChatCharacter {
 export interface ChatPersona {
   id: string;
   name: string;
+  /** The persona's picture, when they have one. Null means the Avatar falls back to their initial. */
+  avatar: string | null;
 }
 
 export interface ChatDetail {

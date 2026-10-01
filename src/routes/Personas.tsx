@@ -3,7 +3,18 @@ import { apiJson } from '../lib/api';
 import { messageOf, useAsync } from '../lib/hooks';
 import { AppBar } from '../components/AppBar';
 import { Avatar } from '../components/Avatar';
-import type { PersonaSummary } from '../components/PersonaPicker';
+import { ConfirmPrompt } from '../components/ConfirmPrompt';
+
+/** The row shape `/api/personas` returns. */
+interface PersonaSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  avatar: string | null;
+  created_at: number;
+  /** How many chats currently have this persona attached. */
+  chat_count: number;
+}
 
 /**
  * Persona manager.
@@ -29,6 +40,8 @@ export default function Personas() {
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  // The persona the reader has asked to delete, held until they confirm.
+  const [confirming, setConfirming] = useState<PersonaSummary | null>(null);
 
   /**
    * Every mutation re-reads the list: the Worker is the only writer worth trusting.
@@ -53,18 +66,23 @@ export default function Personas() {
   }
 
   async function remove(persona: PersonaSummary) {
-    const chats = persona.chat_count === 1 ? '1 chat' : `${persona.chat_count} chats`;
-    const confirmed = window.confirm(
-      persona.chat_count > 0
-        ? `Delete "${persona.name}"? It will be detached from ${chats}. The chats and their messages are kept — they just stop resolving {{user}}.`
-        : `Delete "${persona.name}"?`,
-    );
-    if (!confirmed) return;
-
     await mutate(
       () => apiJson(`/api/personas/${encodeURIComponent(persona.id)}`, { method: 'DELETE' }),
       `Deleted "${persona.name}".`,
     );
+    setConfirming(null);
+  }
+
+  /**
+   * The question the sheet asks. Deleting a persona detaches it from its chats rather
+   * than deleting them, and the message says so — the cost of the action is not obvious
+   * from the word "Delete".
+   */
+  function deleteQuestion(persona: PersonaSummary): string {
+    const chats = persona.chat_count === 1 ? '1 chat' : `${persona.chat_count} chats`;
+    return persona.chat_count > 0
+      ? `Delete "${persona.name}"? It will be detached from ${chats}. The chats and their messages are kept — they just stop resolving {{user}}.`
+      : `Delete "${persona.name}"?`;
   }
 
   return (
@@ -169,7 +187,7 @@ export default function Personas() {
                   <button
                     type="button"
                     className="btn quiet danger"
-                    onClick={() => void remove(persona)}
+                    onClick={() => setConfirming(persona)}
                     disabled={busy}
                   >
                     Delete
@@ -181,6 +199,18 @@ export default function Personas() {
         ))}
       </section>
       </main>
+
+      {confirming && (
+        <ConfirmPrompt
+          title="Delete this persona"
+          message={deleteQuestion(confirming)}
+          confirmLabel="Delete"
+          busy={busy}
+          danger
+          onConfirm={() => void remove(confirming)}
+          onCancel={() => setConfirming(null)}
+        />
+      )}
     </>
   );
 }

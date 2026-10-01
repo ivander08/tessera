@@ -3,6 +3,7 @@ import { getChat, getCharacter, getPersona } from './db';
 import { loadCast } from './cast';
 import { loadPath } from './branch';
 import { loadState } from './state/update';
+import { substituteHead } from '../../src/lib/prompt/macros';
 
 /**
  * Exporting a scene.
@@ -48,7 +49,7 @@ export async function exportChat(env: Env, chatId: string, url: URL): Promise<Re
     seq: row.seq,
     id: row.id,
     role: row.role,
-    content: row.content,
+    content: substituteHead(row.content, { char: characterName, user: personaName }),
     // Null means the chat's own character, which is every row in a single-character scene.
     speaker: row.speaker ?? (row.role === 'user' ? personaName : characterName),
     created_at: row.created_at,

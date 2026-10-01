@@ -5,6 +5,8 @@ import type { CharacterSummary } from '../lib/apiTypes';
 import { messageOf, useAsync } from '../lib/hooks';
 import { AppBar } from '../components/AppBar';
 import { Avatar } from '../components/Avatar';
+import { ConfirmPrompt } from '../components/ConfirmPrompt';
+import { NamePrompt } from '../components/NamePrompt';
 
 /** `chat_count` comes back from `GET /api/characters` alongside the summary columns. */
 interface CharacterRow extends CharacterSummary {
@@ -56,6 +58,10 @@ export default function Characters() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  // The character being forked, while the name sheet is open. Null means no sheet.
+  const [forking, setForking] = useState<CharacterRow | null>(null);
+  // The character the reader has asked to delete, held until they confirm.
+  const [confirming, setConfirming] = useState<CharacterRow | null>(null);
 
   function startChat(character: CharacterRow) {
     // The wizard asks how the scene should behave before it opens; it creates the chat
@@ -63,9 +69,7 @@ export default function Characters() {
     navigate(`/characters/${character.id}/start`);
   }
 
-  async function fork(character: CharacterRow) {
-    const name = window.prompt('Name for the copy', `${character.name} (copy)`);
-    if (name === null) return;
+  async function fork(character: CharacterRow, name: string) {
     setBusyId(character.id);
     setStatus(null);
     setFailure(null);
@@ -79,28 +83,38 @@ export default function Characters() {
       setFailure(`Could not fork ${character.name}: ${messageOf(cause)}`);
     } finally {
       setBusyId(null);
+      setForking(null);
     }
   }
 
   async function remove(character: CharacterRow) {
-    const chats =
-      character.chat_count === 0
-        ? ' It has no chats.'
-        : ` It also deletes ${character.chat_count} chat${character.chat_count === 1 ? '' : 's'} with it.`;
-    if (!window.confirm(`Delete "${character.name}"?${chats} This cannot be undone.`)) return;
-
     setBusyId(character.id);
     setStatus(null);
     setFailure(null);
     try {
       await apiJson(`/api/characters/${encodeURIComponent(character.id)}`, { method: 'DELETE' });
       setStatus(`Deleted ${character.name}.`);
+      setConfirming(null);
       reload();
     } catch (cause) {
       setFailure(`Could not delete ${character.name}: ${messageOf(cause)}`);
     } finally {
       setBusyId(null);
     }
+  }
+
+  /**
+   * The question the sheet asks, built from the row it is about.
+   *
+   * Deleting a character deletes its chats too, so the confirmation says so by name and
+   * count rather than asking "are you sure?" about an unstated thing.
+   */
+  function deleteQuestion(character: CharacterRow): string {
+    const chats =
+      character.chat_count === 0
+        ? ' It has no chats.'
+        : ` It also deletes ${character.chat_count} chat${character.chat_count === 1 ? '' : 's'} with it.`;
+    return `Delete "${character.name}"?${chats} This cannot be undone.`;
   }
 
   return (
@@ -201,7 +215,7 @@ export default function Characters() {
                     </Link>
                     <button
                       type="button"
-                      onClick={() => void fork(character)}
+                      onClick={() => setForking(character)}
                       disabled={busy}
                       className="icon-btn"
                       aria-label={`Fork ${shown}`}
@@ -212,7 +226,7 @@ export default function Characters() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => void remove(character)}
+                      onClick={() => setConfirming(character)}
                       disabled={busy}
                       className="icon-btn"
                       aria-label={`Delete ${shown}`}
@@ -228,6 +242,29 @@ export default function Characters() {
           })}
         </div>
       </main>
+
+      {forking && (
+        <NamePrompt
+          title="Fork this character"
+          label="Name for the copy"
+          initial={`${forking.name} (copy)`}
+          busy={busyId === forking.id}
+          onSubmit={(name) => void fork(forking, name)}
+          onCancel={() => setForking(null)}
+        />
+      )}
+
+      {confirming && (
+        <ConfirmPrompt
+          title="Delete this character"
+          message={deleteQuestion(confirming)}
+          confirmLabel="Delete"
+          busy={busyId === confirming.id}
+          danger
+          onConfirm={() => void remove(confirming)}
+          onCancel={() => setConfirming(null)}
+        />
+      )}
     </>
   );
 }

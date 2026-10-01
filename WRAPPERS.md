@@ -31,8 +31,11 @@ The rules that follow, and that must not be "optimized" away later:
    as a guard. Do not turn it on to solve a CORS problem — see §4 for the actual fix.
 2. **Do not add `tauri-plugin-http`.** It is absent from `src-tauri/Cargo.toml` on purpose.
    The desktop shell has no plugins at all.
-3. **Route SSE through `nativeFetch()`** from `src/lib/native/sse.ts` if a call ever needs to
-   be sure. In a browser it is just `fetch`.
+3. **Route SSE through `nativeFetch()`** from `src/lib/native/sse.ts`. This is already done:
+   `apiFetch` in `src/lib/api.ts` calls it for every request, so the streaming path reaches
+   the webview's own `fetch` even if a shell has patched `window.fetch`. In a browser it is
+   just `fetch`. Any *new* call site that talks to the API should go through `apiFetch`
+   rather than calling `fetch` directly, or it re-opens the hole this closes.
 
 ### The guard
 
@@ -67,7 +70,8 @@ actually behaves at runtime rather than on a guess:
 
 `nativeFetch()` prefers `window.CapacitorWebFetch` when present, so it stays correct even if
 `CapacitorHttp` is somehow switched on — it returns the streaming implementation rather than
-merely complaining that the streaming one is gone.
+merely complaining that the streaming one is gone. `apiFetch` calls it, so the whole API
+surface inherits that protection.
 
 ---
 

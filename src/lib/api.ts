@@ -1,3 +1,4 @@
+import { nativeFetch } from './native/sse';
 import { parseSse } from './sse';
 
 const TOKEN_KEY = 'tessera.token';
@@ -68,7 +69,13 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     // The webview's own fetch, never a shell's patched one: Tauri's plugin-http buffers
     // the response body and Capacitor's CapacitorHttp does the same, either of which
     // would turn a streamed reply into one lump at the end.
-    res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+    //
+    // `nativeFetch` rather than bare `fetch` is what actually delivers that. In a browser
+    // the two are the same function; under Capacitor the bridge may have overwritten
+    // `window.fetch` with the buffering one, and `nativeFetch` reaches past it to
+    // `window.CapacitorWebFetch`. The comment above described this intent for as long as
+    // the module existed while the call below ignored it.
+    res = await nativeFetch(`${API_BASE}${path}`, { ...init, headers });
   } catch (error) {
     throw new OfflineError(error instanceof Error ? error.message : String(error));
   }

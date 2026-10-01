@@ -59,9 +59,10 @@ export function PresetMenu({ chatId, onChanged }: { chatId: string; onChanged?: 
 
   return (
     <>
-      {/* The sheet lives in this subtree, so the menu must not close on this click —
-          closing it unmounts the sheet before it can paint. The menu does close once a
-          preset is chosen, which `choose` does explicitly. */}
+      {/* `data-menu-keep`: this row OPENS a sheet, so the menu must not close on this
+          click — closing it unmounts the sheet before it can paint. Choosing a preset
+          closes only the SHEET; the menu stays open showing the new value, which is the
+          feedback that the choice landed. */}
       <button
         type="button"
         className="menu-item"

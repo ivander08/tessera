@@ -11,6 +11,12 @@ import { Link, useLocation } from 'react-router';
  * Escape closes it, a click outside closes it, and navigating closes it. A menu that
  * stays open after you use it is the kind of small wrongness that makes an app feel
  * unfinished.
+ *
+ * Clicks inside a SHEET opened from this menu are exempt from both closers. `Modal`
+ * portals to `document.body`, so sheet content is not a descendant of the menu's own
+ * wrapper, and React portal events still bubble through the React tree back to the menu.
+ * Without the exemption every row in the sheet read as a click outside, and the menu
+ * unmounted the subtree that owned the sheet before the row's handler could run.
  */
 export interface AppBarProps {
   /** Left-aligned content: usually a back link. */
@@ -20,7 +26,6 @@ export interface AppBarProps {
   trailing?: ReactNode;
   /** Chat-scoped entries, shown above the app-wide ones. */
   scoped?: ReactNode;
-  onMenuOpen?: () => void;
   /**
    * Where the title links to, or null to leave it plain text.
    *
@@ -40,7 +45,6 @@ export function AppBar({
   title,
   trailing,
   scoped,
-  onMenuOpen,
   titleHref,
 }: AppBarProps) {
   // One way back. A screen with its own back link keeps that one and shows a plain title.
@@ -59,7 +63,14 @@ export function AppBar({
     if (!open) return;
 
     function onPointerDown(event: PointerEvent) {
-      if (!wrap.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target;
+      // A sheet opened from this menu is portaled to `document.body` (see `Modal`), so it
+      // is NOT a DOM descendant of `wrap`. Without this exemption the containment test
+      // below fails for every node inside the sheet, the menu unmounts the subtree that
+      // owns the sheet, and the click that was meant for a row lands on `body` instead —
+      // the sheet closes and nothing happens.
+      if (target instanceof Element && target.closest('.sheet-backdrop')) return;
+      if (!wrap.current?.contains(target as Node)) setOpen(false);
     }
     function onKey(event: KeyboardEvent) {
       if (event.key === 'Escape') setOpen(false);
@@ -94,10 +105,7 @@ export function AppBar({
           aria-expanded={open}
           aria-haspopup="menu"
           onClick={() => {
-            setOpen((wasOpen) => {
-              if (!wasOpen) onMenuOpen?.();
-              return !wasOpen;
-            });
+            setOpen((wasOpen) => !wasOpen);
           }}
         >
           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
@@ -114,6 +122,9 @@ export function AppBar({
             // Entries that open a SHEET opt out with `data-menu-keep`: the sheet is owned
             // by this subtree, so closing the menu would unmount it before it paints.
             const target = event.target as HTMLElement;
+            // A sheet opened from this menu is portaled out of `wrap`; its clicks are not
+            // menu clicks, and closing here would unmount the sheet before it can act.
+            if (target.closest('.sheet-backdrop')) return;
             if (target.closest('[data-menu-keep]')) return;
             if (target.closest('button, a')) setOpen(false);
           }}>

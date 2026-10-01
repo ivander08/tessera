@@ -19,6 +19,8 @@ interface PersonaRow {
   id: string;
   name: string;
   description: string | null;
+  /** How many chats use this persona. `GET /api/personas` returns it beside the summary. */
+  chat_count: number;
 }
 
 export function PersonaMenu({
@@ -58,11 +60,22 @@ export function PersonaMenu({
   const needle = filter.trim().toLowerCase();
   const shown = needle ? rows.filter((row) => row.name.toLowerCase().includes(needle)) : rows;
 
+  // How many personas share this name. Four personas called "Ivan" is the state the live
+  // database is actually in, and a picker showing four identical rows cannot be used to
+  // choose between them. The chat count is what tells them apart in practice: the one with
+  // fifteen chats is the one being used.
+  const duplicateNames = new Map<string, number>();
+  for (const row of rows) {
+    const key = row.name.trim().toLowerCase();
+    duplicateNames.set(key, (duplicateNames.get(key) ?? 0) + 1);
+  }
+
   return (
     <>
-      {/* The sheet lives in this subtree, so the menu must not close on this click —
-          closing it unmounts the sheet before it can paint. The whole menu does close
-          once a choice is made, which is what `choose` does explicitly. */}
+      {/* `data-menu-keep`: this row OPENS a sheet, so the menu must not close on this
+          click — closing it unmounts the sheet before it can paint. Choosing a row closes
+          only the SHEET; the menu stays open showing the new value, which is the feedback
+          that the choice landed. The reader dismisses the menu by clicking outside it. */}
       <button
         type="button"
         className="menu-item"
@@ -111,6 +124,13 @@ export function PersonaMenu({
                 <span className="pick-name">{persona.name}</span>
                 {persona.description && (
                   <span className="pick-note">{persona.description}</span>
+                )}
+                {duplicateNames.get(persona.name.trim().toLowerCase())! > 1 && (
+                  <span className="pick-note">
+                    {persona.chat_count === 0
+                      ? 'unused'
+                      : `${persona.chat_count} ${persona.chat_count === 1 ? 'chat' : 'chats'}`}
+                  </span>
                 )}
                 {active === persona.id && <span className="pick-tick">✓</span>}
               </button>

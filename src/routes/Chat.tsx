@@ -92,6 +92,10 @@ export default function Chat() {
   // Which side panel is open over the chat, if any. These used to be separate routes,
   // which meant leaving the scene to read the state it is in.
   const [panel, setPanel] = useState<'state' | 'cast' | 'memory' | 'appearance' | 'search' | null>(null);
+
+  // Drives the jump-to-latest control. A ref is enough for the auto-follow logic, but the
+  // button has to render, so the same fact is mirrored into state on the scroll handler.
+  const [atBottom, setAtBottom] = useState(true);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Whether the reader is at the live end of the transcript. Only then does new text
@@ -313,6 +317,14 @@ export default function Chat() {
 
   const characterName = data?.character?.shownName ?? data?.chat.title ?? 'Character';
   const userName = data?.persona?.name ?? 'You';
+  // `{{user}}` in prose resolves to the persona's name. The fallback is `User` rather than
+  // the transcript's `You` label because the placeholder appears in possessives —
+  // "{{user}}'s face" — where a pronoun reads as a typo. `User` is also the default
+  // persona name every other client uses, so a card written elsewhere behaves the same.
+  const macroContext = useMemo(
+    () => ({ char: characterName, user: data?.persona?.name ?? 'User' }),
+    [characterName, data?.persona?.name],
+  );
 
   // Follow the stream. `pending.text` is a dependency rather than `pending` because the
   // object identity changes on every delta and the layout has already been committed by
@@ -356,10 +368,42 @@ export default function Chat() {
       const distance =
         document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
       pinnedToBottom.current = distance < 140;
+      setAtBottom(distance < 140);
     }
     onScroll();
     window.addEventListener('scroll', onScroll, { passive: true });
     return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // Two shortcuts, and only two. A chat screen is a text field with a transcript above it,
+  // so most keys belong to whatever has focus — the composer, an open editor, a sheet.
+  // Anything that fires while the reader is typing is a bug waiting to be reported.
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const typing =
+        !!target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable);
+      // Escape is left to whatever is open: a sheet, an editor, the lightbox.
+      if (event.key === 'Escape') return;
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setPanel('search');
+        return;
+      }
+
+      // `/` opens search, the convention every long document reader already has in their
+      // fingers. Only outside a field, or typing a slash would open a panel instead.
+      if (event.key === '/' && !typing && !event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        setPanel('search');
+      }
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
   }, []);
 
   const run = useCallback(
@@ -431,8 +475,8 @@ export default function Chat() {
     // Now it writes a NEW assistant turn, so two replies in a row is exactly what you
     // get, which is what "continue" means to a reader.
     if (!content) {
-      if (busy || !lastAssistant) return;
-      void run('continue', '', lastAssistant.id);
+      if (busy || !tailMessage || tailMessage.role !== 'assistant') return;
+      void run('continue', '', tailMessage.id);
       return;
     }
 
@@ -548,6 +592,12 @@ export default function Chat() {
 
   const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
 
+  // What an empty send continues: the end of the visible path, which is the row the next
+  // turn would answer. NOT the newest assistant row in the window — after a regenerate or
+  // an edit that row can belong to a branch the reader is not looking at, and continuing it
+  // would append a paragraph to a version that is off screen.
+  const tailMessage = path[path.length - 1];
+
 
   return (
     <>
@@ -637,6 +687,7 @@ export default function Chat() {
                     message={{ ...(message as TurnView), content: '' }}
                     name={characterName}
                     avatar={data.character?.avatar}
+                    macros={macroContext}
                     dropCap={isOpening}
                     thinking
                   />
@@ -645,6 +696,7 @@ export default function Chat() {
                     message={{ ...(message as TurnView), content: overlay.text }}
                     name={characterName}
                     avatar={data.character?.avatar}
+                    macros={macroContext}
                     dropCap={isOpening}
                     streaming
                   />
@@ -653,9 +705,10 @@ export default function Chat() {
                 <Turn
                   message={message as TurnView}
                   name={isUser ? userName : characterName}
-                  avatar={isUser ? null : data.character?.avatar}
+                  avatar={isUser ? data.persona?.avatar : data.character?.avatar}
                   cast={isUser ? undefined : voices}
-                  previousState={index > 0 ? stateAt.get(path[index - 1].id) : undefined}
+                  macros={macroContext}
+                  sceneState={stateAt.get(message.id)}
                   // The marker belongs to the reply that hit the cap, and Continue asks for
                   // more of that same reply — the same call an empty send makes.
                   truncated={truncatedId === message.id}
@@ -709,6 +762,7 @@ export default function Chat() {
             message={{ id: 'pending-user', role: 'user', content: overlay.sent }}
             name={userName}
             avatar={null}
+            macros={macroContext}
           />
         )}
 
@@ -720,6 +774,7 @@ export default function Chat() {
             message={{ id: 'pending-thinking', role: 'assistant', content: '' }}
             name={characterName}
             avatar={data.character?.avatar}
+            macros={macroContext}
             thinking
           />
         )}
@@ -731,9 +786,27 @@ export default function Chat() {
               content: overlay.text,
             }}
             name={overlay.mode === 'impersonate' ? userName : characterName}
-            avatar={overlay.mode === 'impersonate' ? null : data.character?.avatar}
+            avatar={overlay.mode === 'impersonate' ? data.persona?.avatar : data.character?.avatar}
+            macros={macroContext}
             streaming
           />
+        )}
+
+        {/* Only when there is somewhere to go. A permanently visible control would sit on
+            top of the last line of prose, which is the one line the reader is reading. */}
+        {!atBottom && (
+          <button
+            type="button"
+            className="jump-latest"
+            onClick={() => {
+              pinnedToBottom.current = true;
+              setAtBottom(true);
+              scrollToBottom();
+            }}
+            aria-label="Jump to the latest turn"
+          >
+            Latest
+          </button>
         )}
 
       </div>

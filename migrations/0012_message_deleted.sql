@@ -1,0 +1,22 @@
+-- "This version was removed", distinct from "this version is not the current one".
+--
+-- `active = 0` has always meant the second thing: a version the reader can swipe back to.
+-- Deleting needs the first thing, and overloading `active` for both made two operations
+-- impossible to express:
+--
+--  1. Deleting one version of a position. With only `active`, removing the current version
+--     has to promote a survivor — and the promoted row is still `active = 0`, so deleting
+--     THAT one promotes it right back. A reader deleting their way through three versions
+--     watched the first one they removed come back.
+--  2. Counting the versions. `loadAlternatives` returns every row sharing a parent, so a
+--     position that had one of its three versions deleted still offered "3/3" — the reader
+--     swipes to a version they already removed.
+--
+-- With a tombstone, a deleted row leaves the swipable set entirely: it is not a survivor,
+-- it is not counted, and it is not promoted. The row itself is kept, not removed, for the
+-- same reason every other lifecycle operation keeps its rows — and because a hard DELETE
+-- would fire the FTS delete trigger and drop the text out of recall.
+--
+-- Default 0 is what makes this a pure addition: every existing row is a version nobody has
+-- deleted.
+ALTER TABLE messages ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;

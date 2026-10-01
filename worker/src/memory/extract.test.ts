@@ -34,6 +34,7 @@ const MIGRATIONS = [
   '0008_cast.sql',
   '0009_message_speaker.sql',
   '0011_message_state.sql',
+  '0012_message_deleted.sql',
 ];
 
 /** `bun-types` types the variadic form too narrowly; one seam keeps the cast out of call sites. */

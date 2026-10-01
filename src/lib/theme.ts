@@ -111,7 +111,6 @@ const DARK: Record<string, string> = {
   '--line-strong': 'rgba(233, 226, 215, 0.20)',
   // Brass: the character's voice, and every primary action.
   '--brass': '#C2A36B',
-  '--brass-dim': '#7A6640',
   '--brass-ink': '#1A1610',
   // Verdigris: the reader's voice. Oxidised copper, which is what actually happens to
   // brass fittings in a damp room — the second metal is not invented, it is the first
@@ -159,10 +158,8 @@ const LIGHT: Record<string, string> = {
   '--line': 'rgba(34, 29, 23, 0.12)',
   '--line-strong': 'rgba(34, 29, 23, 0.26)',
   '--brass': '#7E6224',
-  '--brass-dim': '#B9A374',
   '--brass-ink': '#FFFFFF',
   '--verdigris': '#2F6B57',
-  '--verdigris-dim': '#9DBFB2',
   // The same six voices, darkened to hold contrast on parchment. A colour that reads on a
   // near-black ground is too light on paper, so these are not the dark set reused.
   '--voice-1': '#7E6224',

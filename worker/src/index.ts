@@ -40,6 +40,7 @@ import { exportChat } from './export';
 import { seedOpeningState } from './state/update';
 import { loadAlternatives, loadPathTail } from './branch';
 import { substituteHead } from '../../src/lib/prompt/macros';
+import { EMPTY_STATE, validatePatch } from '../../src/lib/state/schema';
 import type { WorldState } from '../../src/lib/state/schema';
 import {
   forgeCards,
@@ -376,6 +377,7 @@ async function createChat(env: Env, req: Request, ctx: ExecutionContext): Promis
   const card = JSON.parse(character.card_json) as {
     firstMes?: string;
     alternateGreetings?: string[];
+    greetingStates?: Array<{ time?: string; location?: string; weather?: string }>;
     nickname?: string;
     description?: string;
   };
@@ -407,10 +409,17 @@ async function createChat(env: Env, req: Request, ctx: ExecutionContext): Promis
   // reader looking at a literal `{{user}}` in the opening line — the one message that is
   // guaranteed to be read. The persona is fixed for the chat's life, so baking it in
   // here cannot go stale.
-  const openings = [card.firstMes ?? '', ...(card.alternateGreetings ?? [])].filter(
-    (entry) => entry.trim().length > 0,
+  // Each opening with the scene the card gives it. Zipped BEFORE the empty filter, so an
+  // opening that is dropped takes its own scene with it instead of shifting every later
+  // scene onto the wrong opening. The state list is index-aligned with the card's own
+  // `[firstMes, ...alternateGreetings]`; carrying the scene alongside the content means
+  // the pick below cannot select one opening's prose and another's scene.
+  const candidates = [card.firstMes ?? '', ...(card.alternateGreetings ?? [])].map(
+    (content, index) => ({ content, state: card.greetingStates?.[index] ?? null }),
   );
-  const chosen = openings[body.greetingIndex ?? 0] ?? openings[0];
+  const openings = candidates.filter((entry) => entry.content.trim().length > 0);
+  const picked = openings[body.greetingIndex ?? 0] ?? openings[0];
+  const chosen = picked?.content;
 
   if (chosen) {
     const persona = body.personaId ? await loadPersonaRow(env, body.personaId) : null;
@@ -423,38 +432,66 @@ async function createChat(env: Env, req: Request, ctx: ExecutionContext): Promis
       persona: persona?.name ?? null,
     });
 
+    const greetingId = crypto.randomUUID();
+    // The opening's own scene, when the card states one. A card can carry an entry with
+    // every field blank — the editor writes `{}` for an opening the reader gave no scene —
+    // and that is "nothing stated", not "a scene of empty strings": it must not skip the
+    // model seed, and it must not put empty fields into the document.
+    const stated = Object.entries(picked?.state ?? {}).filter(
+      ([, value]) => typeof value === 'string' && value.trim().length > 0,
+    );
+    const openingStatePatch = stated.length > 0 ? Object.fromEntries(stated) : null;
+
     await env.DB.prepare(
       `INSERT INTO messages (id, chat_id, parent_id, role, content, created_at)
        VALUES (?, ?, NULL, 'assistant', ?, ?)`,
     )
-      .bind(crypto.randomUUID(), id, greeting, now)
+      .bind(greetingId, id, greeting, now)
       .run();
 
-    // The opening seed, if the reader asked for it. Behind `waitUntil` so creating a chat
-    // does not wait on a model call, and failing silently: a scene with no opening state
-    // is perfectly workable, and the first completed turn will establish one anyway.
-    //
-    // The greeting is substituted BEFORE it is passed, so the seed reads the same text
-    // the reader sees rather than a literal `{{user}}`.
-    ctx.waitUntil(
-      loadSceneSetup(env, id)
-        .then((setup) => {
-          if (!setup.generateOpeningState) return { applied: false, reason: 'disabled' };
-          return seedOpeningState(
-            env,
-            id,
-            greeting,
-            {
-              name: card.nickname || character.name,
-              description: typeof card.description === 'string' ? card.description : '',
-            },
-            setup.timePace,
-          );
-        })
-        .catch((error: unknown) => {
-          console.warn(`[state] opening seed failed for chat=${id}: ${String(error)}`);
-        }),
-    );
+    // A card that states its opening scene is taken at its word: the reader wrote the
+    // time and place themselves, so asking a model to infer them from the greeting would
+    // spend a call to overwrite an answer with a guess. The values are applied through
+    // `validatePatch`, the same choke point every other state write uses, and attached to
+    // the greeting row so the first turn can show its scene line.
+    const explicit = openingStatePatch ? validatePatch({ ...EMPTY_STATE }, openingStatePatch) : null;
+
+    if (explicit?.ok) {
+      await env.DB.batch([
+        env.DB.prepare(
+          `INSERT INTO state (chat_id, json, updated_at) VALUES (?, ?, ?)
+           ON CONFLICT(chat_id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at`,
+        ).bind(id, JSON.stringify(explicit.next), now),
+        env.DB.prepare('UPDATE messages SET state_json = ? WHERE id = ?')
+          .bind(JSON.stringify(explicit.next), greetingId),
+      ]);
+    } else {
+      // The opening seed, if the reader asked for it. Behind `waitUntil` so creating a chat
+      // does not wait on a model call, and failing silently: a scene with no opening state
+      // is perfectly workable, and the first completed turn will establish one anyway.
+      //
+      // The greeting is substituted BEFORE it is passed, so the seed reads the same text
+      // the reader sees rather than a literal `{{user}}`.
+      ctx.waitUntil(
+        loadSceneSetup(env, id)
+          .then((setup) => {
+            if (!setup.generateOpeningState) return { applied: false, reason: 'disabled' };
+            return seedOpeningState(
+              env,
+              id,
+              greeting,
+              {
+                name: card.nickname || character.name,
+                description: typeof card.description === 'string' ? card.description : '',
+              },
+              setup.timePace,
+            );
+          })
+          .catch((error: unknown) => {
+            console.warn(`[state] opening seed failed for chat=${id}: ${String(error)}`);
+          }),
+      );
+    }
   }
 
   return json(await getChat(env, id), 201);
@@ -573,7 +610,7 @@ async function listMessages(env: Env, chatId: string, url: URL): Promise<Respons
           shownName: readShownName(character.card_json) || character.name,
         }
       : null,
-    persona: persona ? { id: persona.id, name: persona.name } : null,
+    persona: persona ? { id: persona.id, name: persona.name, avatar: persona.avatar } : null,
     messages,
     hasMore,
     // The cursor for the next page. Null on an empty chat, where there is nothing to page

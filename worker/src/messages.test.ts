@@ -2,7 +2,7 @@ import { Database } from 'bun:sqlite';
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'bun:test';
 
-import { abandonMessage, loadMessage } from './messages';
+import { abandonMessage, deleteMessage, loadMessage } from './messages';
 import { loadPath, tailId } from './branch';
 import { persistUserMessage } from './persist';
 
@@ -32,6 +32,7 @@ const MIGRATIONS = [
   '0008_cast.sql',
   '0009_message_speaker.sql',
   '0011_message_state.sql',
+  '0012_message_deleted.sql',
 ];
 
 function makeEnv(): { env: Env; db: Database } {
@@ -58,6 +59,14 @@ function makeEnv(): { env: Env; db: Database } {
         },
       };
       return statement;
+    },
+    // The lifecycle runs its multi-row updates through `batch`, the same way production
+    // does. Sequential here: the property under test is which rows end up active, not
+    // atomicity, which is D1's guarantee rather than this module's.
+    async batch(statements: Array<{ run: () => Promise<unknown> }>) {
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      return results;
     },
   };
 
@@ -181,5 +190,129 @@ describe('abandonMessage', () => {
     await abandonMessage(env, otherId, row.id);
 
     expect(activeOf(db, row.id)).toBe(1);
+  });
+});
+
+/**
+ * `deleteMessage` removes ONE version, not the position.
+ *
+ * The bug these guard against: X on a swipe alternative deactivated every version at that
+ * position, so the turn AND its whole continuation left the transcript. A reader hit it on
+ * a real chat and described it as "the only text left is the swipe counter" — because the
+ * two turns they were reading were gone and the counter was the last thing standing.
+ */
+describe('deleteMessage', () => {
+  /** A turn with `count` versions at one position, the last one active. */
+  function seedVersions(db: Database, chatId: string, parentId: string | null, count: number) {
+    const versions = [];
+    for (let index = 0; index < count; index += 1) {
+      versions.push(seedRow(db, chatId, parentId, 'assistant', `Version ${index + 1}.`));
+    }
+    for (const version of versions.slice(0, -1)) {
+      exec(db, 'UPDATE messages SET active = 0 WHERE id = ?', version.id);
+    }
+    return versions;
+  }
+
+  test('deleting the active version promotes a survivor and keeps the continuation', async () => {
+    const { env, db } = makeEnv();
+    const chatId = seedChat(db);
+    const opening = seedRow(db, chatId, null, 'assistant', 'Opening.');
+    const user = seedRow(db, chatId, opening.id, 'user', 'Hmm. Alright.');
+    const versions = seedVersions(db, chatId, user.id, 3);
+    const after = seedRow(db, chatId, versions[2].id, 'user', 'Later, at 8.30.');
+    const last = seedRow(db, chatId, after.id, 'assistant', 'The court lights were on.');
+
+    const res = await deleteMessage(
+      env,
+      new Request('http://x/api/message/delete', {
+        method: 'POST',
+        body: JSON.stringify({ chatId, id: versions[2].id }),
+      }),
+    );
+
+    expect(await res.json()).toMatchObject({ ok: true, groupEmpty: false });
+    expect(activeOf(db, versions[2].id)).toBe(0);
+    expect(activeOf(db, versions[1].id)).toBe(1);
+    // The whole point: the turns after the deleted version are still on the path.
+    const path = (await loadPath(env, chatId)).map((row) => row.id);
+    expect(path).toEqual([opening.id, user.id, versions[1].id, after.id, last.id]);
+  });
+
+  test('deleting the last version empties the position and takes the continuation with it', async () => {
+    const { env, db } = makeEnv();
+    const chatId = seedChat(db);
+    const opening = seedRow(db, chatId, null, 'assistant', 'Opening.');
+    const user = seedRow(db, chatId, opening.id, 'user', 'Hmm. Alright.');
+    const version = seedRow(db, chatId, user.id, 'assistant', 'Only reply.');
+    seedRow(db, chatId, version.id, 'user', 'And then.');
+
+    const res = await deleteMessage(
+      env,
+      new Request('http://x/api/message/delete', {
+        method: 'POST',
+        body: JSON.stringify({ chatId, id: version.id }),
+      }),
+    );
+
+    expect(await res.json()).toMatchObject({ ok: true, groupEmpty: true });
+    expect((await loadPath(env, chatId)).map((row) => row.id)).toEqual([opening.id, user.id]);
+  });
+
+  test('deleting an inactive version leaves the active one and the path untouched', async () => {
+    const { env, db } = makeEnv();
+    const chatId = seedChat(db);
+    const opening = seedRow(db, chatId, null, 'assistant', 'Opening.');
+    const user = seedRow(db, chatId, opening.id, 'user', 'Hmm. Alright.');
+    const versions = seedVersions(db, chatId, user.id, 3);
+    const after = seedRow(db, chatId, versions[2].id, 'user', 'Later.');
+    const last = seedRow(db, chatId, after.id, 'assistant', 'Then.');
+
+    await deleteMessage(
+      env,
+      new Request('http://x/api/message/delete', {
+        method: 'POST',
+        body: JSON.stringify({ chatId, id: versions[0].id }),
+      }),
+    );
+
+    expect(activeOf(db, versions[0].id)).toBe(0);
+    expect(activeOf(db, versions[2].id)).toBe(1);
+    // No promotion happened, so there is still exactly one active child of `user`.
+    expect((await loadPath(env, chatId)).map((row) => row.id)).toEqual([
+      opening.id,
+      user.id,
+      versions[2].id,
+      after.id,
+      last.id,
+    ]);
+  });
+
+  test('deleting a version twice does not resurrect it', async () => {
+    const { env, db } = makeEnv();
+    const chatId = seedChat(db);
+    const opening = seedRow(db, chatId, null, 'assistant', 'Opening.');
+    const user = seedRow(db, chatId, opening.id, 'user', 'Hmm. Alright.');
+    const versions = seedVersions(db, chatId, user.id, 3);
+
+    const remove = (id: string) =>
+      deleteMessage(
+        env,
+        new Request('http://x/api/message/delete', {
+          method: 'POST',
+          body: JSON.stringify({ chatId, id }),
+        }),
+      );
+
+    // Remove the first version, then delete through the two that remain.
+    await remove(versions[0].id);
+    await remove(versions[2].id);
+    await remove(versions[1].id);
+
+    // Every version is gone, so the position is empty and the turn leaves the transcript.
+    // Before the tombstone, removing version 1 promoted version 0 straight back — the
+    // reader's first deletion undid itself.
+    expect((await loadPath(env, chatId)).map((row) => row.id)).toEqual([opening.id, user.id]);
+    for (const version of versions) expect(activeOf(db, version.id)).toBe(0);
   });
 });

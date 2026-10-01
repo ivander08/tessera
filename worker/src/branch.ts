@@ -53,6 +53,11 @@ export interface BranchRow {
   speaker: string | null;
   /** The world state as of this turn, as stored JSON, or null. */
   state_json: string | null;
+  /**
+   * 1 when the reader removed this version. Distinct from `active = 0`, which means "not
+   * the current version but still swipable to". A removed row is in neither set.
+   */
+  deleted: number;
   created_at: number;
 }
 
@@ -69,7 +74,7 @@ export interface BranchRow {
  */
 export const BRANCH_COLUMNS = `seq, id, parent_id, role, content, content_tokens, active,
                                swipe_group, prompt_tokens, completion_tokens, cached_tokens,
-                               cost_usd, speaker, state_json, created_at`;
+                               cost_usd, speaker, state_json, deleted, created_at`;
 
 /**
  * The visible transcript, walked in the database.
@@ -89,7 +94,7 @@ const WALK = `
      WHERE chat_id = ?1
        AND id = (
          SELECT id FROM messages
-          WHERE chat_id = ?1 AND parent_id IS NULL AND active = 1
+          WHERE chat_id = ?1 AND parent_id IS NULL AND active = 1 AND deleted = 0
           ORDER BY seq DESC LIMIT 1
        )
     UNION ALL
@@ -98,9 +103,10 @@ const WALK = `
       JOIN messages m ON m.parent_id = path.id
      WHERE m.chat_id = ?1
        AND m.active = 1
+       AND m.deleted = 0
        AND m.seq = (
          SELECT MAX(c.seq) FROM messages c
-          WHERE c.chat_id = ?1 AND c.parent_id = path.id AND c.active = 1
+          WHERE c.chat_id = ?1 AND c.parent_id = path.id AND c.active = 1 AND c.deleted = 0
        )
   )
   SELECT ${BRANCH_COLUMNS} FROM path ORDER BY depth
@@ -158,11 +164,11 @@ const TAIL = `
     SELECT * FROM (
       SELECT ${BRANCH_COLUMNS}, 0 AS n
         FROM messages m
-       WHERE m.chat_id = ?1 AND m.active = 1
+       WHERE m.chat_id = ?1 AND m.active = 1 AND m.deleted = 0
          AND (
            (?2 IS NULL AND NOT EXISTS (
               SELECT 1 FROM messages c
-               WHERE c.parent_id = m.id AND c.chat_id = ?1 AND c.active = 1))
+               WHERE c.parent_id = m.id AND c.chat_id = ?1 AND c.active = 1 AND c.deleted = 0))
            OR
            (?2 IS NOT NULL AND m.id = (
               SELECT p.parent_id FROM messages p WHERE p.id = ?2 AND p.chat_id = ?1))
@@ -172,7 +178,7 @@ const TAIL = `
     UNION ALL
     SELECT p.seq, p.id, p.parent_id, p.role, p.content, p.content_tokens, p.active,
            p.swipe_group, p.prompt_tokens, p.completion_tokens, p.cached_tokens,
-           p.cost_usd, p.speaker, p.state_json, p.created_at, up.n + 1
+           p.cost_usd, p.speaker, p.state_json, p.deleted, p.created_at, up.n + 1
       FROM up JOIN messages p ON p.id = up.parent_id
      WHERE p.chat_id = ?1 AND p.active = 1 AND up.n + 1 < ?3
   )
@@ -221,7 +227,7 @@ export async function loadAlternatives(
     statements.push(
       env.DB.prepare(
         `SELECT ${BRANCH_COLUMNS} FROM messages
-          WHERE chat_id = ?1 AND (${match})
+          WHERE chat_id = ?1 AND deleted = 0 AND (${match})
           ORDER BY seq`,
       ).bind(chatId, ...slice),
     );
@@ -233,7 +239,7 @@ export async function loadAlternatives(
     statements.push(
       env.DB.prepare(
         `SELECT ${BRANCH_COLUMNS} FROM messages
-          WHERE chat_id = ?1 AND parent_id IS NULL
+          WHERE chat_id = ?1 AND deleted = 0 AND parent_id IS NULL
           ORDER BY seq`,
       ).bind(chatId),
     );
@@ -263,9 +269,10 @@ export async function tailId(env: Env, chatId: string): Promise<string | null> {
     `SELECT m.id FROM messages m
       WHERE m.chat_id = ?1
         AND m.active = 1
+        AND m.deleted = 0
         AND NOT EXISTS (
           SELECT 1 FROM messages c
-           WHERE c.chat_id = m.chat_id AND c.parent_id = m.id AND c.active = 1
+           WHERE c.chat_id = m.chat_id AND c.parent_id = m.id AND c.active = 1 AND c.deleted = 0
         )
       ORDER BY m.seq DESC LIMIT 1`,
   )
@@ -314,7 +321,7 @@ const PATH_SEQS_AFTER = `
      WHERE chat_id = ?1
        AND id = (
          SELECT id FROM messages
-          WHERE chat_id = ?1 AND parent_id IS NULL AND active = 1
+          WHERE chat_id = ?1 AND parent_id IS NULL AND active = 1 AND deleted = 0
           ORDER BY seq DESC LIMIT 1
        )
     UNION ALL
@@ -323,9 +330,10 @@ const PATH_SEQS_AFTER = `
       JOIN messages m ON m.parent_id = path.id
      WHERE m.chat_id = ?1
        AND m.active = 1
+       AND m.deleted = 0
        AND m.seq = (
          SELECT MAX(c.seq) FROM messages c
-          WHERE c.chat_id = ?1 AND c.parent_id = path.id AND c.active = 1
+          WHERE c.chat_id = ?1 AND c.parent_id = path.id AND c.active = 1 AND c.deleted = 0
        )
   )
   SELECT seq FROM path WHERE seq > ?2 ORDER BY depth LIMIT ?3
@@ -354,7 +362,9 @@ export function walkPath(rows: BranchRow[]): BranchRow[] {
 
   for (;;) {
     const children: BranchRow[] = byParent.get(current) ?? [];
-    const candidates: BranchRow[] = children.filter((row: BranchRow) => row.active === 1);
+    const candidates: BranchRow[] = children.filter(
+      (row: BranchRow) => row.active === 1 && row.deleted !== 1,
+    );
     if (candidates.length === 0) break;
 
     // One active child is the invariant. If data ever disagrees, the newest wins — it is

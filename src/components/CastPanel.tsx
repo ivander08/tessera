@@ -3,6 +3,7 @@ import { apiJson } from '../lib/api';
 import type { CharacterSummary } from '../lib/apiTypes';
 import { messageOf, useAsync } from '../lib/hooks';
 import { Avatar } from './Avatar';
+import { ConfirmPrompt } from './ConfirmPrompt';
 
 /**
  * Who is in the scene.
@@ -34,6 +35,9 @@ export function CastPanel({ chatId, onChanged }: { chatId: string; onChanged?: (
   const [picking, setPicking] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  // The member the reader has asked to remove, held until they confirm. Null is "no sheet
+  // open", which is also what a cancel returns to.
+  const [confirming, setConfirming] = useState<{ id: string; name: string } | null>(null);
 
   async function promote(memberId: string, characterId: string) {
     setBusy(true);
@@ -53,10 +57,7 @@ export function CastPanel({ chatId, onChanged }: { chatId: string; onChanged?: (
     }
   }
 
-  async function remove(memberId: string, name: string) {
-    if (!window.confirm(`Remove ${name} from this scene? Their lines stay in the transcript.`)) {
-      return;
-    }
+  async function remove(memberId: string) {
     setBusy(true);
     setFailure(null);
     try {
@@ -64,6 +65,7 @@ export function CastPanel({ chatId, onChanged }: { chatId: string; onChanged?: (
         `/api/chats/${encodeURIComponent(chatId)}/cast/${encodeURIComponent(memberId)}`,
         { method: 'DELETE' },
       );
+      setConfirming(null);
       reload();
       onChanged?.();
     } catch (cause) {
@@ -124,7 +126,7 @@ export function CastPanel({ chatId, onChanged }: { chatId: string; onChanged?: (
                       className="btn quiet"
                       disabled={busy}
                       style={{ color: 'var(--danger)' }}
-                      onClick={() => void remove(member.id, member.name)}
+                      onClick={() => setConfirming({ id: member.id, name: member.name })}
                     >
                       Remove
                     </button>
@@ -165,6 +167,18 @@ export function CastPanel({ chatId, onChanged }: { chatId: string; onChanged?: (
             </section>
           )}
         </>
+      )}
+
+      {confirming && (
+        <ConfirmPrompt
+          title="Remove from the cast"
+          message={`Remove ${confirming.name} from this scene? Their lines stay in the transcript.`}
+          confirmLabel="Remove"
+          busy={busy}
+          danger
+          onConfirm={() => void remove(confirming.id)}
+          onCancel={() => setConfirming(null)}
+        />
       )}
     </div>
   );

@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { apiJson } from '../lib/api';
 import { alwaysOnLore, parseLorebook } from '../lib/cards/lorebook';
-import type { CharacterCardJson } from '../lib/cards/types';
+import { CARD_FIELD_ROWS } from '../lib/cards/fields';
+import type { CharacterCardJson, GreetingState } from '../lib/cards/types';
 import { loadTokenCounter } from '../lib/tokenizerClient';
 import { messageOf, useAsync } from '../lib/hooks';
-import { GreetingsEditor } from '../components/GreetingsEditor';
+import { GreetingsEditor, GreetingStateFields } from '../components/GreetingsEditor';
 import { Avatar } from '../components/Avatar';
+import { NamePrompt } from '../components/NamePrompt';
 import { AppBar, BackLink, CrumbSep } from '../components/AppBar';
 
 interface CharacterDetail {
@@ -50,38 +52,43 @@ const FIELDS: Array<{ key: TextField; label: string; rows: number; cost: string 
   {
     key: 'name',
     label: 'name',
-    rows: 1,
+    rows: CARD_FIELD_ROWS.name,
     cost: 'the card’s title — what the library lists',
   },
   {
     key: 'nickname',
     label: 'shown name',
-    rows: 1,
+    rows: CARD_FIELD_ROWS.nickname,
     cost: 'what the transcript calls them · falls back to name',
   },
-  { key: 'description', label: 'description', rows: 4, cost: 'every turn' },
-  { key: 'personality', label: 'personality', rows: 3, cost: 'every turn' },
-  { key: 'scenario', label: 'scenario', rows: 3, cost: 'every turn' },
+  { key: 'description', label: 'description', rows: CARD_FIELD_ROWS.description, cost: 'every turn' },
+  { key: 'personality', label: 'personality', rows: CARD_FIELD_ROWS.personality, cost: 'every turn' },
+  { key: 'scenario', label: 'scenario', rows: CARD_FIELD_ROWS.scenario, cost: 'every turn' },
   {
     key: 'systemPrompt',
     label: 'system_prompt',
-    rows: 3,
+    rows: CARD_FIELD_ROWS.systemPrompt,
     cost: 'every turn — replaces the global system prompt',
   },
   {
     key: 'mesExample',
     label: 'mes_example',
-    rows: 5,
+    rows: CARD_FIELD_ROWS.mesExample,
     cost: 'every turn — in the prompt head',
   },
   {
     key: 'postHistoryInstructions',
     label: 'post_history_instructions',
-    rows: 3,
+    rows: CARD_FIELD_ROWS.postHistoryInstructions,
     cost: 'every turn — in the prompt tail',
   },
-  { key: 'firstMes', label: 'first_mes', rows: 4, cost: 'one-time — the opening message' },
-  { key: 'creatorNotes', label: 'creator_notes', rows: 3, cost: 'never sent' },
+  {
+    key: 'firstMes',
+    label: 'first_mes',
+    rows: CARD_FIELD_ROWS.firstMes,
+    cost: 'one-time — the opening message',
+  },
+  { key: 'creatorNotes', label: 'creator_notes', rows: CARD_FIELD_ROWS.creatorNotes, cost: 'never sent' },
 ];
 
 const PERMANENT: TextField[] = ['name', 'description', 'personality', 'scenario'];
@@ -117,12 +124,16 @@ export default function CharacterEdit() {
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [tagsText, setTagsText] = useState('');
   const [greetings, setGreetings] = useState<string[]>([]);
+  const [greetingStates, setGreetingStates] = useState<GreetingState[]>([]);
   const [bookText, setBookText] = useState('');
   const [avatar, setAvatar] = useState<{ contentType: string; dataBase64: string } | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [removeAvatar, setRemoveAvatar] = useState(false);
   const [count, setCount] = useState<((text: string) => number) | null>(null);
   const [busy, setBusy] = useState(false);
+  // Whether the fork name sheet is open. The suggested name is read from the form when
+  // the sheet renders, so nothing has to be captured when it opens.
+  const [forkOpen, setForkOpen] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
 
@@ -145,6 +156,7 @@ export default function CharacterEdit() {
     setEdits({});
     setTagsText(data.card?.tags.join(', ') ?? '');
     setGreetings(data.card?.alternateGreetings ?? []);
+    setGreetingStates(data.card?.greetingStates ?? []);
     setBookText(data.card?.characterBook ? JSON.stringify(data.card.characterBook, null, 2) : '');
     setAvatar(null);
     setAvatarPreview(null);
@@ -206,7 +218,26 @@ export default function CharacterEdit() {
         if (field.key !== 'name' && edited !== undefined) next[field.key] = edited;
       }
       next.tags = splitTags(tagsText);
-      next.alternateGreetings = greetings.map((entry) => entry.trim()).filter(Boolean);
+
+      // Paired BEFORE the empty filter, so dropping a blank alternate drops its scene with
+      // it instead of shifting every later scene onto the wrong opening. This is the
+      // second off-by-one trap in this file.
+      const alternates = greetings
+        .map((content, index) => ({ content: content.trim(), state: greetingStates[index + 1] ?? {} }))
+        .filter((entry) => entry.content.length > 0);
+
+      next.alternateGreetings = alternates.map((entry) => entry.content);
+      // Index 0 is `first_mes`; trimmed, and an all-blank entry stays `{}` so indices hold.
+      next.greetingStates = [greetingStates[0] ?? {}, ...alternates.map((entry) => entry.state)].map(
+        (entry) => {
+          const out: GreetingState = {};
+          for (const field of ['time', 'location', 'weather'] as const) {
+            const value = entry[field]?.trim();
+            if (value) out[field] = value;
+          }
+          return out;
+        },
+      );
       next.characterBook = parsedBook.value;
 
       await apiJson(`/api/characters/${encodeURIComponent(id)}`, {
@@ -229,10 +260,8 @@ export default function CharacterEdit() {
     }
   }
 
-  async function fork() {
+  async function fork(name: string) {
     if (!card) return;
-    const name = window.prompt('Name for the copy', `${value('name')} (copy)`);
-    if (name === null) return;
 
     setBusy(true);
     setFailure(null);
@@ -247,6 +276,7 @@ export default function CharacterEdit() {
       setFailure(messageOf(cause));
     } finally {
       setBusy(false);
+      setForkOpen(false);
     }
   }
 
@@ -451,11 +481,25 @@ export default function CharacterEdit() {
                 })}
 
                 {group.title === 'Greetings' && (
-                  <GreetingsEditor
-                    greetings={greetings}
-                    onChange={setGreetings}
-                    countTokens={(text) => tokensOf(text)}
-                  />
+                  <>
+                    <GreetingStateFields
+                      value={greetingStates[0] ?? {}}
+                      onChange={(patch) =>
+                        setGreetingStates([
+                          { ...greetingStates[0], ...patch },
+                          ...greetingStates.slice(1),
+                        ])
+                      }
+                      idPrefix="first"
+                    />
+                    <GreetingsEditor
+                      greetings={greetings}
+                      onChange={setGreetings}
+                      states={greetingStates.slice(1)}
+                      onStatesChange={(next) => setGreetingStates([greetingStates[0] ?? {}, ...next])}
+                      countTokens={(text) => tokensOf(text)}
+                    />
+                  </>
                 )}
 
                 {group.title === 'Book' && (
@@ -532,13 +576,24 @@ export default function CharacterEdit() {
               >
                 {busy ? 'Saving…' : 'Save changes'}
               </button>
-              <button type="button" className="btn" onClick={() => void fork()} disabled={busy}>
+              <button type="button" className="btn" onClick={() => setForkOpen(true)} disabled={busy}>
                 Fork
               </button>
               <Link to="/characters" className="btn quiet">
                 Back to the library
               </Link>
             </div>
+
+            {forkOpen && (
+              <NamePrompt
+                title="Fork this character"
+                label="Name for the copy"
+                initial={`${value('name')} (copy)`}
+                busy={busy}
+                onSubmit={(name) => void fork(name)}
+                onCancel={() => setForkOpen(false)}
+              />
+            )}
           </>
         )}
       </main>

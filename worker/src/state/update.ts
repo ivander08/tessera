@@ -133,13 +133,33 @@ const TIME_BULLET: Record<SceneSetup['timePace'], string> = {
 };
 
 /**
+ * Applies to every pace, including `manual`.
+ *
+ * The per-pace rules above say how the clock ADVANCES, and they were written as though the
+ * model were the only one who could move it. A reader who writes "Later, at eight o'clock"
+ * has stated the time themselves, and a pace rule telling the model to add a minute would
+ * quietly overrule the author of the scene. Measured: a reader wrote a jump to eight
+ * o'clock on a `minute` chat and the stored time stayed at 16:38, because the model was
+ * doing exactly what it was told.
+ */
+const EXPLICIT_TIME_RULE = [
+  'Regardless of the pace above: if the READER\'s own message states a clock time, a date,',
+  'or a jump in time ("later", "the next morning", "three hours later"), that stated time is',
+  'the truth. Record it verbatim in "time" and do not advance it by the pace rule for that',
+  'exchange. The reader authored it; the pace only decides how the clock moves when nobody',
+  'has said.',
+].join('\n');
+
+/**
  * The system prompt for one pace: `SYSTEM` with the time key and its rule spliced in.
  *
  * `SYSTEM` keeps a placeholder for each, so the rest of the prompt is written once and the
  * two time lines are the only part that varies.
  */
 function buildSystemPrompt(pace: SceneSetup['timePace']): string {
-  return SYSTEM.replace('{{TIME_KEY}}', TIME_KEY[pace]).replace('{{TIME_BULLET}}', TIME_BULLET[pace]);
+  return SYSTEM.replace('{{TIME_KEY}}', TIME_KEY[pace])
+    .replace('{{TIME_BULLET}}', TIME_BULLET[pace])
+    .concat('\n', EXPLICIT_TIME_RULE);
 }
 
 /**
