@@ -132,9 +132,19 @@ async function runTurn(
   if (mode === 'regenerate' && target?.role !== 'assistant') {
     return fail(controller, 'The last message is not one of mine to redo.', 'wrong_role');
   }
-  if (mode === 'continue' && target?.role !== 'assistant') {
+  if (mode === 'continue' && target?.role !== 'assistant' && target?.role !== 'user') {
     return fail(controller, 'The last message is not one of mine to continue.', 'wrong_role');
   }
+
+  // A `continue` whose target is a USER row is the recovery case, not a misuse.
+  //
+  // A turn that stopped before the reply arrived — the reader pressed Stop in the first
+  // second, the provider died, or the connection dropped — leaves the reader's own
+  // message as the end of the visible path, with no assistant row after it. "Continue"
+  // there means "answer it". The row is REUSED rather than duplicated, so the reader's
+  // text is not written twice, and no cleanup on the abort path has to be reliable for
+  // the chat to become usable again.
+  const answeringPendingUser = mode === 'continue' && target?.role === 'user';
 
   // Where a new row attaches.
   //
@@ -149,8 +159,15 @@ async function runTurn(
   // For `send`, the user message is persisted BEFORE the provider is called, so a crash
   // costs a reply and never the user's own words. The other modes add no user text, so
   // there is nothing to lose and nothing to persist up front.
-  const user = mode === 'send' ? await persistUserMessage(env, chat.id, content, parentId) : null;
-  const userSeq = user?.seq ?? null;
+  //
+  // The exception is a `continue` recovering a stopped turn: the reader's row already
+  // exists and is the target, so it is reused. Writing it again would put the same text
+  // on the path twice.
+  const user =
+    mode === 'send'
+      ? await persistUserMessage(env, chat.id, content, parentId)
+      : null;
+  const userSeq = answeringPendingUser ? target!.seq : (user?.seq ?? null);
 
   // Every failure from here on has already written the reader's message. Abandoning it
   // keeps an unreplied row off the visible path, so the next turn parents to the last real
@@ -173,9 +190,12 @@ async function runTurn(
   const replyParentId =
     mode === 'send'
       ? (user?.id ?? parentId)
-      : mode === 'continue'
-        ? (target?.id ?? parentId)
-        : parentId;
+      : answeringPendingUser
+        ? // Answer the reader's own row, which is what the stopped `send` was going to do.
+          target!.id
+        : mode === 'continue'
+          ? (target?.id ?? parentId)
+          : parentId;
 
   // From here on the reader's message is already written, so a throw must abandon it
   // rather than fall through to the stream handler at the top, which writes nothing and
@@ -185,8 +205,20 @@ async function runTurn(
     const prompt = await buildPrompt(env, chat, settings, {
       mode,
       userSeq,
-      userContent: content,
-      tailExtra: mode === 'impersonate' ? IMPERSONATE_INSTRUCTION : mode === 'continue' ? CONTINUE_INSTRUCTION : '',
+      // A recovery `continue` has no new text, but the prompt's tail needs the reader's
+      // message — that is what the reply is answering. Without it the model would be
+      // asked to continue a conversation whose last user turn it cannot see.
+      userContent: answeringPendingUser ? target!.content : content,
+      // The recovery case is an ordinary reply, not a continuation: the last thing on the
+      // path is the READER's message, so "carry it forward as the same speaker" would ask
+      // the model to write more of the reader's own text. It answers instead.
+      tailExtra: answeringPendingUser
+        ? ''
+        : mode === 'impersonate'
+          ? IMPERSONATE_INSTRUCTION
+          : mode === 'continue'
+            ? CONTINUE_INSTRUCTION
+            : '',
     });
 
     const request = provider.buildRequest(
@@ -272,11 +304,16 @@ async function runTurn(
 
     // State advances only on a completed turn. Regenerating or continuing rewrites what
     // the scene says, so folding it into state would record a draft as canon.
-    if (mode === 'send') {
+    //
+    // The recovery `continue` is the exception: it completes the turn that was stopped, so
+    // it is the `send` it stands in for and advances state the same way. Without this the
+    // recovered turn would be the one turn in the chat that never touched the world state.
+    if (mode === 'send' || answeringPendingUser) {
+      const stateUser = answeringPendingUser ? target!.content : content;
       // `maybeUpdateState` reads the chat's setup and skips the call entirely when the
       // reader set the mode to `off`, so a scene that tracks nothing pays nothing.
       ctx.waitUntil(
-        maybeUpdateState(env, chat.id, { user: content, assistant: assistantText }, messageId).catch(
+        maybeUpdateState(env, chat.id, { user: stateUser, assistant: assistantText }, messageId).catch(
           (err: unknown) => {
             console.warn(`[state] update failed for chat=${chat.id}: ${messageOf(err)}`);
           },

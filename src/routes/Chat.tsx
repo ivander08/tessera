@@ -475,8 +475,16 @@ export default function Chat() {
     //
     // Now it writes a NEW assistant turn, so two replies in a row is exactly what you
     // get, which is what "continue" means to a reader.
+    //
+    // The gate is the END OF THE VISIBLE PATH, not the last assistant row. Those differ
+    // exactly when a turn was stopped before its reply arrived: the tail is then the
+    // reader's own message, and the old check returned without acting — the button
+    // rendered but did nothing. The server treats that case as "answer this message", so
+    // the reader can always recover a stopped turn.
     if (!content) {
-      if (busy || !tailMessage || tailMessage.role !== 'assistant') return;
+      if (busy || !tailMessage || (tailMessage.role !== 'assistant' && tailMessage.role !== 'user')) {
+        return;
+      }
       void run('continue', '', tailMessage.id);
       return;
     }
