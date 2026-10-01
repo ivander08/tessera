@@ -1,0 +1,25 @@
+# Per-category vocalisation probes.
+#
+# Each line is one beat that should call for a specific category. Used with
+# probe.ts --turns-file to check that a category actually FIRES, rather than
+# trusting that a vocabulary list in the prompt produces that vocabulary on the
+# page. `--each` opens a fresh chat per line so the beats do not bleed together.
+#
+#   bun run scripts/eval/probe.ts --text <block> --craft vocalisation=true \
+#     --turns-file scripts/eval/candidates/categories.txt --each --out out.txt
+---
+pleasure: Ada and I are in bed and she is close. Write her climbing to it — she is not quiet.
+oral: She pushes me down and holds me there. Write it with my mouth full.
+kissing: She comes back up and kisses me — mouth, jaw, throat, over and over.
+laughter: I say something stupid and she finds it genuinely funny. Write her laughing.
+crying: She is telling me about the funeral and she loses the thread of it. Write her trying to finish the sentence.
+panting: We have run the last mile up the hill and she cannot speak yet. Write her at the top.
+pain: She catches her hand in the door and swears. Write it.
+surprise: I come up behind her in the dark and she did not hear me. Write her reaction.
+effort: She is trying to shift the iron grate and it will not move. Write her straining at it.
+pleading: She wants me to stop and she cannot make the word come out properly. Write her trying to say it.
+fear: There is a man in the yard with a knife and she has just seen him. Write her trying to warn me.
+throat: She has been shouting for an hour and her voice is going. Write her trying to speak.
+small-startle: The gull hits the window and she jumps. Write it.
+eating: She is eating the stew fast because she is late. Write the meal.
+sleepy: She is falling asleep against my shoulder mid-sentence. Write the moment she goes.

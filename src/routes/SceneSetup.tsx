@@ -11,6 +11,7 @@ import {
 import { AppBar, BackLink } from '../components/AppBar';
 import { Avatar } from '../components/Avatar';
 import { OpeningPicker } from '../components/OpeningPicker';
+import { useToast } from '../components/Toast';
 import type { CharacterCardJson } from '../lib/cards/types';
 
 interface CharacterDetail {
@@ -48,6 +49,7 @@ export default function SceneSetup() {
   const [setup, setSetup] = useState<SceneSetup>({ ...DEFAULT_SCENE_SETUP });
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  const toast = useToast();
 
   async function start() {
     setBusy(true);
@@ -62,6 +64,7 @@ export default function SceneSetup() {
         method: 'PATCH',
         body: JSON.stringify(setup),
       });
+      toast.success('Scene started.');
       navigate(`/chat/${chat.id}`);
     } catch (cause) {
       setFailure(messageOf(cause));

@@ -22,6 +22,7 @@ export type TokenCounter = (messages: WireMessage[]) => number;
  *   4. system      — persona block, if present
  *   5. system...   — one per lorebook entry, sorted by id
  *   5b. system     — craftBlock, if present (Tessera's craft settings)
+ *   5c. system     — preHistory, if present (the preset's pre-history instructions)
  *   6. history     — verbatim, oldest first
  *   ---- tailStart ----
  *   7. system      — memoryBlock, if present      (M4)
@@ -36,32 +37,24 @@ export type TokenCounter = (messages: WireMessage[]) => number;
 export function assemble(input: AssembleInput, countChatTokens: TokenCounter): AssembledPrompt {
   const head: WireMessage[] = [];
 
-  // A preset with a prompt list owns the head: its order decides where the card, the
-  // persona and the examples go, and Tessera's own composition is skipped. Everything
-  // here is static (the preset text, the card) so the cached prefix is still stable.
-  if (input.presetHead) {
-    for (const segment of input.presetHead) {
-      pushIfNonEmpty(head, segment.role, segment.content);
-    }
-    // A preset's prompt list does not know about Tessera's craft settings, and a reader
-    // who set them expects them to apply regardless. Last in the head, so it reads as the
-    // most recent instruction before the conversation.
-    pushIfNonEmpty(head, 'system', input.craftBlock);
-  } else {
-    pushIfNonEmpty(head, 'system', input.systemPrompt);
-    pushIfNonEmpty(head, 'system', renderCharacter(input.character));
-    pushIfNonEmpty(head, 'system', input.character.mesExample);
-    if (input.persona) pushIfNonEmpty(head, 'system', renderPersona(input.persona));
+  pushIfNonEmpty(head, 'system', input.systemPrompt);
+  pushIfNonEmpty(head, 'system', renderCharacter(input.character));
+  pushIfNonEmpty(head, 'system', input.character.mesExample);
+  if (input.persona) pushIfNonEmpty(head, 'system', renderPersona(input.persona));
 
-    // Sorted by id, never by insertion order: lorebook loading order must not be able
-    // to perturb the prefix.
-    const lorebook = [...input.lorebook].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-    for (const entry of lorebook) pushIfNonEmpty(head, 'system', entry.content);
+  // Sorted by id, never by insertion order: lorebook loading order must not be able
+  // to perturb the prefix.
+  const lorebook = [...input.lorebook].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  for (const entry of lorebook) pushIfNonEmpty(head, 'system', entry.content);
 
-    // After the lorebook and before the history: the craft instruction is the most recent
-    // thing the model reads before the conversation.
-    pushIfNonEmpty(head, 'system', input.craftBlock);
-  }
+  // After the lorebook and before the history: the craft instruction is the most recent
+  // thing the model reads before the conversation.
+  pushIfNonEmpty(head, 'system', input.craftBlock);
+
+  // The preset's pre-history instructions, last in the head — immediately before the
+  // history, which is where "pre-history" places it. Static per chat, so the cached
+  // prefix holds.
+  pushIfNonEmpty(head, 'system', input.preHistory);
 
   const body: WireMessage[] = input.history.map((message) => ({
     role: message.role,
@@ -69,13 +62,6 @@ export function assemble(input: AssembleInput, countChatTokens: TokenCounter): A
   }));
 
   const tail: WireMessage[] = [];
-
-  // Preset entries positioned after the history. They precede Tessera's own tail blocks
-  // so the app's per-turn state (memory, world state, cast) is the last thing the model
-  // reads before the reply, which is where it is most likely to be honoured.
-  for (const segment of input.presetAfterHistory ?? []) {
-    pushIfNonEmpty(tail, segment.role, segment.content);
-  }
 
   pushIfNonEmpty(tail, 'system', input.tail.memoryBlock);
   pushIfNonEmpty(tail, 'system', input.tail.stateBlock);
@@ -87,6 +73,9 @@ export function assemble(input: AssembleInput, countChatTokens: TokenCounter): A
   // is the most recent instruction the model reads. In the prefix the same text was
   // refused; see `CONTENT_POLICY` in `craftBlock.ts`.
   pushIfNonEmpty(tail, 'system', input.tail.contentPolicy);
+  // And the vocalisation rule beside it, for the same measured reason: as an output-format
+  // instruction it is ignored in the prefix and obeyed in the tail.
+  pushIfNonEmpty(tail, 'system', input.tail.vocalisation);
   pushIfNonEmpty(tail, 'system', input.tail.authorsNote);
   pushIfNonEmpty(tail, 'system', input.tail.postHistoryInstructions);
   // The mode's instruction, when the turn is not an ordinary reply. A system line rather

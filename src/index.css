@@ -2140,6 +2140,89 @@ html[data-layout="bubble"] .turn-segment:not(:first-child) {
   color: color-mix(in srgb, var(--danger) 80%, var(--ink));
 }
 
+/* ---------------------------------------------------------------- toasts */
+
+/* The save indicator. Fixed to the bottom centre, clear of the composer and the sticky
+   commit row (both ~72px tall) so it never covers the field you were about to type in.
+   The container ignores pointer events so it can never eat a tap meant for the message
+   field; each toast re-enables them for its dismiss button. */
+.toast-stack {
+  position: fixed;
+  left: 50%;
+  bottom: calc(84px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(420px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px 9px 13px;
+  border-left: 2px solid var(--line-strong);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  pointer-events: auto;
+}
+
+.toast.success {
+  border-left-color: var(--verdigris);
+}
+
+.toast.failure {
+  border-left-color: var(--danger);
+  color: color-mix(in srgb, var(--danger) 80%, var(--ink));
+}
+
+.toast-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.toast-close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+
+.toast-close:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .toast {
+    animation: toast-in 160ms cubic-bezier(0.22, 0.68, 0.36, 1) both;
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 /* The empty state is an invitation, not an apology. */
 .empty {
   padding: 34px 20px;

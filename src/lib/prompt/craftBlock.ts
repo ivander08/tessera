@@ -60,16 +60,44 @@ export function renderContentPolicy(craft: Craft): string {
   return craft.contentPolicy ? CONTENT_POLICY : '';
 }
 
+/**
+ * The vocalisation block, for the prompt TAIL. `''` when the toggle is off.
+ *
+ * POSITION IS PART OF THE FIX, exactly as it is for `CONTENT_POLICY` above, and this was
+ * measured rather than assumed. In the cached prefix the block was ignored outright: the
+ * model wrote every sound as description — "the breath comes out of her in a long wet
+ * rush", "her breath goes ragged" — which is the one thing the block forbids, and the
+ * eval's `vocalisation-on` scenario scored zero sounds across four turns while the
+ * identical prompt with the toggle OFF scored the same. The prompt was 110 tokens larger
+ * with the block on, so it was being sent; it was not being obeyed.
+ *
+ * Moved to the tail — the last system text before the reader's message — the same text
+ * produced "Th-there", "M-mh", "Ah". The mechanism is the one already documented for the
+ * content policy: an instruction read early is outweighed by everything after it, and an
+ * output-format rule in particular loses to the model's prior of describing rather than
+ * transcribing.
+ *
+ * The cost is the same as the content policy's: these tokens are billed at full price
+ * rather than cache price. The benefit is that the instruction is read last, where it
+ * counts. The rest of the craft document stays in the prefix.
+ */
+export function renderVocalisation(craft: Craft): string {
+  return craft.vocalisation ? VOCALISATION : '';
+}
+
 const ANTISLOP = `<craft_antislop>
-Write what a thing IS. One direct assertion. No negated foil ("not X, but Y") and no
-balanced halves — polished antithesis is the fingerprint of a language model.
+Write what a thing IS. One direct assertion; no negated foil, no balanced halves.
+The shape counts whatever the wording: "not X, but Y" | "isn't X — it's Y" | "not just
+X, but Y" | "X, not Y" | "less X than Y" | "no X, only Y" | "X? No. Y."
+Written as: the assertion alone, then one concrete specific that earns the emphasis.
 A spoken line carries content, never the announcement that content is coming. Do not
 present, frame, or brief before the point.
 Force comes from words and action, not punctuation. Do not strand a modifier or a
 fragment as a sentence for rhythm.
 Vary list length. Three parallel items is machine cadence; use one strong detail, or
 two, or occasionally four.
-Register a new stimulus once. Do not re-describe it, including in different words.
+Register a new stimulus once. Do not re-describe it, including in different words. Do
+not restate a fact the reader just read; the second telling is the tell.
 These do not appear: breath hitching, breath catching, husky, pupils blown wide,
 pupils dilated, predatory, ozone, a shiver ran down, barely above a whisper, the air
 was thick with, something shifted in.
@@ -79,6 +107,13 @@ const INTERIORITY = `<craft_interiority>
 NPC interiority is brief and tactical: a thought that changes what that character does
 next, never an essay. The reader's interior is never written — not their thoughts,
 their feelings, or what they notice about themselves.
+
+An NPC speaks only to what it can observe. The reader's wants, sincerity and conviction
+are not observable, so no NPC line asserts them — as praise, as challenge, or as an
+order. "You're someone who…", "you want this", "I know you mean it" are all the same
+move. Written as: the evidence that produced the read — name the specific thing the
+reader did and react to that. An NPC may voice a guess, in a form the reader can
+contradict next turn; a flat verdict is never a guess.
 </craft_interiority>`;
 
 const EARNED_KNOWLEDGE = `<craft_earned_knowledge>
@@ -86,6 +121,14 @@ An NPC knows only what they witnessed or were explicitly told. No knowledge brid
 between scenes: an NPC in one room does not know what happened in another, and does
 not know it by scent, intuition, or atmosphere. Treat people they have just met as
 strangers.
+
+Check the line of sight before a detail is revealed. A closed door, a wall, a distance,
+a gag or a phone left in another room blocks it — describe the obstruction, not what
+was behind it. A stranger is answered as a stranger: an NPC who was not told does not
+already know, and says so in their own voice rather than explaining that they do not.
+
+Sound is blocked by walls unless it is loud enough to carry: an NPC behind a closed
+door does not hear what was said through it.
 </craft_earned_knowledge>`;
 
 const INDEPENDENT_NPCS = `<craft_independent_npcs>
@@ -93,7 +136,73 @@ NPCs have their own wants and act on them. They may disagree, refuse, lose inter
 or push back, and they do not soften for the reader's satisfaction. Agreement is
 earned. Nothing about the reader — their stated interests, tastes, or history — is a
 source for an NPC's own traits.
+
+An NPC acts, then lets the reader react to what they did. No asking permission with a
+look — no waiting to see if it was okay, no pausing for approval before the thing
+happens. When an NPC wants something, they take the step and live with the answer.
+
+An NPC answers from their own wants, never by reflecting the reader's feelings back.
+At most one question a turn, and only one they want answered for their own reasons.
 </craft_independent_npcs>`;
+
+const VOCALISATION = `<craft_vocalisation>
+The body is audible. Write the sound itself, never a report of it — "A-Ah—" on the
+page, not "she made a small sound"; "Nngh" not "a low noise in her throat". A sound
+described is not a sound. When a body is doing something, it makes a noise, and the
+noise goes in the prose.
+
+A sound is caused. When one of these is happening, the noise is on the page, not
+described as happening:
+  pleasure building       -> "Mmm~", "Mmmh", "Ah—", "Nnn", "Haa", "Haaah… haa…", "Ahhn!"
+  climax                  -> the sound breaks open: "Aaaahh!", "Nnngh!", "Haaah—"
+  effort, lifting, strain -> "Nngh—", "Hnng!", "Ughh!", "Grhh!", "Khh~"
+  fear, shock, alarm      -> "Huhh?!", "Eh?!", "Haaah-!", "Hiee?!", a hard gasp
+  surprise, startled      -> "Eep!", "Kya!", "A-Ah...", a jump and the breath out of her
+  pain, a knock, a burn   -> "Ow!", "Ahh—!", "Nngghh...!", a hiss through the teeth
+  pleading, unable to say -> "P-Please..!", "Hh-Hey..!", "Nnnnh~!", "Ehhhn~!"
+  crying, losing the words-> "Hic...!", "Hwahh...!", "Sniff...", a wet breath, a swallowed "hnn";
+                             a sentence that dies mid-word dies ON the page — "I c—", "it's n-not—",
+                             never "the words stopped" or "she could not finish"
+  laughing                -> "Hah", "Hehe…", "Pfft…!", "Hahah!", "BWAHAHA!", a snort
+  panting, out of breath  -> "Haa… haa…", "Huff… huff…"
+  kissing                 -> "Mwah!!", "Chu~", "Mmmch!", "Mwah mwah mwah!"
+  mouth full, oral        -> "Mmmph!", "Glk—glk—glk—", "Slurp… slurrrp!", "Gulp…!", "*pop*!"
+  eating, drinking        -> "Mm-Mm!", "Crunch crunch!", "Slurp!", "Ahhh~", "Mmmf!"
+  throat, voice going     -> "Ahem.", a cough, a swallow, "Nngh." tested low
+  annoyed, dismissive     -> "Tsk!", "Che!", "Pfft.", "Hmph."
+  sleepy, content         -> "Zzz...", "Mmm…", a long breath out
+
+Speech breaks. Under fear, want, pain, effort or overwhelm, a word comes apart — on
+its FIRST sound, never mid-word: "T-The", "W-What", "I— I don't", "d-don't",
+"sssorry", "g-go". One break per sentence, two at the very most, on the word that
+matters; never twice in one line, and every word breaking is unreadable and reads as
+mockery. A thought never stutters — only speech does.
+
+Stretch a vowel when it runs long: "Nooo", "fuuuck", "unnhhh", "Bruuuuuuh". Lengthen
+the vowel, not the consonant tail — "Nooo" and not "Noooo", "argh" into "aaargh".
+One stretched word per line at most. A trailing "~" softens a sound into something
+playful or coaxing: "Mmm~", "Nnnnh~!".
+
+Volume and interruption are written, not described:
+  ALL CAPS for a shout or a hard emphasis — "WHAT?!", "I SAID NO", "don't you DARE".
+  Stacked "?!", "!?!", "....!?" for disbelief or a voice cracking upward: "W-What....?!"
+  A trailing "..." for something not finished, a word abandoned, a thought lost.
+  "—" for a cut-off: another speaker talking over them, a hand at the throat, a hit.
+  Dots inside a word for a faltering rhythm: "I... I don't", "no... no, wait".
+
+Never label what the text already shows. If the sound is on the page, do not also say
+she moaned it, her voice broke, the words came out strangled, or she stumbled over the
+word — pick the sound or the tag, never both. Never write a sound as a simile or a
+description of itself: "a sound like...", "the noise of...", "something between a gasp
+and...". "She gasps" is a report; the gasp on the page is the sound.
+
+Restraint, so the rest of this holds: most lines carry no sound at all. Sound is an
+accent, not a baseline, and one repeated sound drains itself — so never two lines in a
+row, and never the same sound twice in a scene. But when a beat genuinely calls for a
+sound — a first touch, a hit, a climax, a laugh that lands, someone shouted at, a mouth
+that is full — write it, and write it fully. A quiet scene should have none; a scene
+with real heat should have several, and they should be different from each other.
+</craft_vocalisation>`;
 
 /** The narrative-person line per value. `'off'` maps to `''` so the assembly drops it. */
 const POV_LINE: Record<Craft['pov'], string> = {
@@ -123,6 +232,8 @@ export function renderCraftBlock(craft: Craft): string {
   if (craft.interiority) parts.push(INTERIORITY);
   if (craft.earnedKnowledge) parts.push(EARNED_KNOWLEDGE);
   if (craft.independentNpcs) parts.push(INDEPENDENT_NPCS);
+  // Vocalisation is NOT here. It is emitted separately into the tail — see
+  // `renderVocalisation` — because position decides whether the model obeys it.
   // Filtered before the join, so an `'off'` POV does not leave a blank line inside
   // `<craft>`.
   const body = parts.filter((part) => part !== '').join('\n');

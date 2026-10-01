@@ -1,32 +1,11 @@
 import { badRequest, json, notFound, readJson } from './http';
-import { PresetParseError, parsePresetFile, parseStoredPrompts } from '../../src/lib/presets/importSt';
-import { parseFf5, requiresRegexPack } from '../../src/lib/presets/ff5';
-import { asRecord } from '../../src/lib/json';
 import { DEFAULT_PRESET_CONFIG, parsePresetConfig } from '../../src/lib/presets/presetConfig';
-import type { PresetConfig } from '../../src/lib/presets/presetConfig';
-
-interface ImportBody {
-  name?: string;
-  json?: unknown;
-  /**
-   * The importing client says this file came from the Freaky Frankenstein archive.
-   *
-   * It has to be told, not detected: an FF5 file is byte-for-byte a chat-completion
-   * preset, so no shape check can separate the two. Without the hint the file still
-   * imports — it simply lands as `kind: 'chat'`, which is what it looks like, and loses
-   * the badge that says its prompts and regex pack belong together.
-   */
-  kind?: string;
-}
 
 /** The stored row, as the reader sees it. */
 interface PresetRow {
   id: string;
   name: string;
-  kind: string;
   knobs_json: string;
-  regex_json: string | null;
-  prompt_json: string | null;
   config_json: string | null;
   created_at: number;
   updated_at: number | null;
@@ -34,7 +13,7 @@ interface PresetRow {
 
 async function selectPreset(env: Env, id: string): Promise<PresetRow | null> {
   return await env.DB.prepare(
-    `SELECT id, name, kind, knobs_json, regex_json, prompt_json, config_json, created_at, updated_at
+    `SELECT id, name, knobs_json, config_json, created_at, updated_at
        FROM presets WHERE id = ?`,
   )
     .bind(id)
@@ -52,105 +31,35 @@ function presetPayload(row: PresetRow) {
   return {
     id: row.id,
     name: row.name,
-    kind: row.kind,
     knobs: JSON.parse(row.knobs_json) as Record<string, number | string | string[]>,
     config: parsePresetConfig(row.config_json),
-    regex: row.regex_json ? (JSON.parse(row.regex_json) as unknown[]) : [],
-    // Typed rather than `unknown[]`: the editor renders these as a tick list, and a
-    // client that has to guess the shape is a client that renders a blank panel when the
-    // guess is wrong.
-    //
-    // Read straight through, NOT re-parsed by `parsePromptEntries`. `prompt_json` already
-    // holds the NORMALIZED shape the importer produced — camelCase `injectionPosition`,
-    // not ST's `injection_position` — so running the ST reader over it would silently
-    // drop every injection field, moving depth-injected prompts into the static head.
-    // `parsePromptEntries` is for a file coming IN; this is a row coming OUT.
-    prompts: parseStoredPrompts(row.prompt_json),
     created_at: row.created_at,
     updated_at: row.updated_at ?? row.created_at,
   };
 }
 
-/** Imports a SillyTavern sampler preset, normalized on the way in. */
-export async function importPreset(env: Env, req: Request): Promise<Response> {
-  const body = await readJson<ImportBody>(req);
-  if (!body?.json || typeof body.name !== 'string') return badRequest('name and json required');
-
-  let preset;
-  try {
-    // The FF5 importer is the same normalizer with the kind forced: FF files carry no
-    // sampler knobs and their regex pack is mandatory, which is a distinction only the
-    // importer that knows the archive can make. `parseFf5` reads a flat record rather
-    // than a `{ name, json }` envelope, so the envelope is unwrapped here — and rejected
-    // here too, since a non-object would otherwise import as an empty preset.
-    const root = asRecord(body.json);
-    if (!root) throw new PresetParseError(`Preset "${body.name}" is not a JSON object.`);
-    preset =
-      body.kind === 'ff5'
-        ? parseFf5({ ...root, name: body.name })
-        : parsePresetFile({ name: body.name, json: body.json });
-  } catch (error) {
-    // A malformed preset is the user's file being wrong, not a server fault.
-    if (error instanceof PresetParseError) return badRequest(error.message);
-    throw error;
-  }
-
+/**
+ * A new, empty preset. The editor supplies every field on first save.
+ *
+ * Presets are authored documents now — system prompt, pre/post-history, assistant
+ * prefill, knobs — so creating one is a row with defaults, not a normalization of
+ * somebody else's file. The config is written rather than left NULL so the editor opens
+ * on a complete document instead of relying on `parsePresetConfig`'s defaults agreeing
+ * with what it renders.
+ */
+export async function createPreset(env: Env, req: Request): Promise<Response> {
+  const body = await readJson<{ name?: string }>(req);
+  const name =
+    typeof body?.name === 'string' && body.name.trim().length > 0 ? body.name.trim() : 'New preset';
   const id = crypto.randomUUID();
   const now = Date.now();
-
-  // The preset's own ticks are seeded into the config, so an imported preset arrives
-  // with exactly the prompts its author shipped turned on. Without this the reader would
-  // have to re-tick twenty boxes in the editor to get the preset they downloaded, and
-  // any preset whose behaviour IS its prompt list would be inert on arrival — which is
-  // exactly what this feature exists to fix.
-  //
-  // The order is also the emission order, so storing it preserves the author's sequence
-  // as well as their choices.
-  const seededConfig: PresetConfig = {
-    ...DEFAULT_PRESET_CONFIG,
-    ...(preset.order.length > 0 ? { promptOrder: preset.order } : {}),
-  };
-
   await env.DB.prepare(
-    `INSERT INTO presets (id, name, kind, knobs_json, regex_json, prompt_json, config_json, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO presets (id, name, knobs_json, config_json, created_at, updated_at)
+     VALUES (?, ?, '{}', ?, ?, ?)`,
   )
-    .bind(
-      id,
-      preset.name,
-      preset.kind,
-      JSON.stringify(preset.knobs),
-      preset.regex.length > 0 ? JSON.stringify(preset.regex) : null,
-      preset.prompts.length > 0 ? JSON.stringify(preset.prompts) : null,
-      JSON.stringify(seededConfig),
-      now,
-      now,
-    )
+    .bind(id, name, JSON.stringify(DEFAULT_PRESET_CONFIG), now, now)
     .run();
-
-  // How many of the shipped prompts are actually on. The difference between "95 prompt
-  // entries imported" and "10 of them are on" is the difference between a preset that
-  // works and one that looks like it does, so both numbers are reported.
-  const enabledCount = preset.order.filter((row) => row.enabled).length;
-
-  return json(
-    {
-      id,
-      name: preset.name,
-      kind: preset.kind,
-      knobs: preset.knobs,
-      config: seededConfig,
-      // Surfaced rather than swallowed: a knob the preset declared but that could not
-      // be carried over is the thing the user needs to know about.
-      dropped: preset.dropped,
-      regexCount: preset.regex.length,
-      promptCount: preset.prompts.length,
-      promptEnabled: enabledCount,
-      // An FF5-style preset without its regex pack does not run as designed.
-      needsRegexPack: requiresRegexPack(preset),
-    },
-    201,
-  );
+  return json({ id, name }, 201);
 }
 
 export async function listPresets(env: Env): Promise<Response> {
@@ -158,10 +67,8 @@ export async function listPresets(env: Env): Promise<Response> {
   // and parsing it there: the list only needs the number, and a preset's knob map is
   // read in full by the editor, which fetches the single preset anyway.
   const { results } = await env.DB.prepare(
-    `SELECT id, name, kind, created_at, COALESCE(updated_at, created_at) AS updated_at,
+    `SELECT id, name, created_at, COALESCE(updated_at, created_at) AS updated_at,
             (SELECT COUNT(*) FROM json_each(presets.knobs_json)) AS knob_count,
-            (regex_json IS NOT NULL) AS has_regex,
-            (prompt_json IS NOT NULL) AS has_prompts,
             (config_json IS NOT NULL) AS has_config
        FROM presets ORDER BY created_at DESC`,
   ).all();
@@ -242,9 +149,9 @@ export async function updatePreset(env: Env, req: Request): Promise<Response> {
 /**
  * Copies a preset under a new id.
  *
- * The copy carries the knobs, config, regex scripts and prompts verbatim: duplicating is
- * how you try a variant without risking the preset a chat is already using, so a copy
- * that dropped half its source would be useless for that.
+ * The copy carries the knobs and the config verbatim: duplicating is how you try a
+ * variant without risking the preset a chat is already using, so a copy that dropped
+ * half its source would be useless for that.
  */
 export async function duplicatePreset(env: Env, req: Request): Promise<Response> {
   const body = await readJson<{ id?: string }>(req);
@@ -256,20 +163,10 @@ export async function duplicatePreset(env: Env, req: Request): Promise<Response>
   const id = crypto.randomUUID();
   const now = Date.now();
   await env.DB.prepare(
-    `INSERT INTO presets (id, name, kind, knobs_json, regex_json, prompt_json, config_json, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO presets (id, name, knobs_json, config_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
   )
-    .bind(
-      id,
-      `${source.name} (copy)`,
-      source.kind,
-      source.knobs_json,
-      source.regex_json,
-      source.prompt_json,
-      source.config_json,
-      now,
-      now,
-    )
+    .bind(id, `${source.name} (copy)`, source.knobs_json, source.config_json, now, now)
     .run();
 
   const row = await selectPreset(env, id);

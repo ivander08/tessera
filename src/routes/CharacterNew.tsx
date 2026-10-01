@@ -8,6 +8,7 @@ import { apiJson } from '../lib/api';
 import { messageOf } from '../lib/hooks';
 import { AppBar, BackLink } from '../components/AppBar';
 import { GreetingStateFields, GreetingsEditor } from '../components/GreetingsEditor';
+import { useToast } from '../components/Toast';
 
 /**
  * Per-field token counts matter because most of these fields are paid on every single
@@ -105,6 +106,7 @@ export default function CharacterNew() {
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [saving, setSaving] = useState(false);
+  const toast = useToast();
   const [avatar, setAvatar] = useState<{ contentType: string; dataBase64: string } | null>(null);
   const [count, setCount] = useState<((text: string) => number) | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -182,9 +184,10 @@ export default function CharacterNew() {
         method: 'POST',
         body: JSON.stringify({ card: { ...card, greetingStates }, avatar }),
       });
+      toast.success('Character saved.');
       navigate(`/characters?created=${encodeURIComponent(created.id)}`);
     } catch (cause) {
-      setError(`Could not save the card: ${messageOf(cause)}`);
+      toast.failure(`Could not save the card: ${messageOf(cause)}`);
     } finally {
       setSaving(false);
     }

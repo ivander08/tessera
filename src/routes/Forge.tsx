@@ -5,6 +5,7 @@ import { parseJsonCard } from '../lib/cards/import';
 import type { ParsedCard } from '../lib/cards/types';
 import type { TokenCostReport } from '../lib/forge/tokenCost';
 import { messageOf, useAsync } from '../lib/hooks';
+import { useToast } from '../components/Toast';
 import { estimateTokens } from '../lib/tokenEstimate';
 import { loadTokenCounter } from '../lib/tokenizerClient';
 
@@ -212,8 +213,11 @@ function DraftTool({
   const [greetingsText, setGreetingsText] = useState('');
   const [busy, setBusy] = useState(false);
   const [suggesting, setSuggesting] = useState<SuggestField | null>(null);
+  // `problem` and `status` stay for `run`/`suggest`, which are not saves and whose messages
+  // are contextual. Only `save()` reports through the toast.
   const [problem, setProblem] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const toast = useToast();
 
   /**
    * Array fields are held as text while editing and parsed on use. Splitting a joined
@@ -258,16 +262,14 @@ function DraftTool({
   async function save() {
     if (!edited) return;
     setBusy(true);
-    setProblem(null);
-    setStatus(null);
     try {
       const created = await apiJson<{ id: string; name: string }>('/api/characters', {
         method: 'POST',
         body: JSON.stringify({ card: edited }),
       });
-      setStatus(`Saved "${created.name}". It is in the character list.`);
+      toast.success(`Saved "${created.name}". It is in the character list.`);
     } catch (cause) {
-      setProblem(messageOf(cause));
+      toast.failure(messageOf(cause));
     } finally {
       setBusy(false);
     }

@@ -10,6 +10,7 @@ import { PersonaMenu } from '../components/PersonaMenu';
 import { Turn, type CastVoice, type TurnView } from '../components/Turn';
 import { MessageActions } from '../components/MessageActions';
 import { Modal } from '../components/Modal';
+import { useToast } from '../components/Toast';
 import { SceneBar } from '../components/SceneBar';
 import { CastPanel } from '../components/CastPanel';
 import { CraftPanel } from '../components/CraftPanel';
@@ -87,6 +88,7 @@ export default function Chat() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const toast = useToast();
   // The id of the reply that hit the provider's output cap, so its own turn can say so.
   // Cleared when the next turn starts: the marker belongs to one reply, not to the chat.
   const [truncatedId, setTruncatedId] = useState<string | null>(null);
@@ -516,7 +518,10 @@ export default function Chat() {
       });
       reload();
     } catch (cause) {
+      // The composer row is contextual to the turn being edited, so it stays; the toast is
+      // added because the row is easy to miss when the edit form has already closed.
       setSendError(messageOf(cause));
+      toast.failure(messageOf(cause));
     }
   }
 

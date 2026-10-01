@@ -96,12 +96,21 @@ describe('parsePresetConfig — per-field fallback', () => {
 
   test('only a real boolean sets a flag — truthy strings do not', () => {
     const config = parsePresetConfig(
-      JSON.stringify({ includeNames: 'yes', banEmojis: 1, trimIncompleteSentences: false, loreRecursive: true }),
+      JSON.stringify({ includeNames: 'yes', loreRecursive: true }),
     );
     expect(config.includeNames).toBe(false);
-    expect(config.banEmojis).toBe(false);
-    expect(config.trimIncompleteSentences).toBe(false);
     expect(config.loreRecursive).toBe(true);
+  });
+
+  test('a removed flag in a stored config is ignored, not an error', () => {
+    // `banEmojis` and `trimIncompleteSentences` were stored, edited, and never read. They
+    // are gone from the config; a row that still carries them must still parse.
+    const config = parsePresetConfig(
+      JSON.stringify({ banEmojis: true, trimIncompleteSentences: true, includeNames: true }),
+    );
+    expect(config.includeNames).toBe(true);
+    expect('banEmojis' in config).toBe(false);
+    expect('trimIncompleteSentences' in config).toBe(false);
   });
 });
 
@@ -128,39 +137,7 @@ describe('parsePresetConfig — stop strings', () => {
 describe('parsePresetConfig — a complete config', () => {
   test('every field is present after parsing a partial record', () => {
     const config = parsePresetConfig(JSON.stringify({ systemPrompt: 'x' }));
-    // `promptOrder` is the one field that is deliberately OPTIONAL rather than defaulted:
-    // absent means "this preset has no prompt list", while `[]` means "the reader turned
-    // every prompt off". Collapsing the two would make turning the last prompt off
-    // silently restore the default prompt, so it is excluded from the completeness rule.
-    const keys = Object.keys(config).sort().filter((key) => key !== 'promptOrder');
-    expect(keys).toEqual(
-      Object.keys(DEFAULT_PRESET_CONFIG)
-        .sort()
-        .filter((key) => key !== 'promptOrder'),
-    );
-    expect(config.promptOrder).toBeUndefined();
-  });
-
-  test('a stored promptOrder survives a round trip', () => {
-    const config = parsePresetConfig(
-      JSON.stringify({
-        promptOrder: [
-          { identifier: 'main', enabled: true },
-          { identifier: 'jailbreak', enabled: false },
-        ],
-      }),
-    );
-    expect(config.promptOrder).toEqual([
-      { identifier: 'main', enabled: true },
-      { identifier: 'jailbreak', enabled: false },
-    ]);
-  });
-
-  test('a malformed promptOrder is undefined rather than a broken list', () => {
-    expect(parsePresetConfig(JSON.stringify({ promptOrder: 'nope' })).promptOrder).toBeUndefined();
-    expect(
-      parsePresetConfig(JSON.stringify({ promptOrder: [{ enabled: true }, 'x'] })).promptOrder,
-    ).toEqual([]);
+    expect(Object.keys(config).sort()).toEqual(Object.keys(DEFAULT_PRESET_CONFIG).sort());
   });
 
   test('a round trip through JSON preserves a fully specified config', () => {
@@ -172,8 +149,6 @@ describe('parsePresetConfig — a complete config', () => {
       postHistoryInstructions: 'Never end a reply with a question.',
       impersonationPrompt: 'Write one line as {{user}}.',
       includeNames: true,
-      banEmojis: true,
-      trimIncompleteSentences: true,
       assistantPrefill: '<reply>',
       stopStrings: ['</reply>', 'User:'],
       maxTokens: 4096,

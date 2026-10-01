@@ -6,6 +6,7 @@ import { CARD_FIELD_ROWS } from '../lib/cards/fields';
 import type { CharacterCardJson, GreetingState } from '../lib/cards/types';
 import { loadTokenCounter } from '../lib/tokenizerClient';
 import { messageOf, useAsync } from '../lib/hooks';
+import { useToast } from '../components/Toast';
 import { GreetingsEditor, GreetingStateFields } from '../components/GreetingsEditor';
 import { Avatar } from '../components/Avatar';
 import { NamePrompt } from '../components/NamePrompt';
@@ -134,8 +135,10 @@ export default function CharacterEdit() {
   // Whether the fork name sheet is open. The suggested name is read from the form when
   // the sheet renders, so nothing has to be captured when it opens.
   const [forkOpen, setForkOpen] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
+  // Validation failures (an empty name, an oversized avatar, a broken lorebook) stay
+  // inline, because they point at the field that caused them. Save failures go to a toast.
   const [failure, setFailure] = useState<string | null>(null);
+  const toast = useToast();
 
   // The 2.3 MB vocabulary loads only on the character screens.
   useEffect(() => {
@@ -209,7 +212,6 @@ export default function CharacterEdit() {
 
     setBusy(true);
     setFailure(null);
-    setStatus(null);
     try {
       const next: CharacterCardJson = { ...card, name };
       for (const field of FIELDS) {
@@ -251,29 +253,28 @@ export default function CharacterEdit() {
         await apiJson(`/api/characters/${encodeURIComponent(id)}/avatar`, { method: 'DELETE' });
       }
 
-      setStatus('Saved. The next turn uses this.');
+      toast.success('Character saved.');
       reload();
     } catch (cause) {
-      setFailure(messageOf(cause));
+      toast.failure(messageOf(cause));
     } finally {
       setBusy(false);
     }
   }
-
   async function fork(name: string) {
     if (!card) return;
 
     setBusy(true);
     setFailure(null);
-    setStatus(null);
     try {
       const created = await apiJson<{ id: string }>(`/api/characters/${encodeURIComponent(id)}/fork`, {
         method: 'POST',
         body: JSON.stringify({ id, name }),
       });
+      toast.success(`Forked as "${name}".`);
       navigate(`/characters/${created.id}/edit`);
     } catch (cause) {
-      setFailure(messageOf(cause));
+      toast.failure(messageOf(cause));
     } finally {
       setBusy(false);
       setForkOpen(false);
@@ -281,7 +282,6 @@ export default function CharacterEdit() {
   }
 
   async function pickAvatar(file: File) {
-    setFailure(null);
     if (file.size > 1_500_000) {
       setFailure('Image is larger than 1.5 MB. D1 caps a row at 2 MB, so a bigger avatar cannot be stored.');
       return;
@@ -560,7 +560,6 @@ export default function CharacterEdit() {
             ))}
 
             {failure && <div className="note danger" style={{ marginTop: 20 }}>{failure}</div>}
-            {status && <div className="note" style={{ marginTop: 20 }}>{status}</div>}
 
             {/* Sticky, like the chat composer. This sheet is 2,600px tall and committing it
                 used to mean scrolling to the very bottom — which is why the header grew a

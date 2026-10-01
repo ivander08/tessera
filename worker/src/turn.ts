@@ -215,7 +215,7 @@ async function runTurn(
       tailExtra: answeringPendingUser
         ? ''
         : mode === 'impersonate'
-          ? IMPERSONATE_INSTRUCTION
+          ? settings.presetImpersonation || IMPERSONATE_INSTRUCTION
           : mode === 'continue'
             ? CONTINUE_INSTRUCTION
             : '',
@@ -338,7 +338,11 @@ async function runTurn(
   }
 }
 
-/** Kept here rather than in the prompt builder: they are mode-specific, not layout. */
+/**
+ * The fallback when the attached preset sets no `impersonationPrompt`. A preset's own
+ * instruction wins when present — it is the author's statement of how their model should
+ * write the reader's line, and the built-in text is only a generic approximation.
+ */
 const IMPERSONATE_INSTRUCTION =
   'Write the next message from the perspective of the other participant in this scene. ' +
   'Write only their words and actions, in the same style as their previous messages. ' +

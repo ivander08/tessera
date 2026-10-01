@@ -147,28 +147,23 @@ export async function extractFacts(
 
   const now = Date.now();
 
-  // Supersede FIRST, so a fact this transcript replaces is already inactive when the new
-  // one lands. Doing it the other way round leaves a window where both are active.
-  let superseded = 0;
+  // Which existing facts this transcript replaces. Resolved before any write, because the
+  // replacement's id is only known once the new facts are inserted — and `superseded_by`
+  // is meant to name the replacement.
+  const targets: ExistingFact[] = [];
   for (const entry of asArray(record.supersede)) {
     const item = asRecord(entry);
     // The number the model was shown, not an id. A number outside the list is dropped:
     // superseding the wrong fact silently removes a true one from the prompt.
     const index = typeof item?.id === 'number' ? item.id : Number(item?.id);
     const target = Number.isInteger(index) ? existing[index - 1] : undefined;
-    if (!target) continue;
-    await env.DB.prepare(
-      `UPDATE facts SET status = 'superseded', superseded_by = ? WHERE id = ? AND chat_id = ?`,
-    )
-      .bind(target.id, target.id, chatId)
-      .run();
-    superseded += 1;
+    if (target) targets.push(target);
   }
 
   // New facts. `subject` is optional and only ever a label, so a missing one is null
   // rather than a reason to drop the fact.
   const seen = new Set(existing.map((fact) => normalise(fact.text)));
-  let added = 0;
+  const inserts: Array<{ id: string; text: string; subject: string | null }> = [];
   for (const entry of asArray(record.facts)) {
     const item = asRecord(entry);
     const text = typeof item?.text === 'string' ? item.text.trim() : '';
@@ -178,25 +173,44 @@ export async function extractFacts(
     const key = normalise(text);
     if (seen.has(key)) continue;
     seen.add(key);
-
-    await env.DB.prepare(
-      `INSERT INTO facts (id, chat_id, text, subject, status, pinned, created_at)
-       VALUES (?, ?, ?, ?, 'active', 0, ?)`,
-    )
-      .bind(
-        crypto.randomUUID(),
-        chatId,
-        text,
+    inserts.push({
+      id: crypto.randomUUID(),
+      text,
+      subject:
         typeof item?.subject === 'string' && item.subject.trim().length > 0
           ? item.subject.trim()
           : null,
-        now,
-      )
-      .run();
-    added += 1;
+    });
   }
 
-  return { added, superseded };
+  // `superseded_by` names the replacement. When exactly one new fact was extracted it is
+  // unambiguous; with zero or several there is no single replacement, so the column stays
+  // null rather than pointing at an arbitrary one. Previously it was bound to the
+  // superseded fact's OWN id, which the Memory viewer renders as user-visible prose —
+  // "superseded by <its own id>".
+  const replacementId = inserts.length === 1 ? inserts[0].id : null;
+
+  // Insert-then-update inside ONE batch, which D1 runs as a transaction. Superseding still
+  // happens in the same atomic step as the insert, so there is never a committed state
+  // where both facts are active — the reason supersede ran first — while the update can
+  // now reference an id that exists.
+  const statements = [
+    ...inserts.map((fact) =>
+      env.DB.prepare(
+        `INSERT INTO facts (id, chat_id, text, subject, status, pinned, created_at)
+         VALUES (?, ?, ?, ?, 'active', 0, ?)`,
+      ).bind(fact.id, chatId, fact.text, fact.subject, now),
+    ),
+    ...targets.map((target) =>
+      env.DB.prepare(
+        `UPDATE facts SET status = 'superseded', superseded_by = ? WHERE id = ? AND chat_id = ?`,
+      ).bind(replacementId, target.id, chatId),
+    ),
+  ];
+
+  if (statements.length > 0) await env.DB.batch(statements);
+
+  return { added: inserts.length, superseded: targets.length };
 }
 
 function asArray(value: unknown): unknown[] {

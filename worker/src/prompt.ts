@@ -1,9 +1,7 @@
 import { getCharacter, getPersona } from './db';
 import type { ChatRow } from './db';
 import type { EffectiveSettings } from './effective';
-import { assemble, renderPersona } from '../../src/lib/prompt/assemble';
-import { injectAtDepth, resolvePrompts } from '../../src/lib/presets/resolvePrompts';
-import { applyScripts, placementForRole } from '../../src/lib/presets/regexScripts';
+import { assemble } from '../../src/lib/prompt/assemble';
 import type { AssembledPrompt } from '../../src/lib/prompt/types';
 import type { AssembleInput } from '../../src/lib/prompt/input';
 import { computeWindowStart } from '../../src/lib/prompt/window';
@@ -13,7 +11,7 @@ import type { CharacterCardJson } from '../../src/lib/cards/types';
 import { renderMemoryBlock } from '../../src/lib/prompt/memoryBlock';
 import { dynamicMacrosIn, substituteHead, substituteTail } from '../../src/lib/prompt/macros';
 import { renderStateBlock } from '../../src/lib/prompt/stateBlock';
-import { renderCraftBlock, renderContentPolicy } from '../../src/lib/prompt/craftBlock';
+import { renderCraftBlock, renderContentPolicy, renderVocalisation } from '../../src/lib/prompt/craftBlock';
 import { recall } from './memory/recall';
 import { loadState } from './state/update';
 import { loadSceneSetup } from './scene';
@@ -99,64 +97,8 @@ export async function buildPrompt(
   // for a model whose tokenizer differs from the estimator.
   const calibration = await loadCalibration(env, settings.model);
 
-  // The preset's own prompt list, when it carries one, resolved BEFORE the budget is
-  // computed — because the budget depends on how big the head actually is, and for a
-  // preset chat the head is the preset.
-  //
-  // This is what makes an imported SillyTavern preset mean what it says. Before this,
-  // the list was parsed, stored, counted in the UI and never emitted — so a preset whose
-  // entire behaviour IS its prompt list (which is all of them) changed only its eight
-  // sampler values. Measured on the Douyin preset: 10 of 46 entries on, ~14 KB of
-  // instructions, none of which reached the model.
-  //
-  // The marker blocks are Tessera's OWN renderings of the things ST substitutes by name:
-  // a `charDescription` marker in the preset's order means "put the card's description
-  // here", so the card stays in the prompt even though the preset decides where.
-  const presetResolved = settings.presetPrompts
-    ? resolvePrompts(settings.presetPrompts.entries, settings.presetPrompts.order, {
-        worldInfoBefore: '',
-        personaDescription: personaRow
-          ? renderPersona({ name: personaRow.name, description: personaRow.description ?? '' })
-          : '',
-        charDescription: card.description,
-        charPersonality: card.personality,
-        scenario: card.scenario,
-        worldInfoAfter: '',
-        dialogueExamples: card.mesExample,
-        chatHistory: '',
-      })
-    : null;
-
-  // A preset whose prompts are ALL off falls back to Tessera's standard head rather than
-  // emitting nothing. Without this, turning the last prompt off would send a prompt with
-  // no system message at all — a strictly worse outcome than the reader asked for, and
-  // one that is invisible in the UI. "No prompts on" means "use the default", which is
-  // also what makes the All-off button safe to press.
-  const presetActive =
-    presetResolved !== null &&
-    (presetResolved.head.length > 0 ||
-      presetResolved.afterHistory.length > 0 ||
-      presetResolved.injected.length > 0);
-
-  // The history budget is what is LEFT of the context window after everything that is not
-  // history. Passing the whole budget here was the bug the 32k test caught: the window
-  // held `contextBudget` worth of messages while the card, the lorebook, the memory
-  // block, the state block and the authors note also rode along, so the assembled prompt
-  // ran over the configured size and the provider reported 34,237 tokens against a 32,000
-  // budget.
-  //
-  // The head is measured exactly — it is the same text every turn, and it is the part
-  // that cannot be dropped. The tail is RESERVED rather than measured, because it is
-  // assembled after the window is chosen and its size is not known yet; the reservation
-  // covers the memory block, the state block, the lore block, the notes and the reply.
   const headTokens = estimateChatTokens(
-    headMessages(
-      card,
-      personaRow,
-      settings,
-      presetActive ? presetResolved!.head : null,
-      craftBlock,
-    ),
+    headMessages(card, personaRow, settings, craftBlock),
   );
   const historyBudget = Math.max(
     MIN_HISTORY_BUDGET,
@@ -305,22 +247,13 @@ export async function buildPrompt(
     );
   }
 
-  // The preset's own prompt list was resolved above, before the budget was computed,
-  // because the head's size decides the budget. Macros are applied when it is emitted.
-
   const input: AssembleInput = {
     // Order: the card's own system prompt, then the preset's, then the global default.
     // The card is the most specific statement of how this character should be played.
-    //
-    // A preset WITH active prompts replaces this slot entirely: its own list contains
-    // whatever system prompt it wants, positioned by its own order, and emitting both
-    // would send two system prompts saying different things.
-    systemPrompt: presetActive
-      ? ''
-      : substituteHead(
-          card.systemPrompt || settings.presetSystemPrompt || settings.systemPrompt,
-          macroContext,
-        ),
+    systemPrompt: substituteHead(
+      card.systemPrompt || settings.presetSystemPrompt || settings.systemPrompt,
+      macroContext,
+    ),
     character: {
       name: card.name,
       description: substituteHead(card.description, macroContext),
@@ -336,46 +269,14 @@ export async function buildPrompt(
       content: substituteHead(entry.content, macroContext),
     })),
     craftBlock,
-    // The preset's resolved segments. Macros are substituted here because a preset may
-    // write `{{char}}`/`{{user}}` in its prompt text, and both are fixed for the chat's
-    // life — so this stays static and the cached prefix holds.
-    presetHead: presetActive
-      ? presetResolved!.head.map((segment) => ({
-          role: segment.role,
-          content: substituteHead(segment.content, macroContext),
-        }))
-      : null,
-    presetAfterHistory: presetActive
-      ? presetResolved!.afterHistory.map((segment) => ({
-          role: segment.role,
-          content: substituteTail(segment.content, macroContext),
-        }))
-      : null,
-    // The prompt side of the preset's regex scripts, applied per row.
-    //
-    // This is what stops the previous reply poisoning the next one. Without it, a reply
-    // whose chain-of-thought was never stripped becomes HISTORY, the model reads its own
-    // `Scene: … Done` block as an example of how to answer, and every subsequent turn
-    // reproduces it. Measured on the Douyin preset: three consecutive replies opened with
-    // the reasoning block, each one training the next.
-    //
-    // The depth is the row's distance from the end, which is what `minDepth`/`maxDepth`
-    // are written against. Counted over the window being sent, because that is the only
-    // "conversation" the model can see.
-    history: history.map((row, index) => {
-      const depth = history.length - 1 - index;
-      const stripped = applyScripts(row.content, settings.presetRegex, 'prompt', {
-        placement: placementForRole(row.role),
-        depth,
-      });
-      return {
-        role: row.role,
-        content: substituteHead(
-          includeNames ? withSpeakerName({ ...row, content: stripped }, character.name, personaRow?.name ?? null) : stripped,
-          macroContext,
-        ),
-      };
-    }),
+    preHistory: substituteHead(settings.presetPreHistory, macroContext),
+    history: history.map((row) => ({
+      role: row.role,
+      content: substituteHead(
+        includeNames ? withSpeakerName(row, character.name, personaRow?.name ?? null) : row.content,
+        macroContext,
+      ),
+    })),
     tail: {
       // The tail gets both tiers: it is after `tailStart`, so it cannot disturb the
       // cached prefix however much it changes.
@@ -384,6 +285,7 @@ export async function buildPrompt(
       castBlock: substituteTail(castBlock, macroContext),
       loreBlock: substituteTail(loreBlock, macroContext),
       contentPolicy: renderContentPolicy(setup.craft),
+      vocalisation: renderVocalisation(setup.craft),
       authorsNote: substituteTail(settings.authorsNote, macroContext),
       // Precedence, per the CCv2/v3 spec: the CARD's post-history instructions replace
       // the user's global setting. That is what the field is for — it is the card's own
@@ -416,44 +318,6 @@ export async function buildPrompt(
   // form providers actually honour — a system message saying "start with X" is a request,
   // a trailing assistant turn is a fact the model continues from.
   const assembled = assemble(input, estimateChatTokens);
-
-  // Depth-injected preset entries, spliced into the history at their own distance from
-  // the end of the conversation.
-  //
-  // ST's `injection_position: 0` means "N messages back from the newest", which is a
-  // different axis from the ordered list: these are not part of the static run, they
-  // interleave with the transcript, and their whole point is that they sit close to the
-  // reply. Emitting them in the head would both change their meaning and rewrite the
-  // cached prefix every turn.
-  //
-  // Done after `assemble` rather than inside it because the splice moves messages across
-  // `tailStart`, and `assemble` computes `tailStart` from the arrays it was handed.
-  if (presetActive && presetResolved!.injected.length > 0) {
-    const head = assembled.messages.slice(0, assembled.tailStart - input.history.length);
-    const body = assembled.messages.slice(
-      assembled.tailStart - input.history.length,
-      assembled.tailStart,
-    );
-    const tail = assembled.messages.slice(assembled.tailStart);
-
-    const spliced = injectAtDepth(
-      body,
-      presetResolved.injected.map((entry) => ({
-        depth: entry.depth,
-        segment: {
-          ...entry.segment,
-          content: substituteTail(entry.segment.content, macroContext),
-        },
-      })),
-    ).map((entry) => ('injected' in entry ? entry.injected : entry));
-
-    assembled.messages = [...head, ...spliced, ...tail];
-    // `tailStart` shifts by however many were injected into the history. Left unchanged
-    // it would slice the cacheable prefix in the wrong place, and the prefix hash — which
-    // decides whether the provider can reuse its cache — would be computed over the
-    // wrong messages.
-    assembled.tailStart += spliced.length - body.length;
-  }
 
   if (settings.assistantPrefill.length > 0) {
     const prefill = substituteTail(settings.assistantPrefill, macroContext);
@@ -496,23 +360,9 @@ function headMessages(
   card: CharacterCardJson,
   persona: { name: string; description: string | null } | null,
   settings: EffectiveSettings,
-  /** The preset's resolved head, when it has one. Replaces the standard composition. */
-  presetHead?: Array<{ role: string; content: string }> | null,
   /** Tessera's craft settings, emitted last in the head. Empty when every block is off. */
   craftBlock?: string,
 ): Array<{ role: string; content: string }> {
-  // A preset with a prompt list owns the head. Measuring the STANDARD head for a chat
-  // whose real head is the preset's would under-count by however large the preset is —
-  // measured at ~27,600 tokens for one of the shipped Frankenstein presets, against a
-  // default budget of 16,000. The history budget would then be computed as though the
-  // head were the card alone, and the assembled prompt would run far past the context
-  // window it was told to fit.
-  if (presetHead && presetHead.length > 0) {
-    const head = presetHead.map((segment) => ({ role: segment.role, content: segment.content }));
-    if (craftBlock) head.push({ role: 'system', content: craftBlock });
-    return head;
-  }
-
   const out: Array<{ role: string; content: string }> = [];
   const push = (content: string | undefined): void => {
     if (content) out.push({ role: 'system', content });

@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router';
 import './index.css';
 import App from './App';
+import { ToastProvider } from './components/Toast';
 import { apiJson, apiOrigin } from './lib/api';
 import { applyTheme, parseTheme, DEFAULT_THEME, type Theme } from './lib/theme';
 import { assertNativeStreaming, isNativeShell } from './lib/native/sse';
@@ -46,7 +47,11 @@ function Root() {
     return () => media.removeEventListener('change', apply);
   }, [theme]);
 
-  return <App />;
+  return (
+    <ToastProvider>
+      <App />
+    </ToastProvider>
+  );
 }
 
 createRoot(document.getElementById('root')!).render(

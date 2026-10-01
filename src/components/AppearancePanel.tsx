@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { apiJson } from '../lib/api';
 import { applyTheme, parseTheme, type Theme } from '../lib/theme';
 import { ThemeEditor } from './ThemeEditor';
+import { useToast } from './Toast';
 
 /**
  * Appearance, reachable from inside the chat.
@@ -18,7 +19,7 @@ import { ThemeEditor } from './ThemeEditor';
 export function AppearancePanel({ onClose }: { onClose: () => void }) {
   const [theme, setTheme] = useState<Theme>(() => parseTheme(null));
   const [loaded, setLoaded] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
+  const toast = useToast();
 
   useEffect(() => {
     let alive = true;
@@ -51,18 +52,21 @@ export function AppearancePanel({ onClose }: { onClose: () => void }) {
       void apiJson('/api/settings', {
         method: 'PUT',
         body: JSON.stringify({ key: 'theme', value: JSON.stringify(theme) }),
-      })
-        .then(() => setStatus('Saved.'))
-        .catch((cause: unknown) => setStatus(cause instanceof Error ? cause.message : String(cause)));
+      }).catch((cause: unknown) =>
+        // No success toast: this autosaves on a debounce while the reader drags a slider,
+        // so a toast per save would be a stream of them. The transcript behind the panel
+        // is the confirmation. A failure is the opposite — it needs saying.
+        toast.failure(cause instanceof Error ? cause.message : String(cause)),
+      );
     }, 600);
     return () => clearTimeout(timer);
-  }, [theme, loaded]);
+  }, [theme, loaded, toast]);
 
   return (
     <>
       <ThemeEditor value={theme} onChange={setTheme} />
       <p className="form-hint" style={{ marginTop: 14 }}>
-        {status ?? 'Changes apply as you make them, and follow you to other devices.'}
+        Changes apply as you make them, and follow you to other devices.
       </p>
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
         <button type="button" className="btn primary" onClick={onClose}>

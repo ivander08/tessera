@@ -21,7 +21,6 @@ import { Modal } from './Modal';
 interface PresetRow {
   id: string;
   name: string;
-  kind: string;
   knob_count?: number;
 }
 
@@ -98,8 +97,7 @@ export function PresetMenu({ chatId, onChanged }: { chatId: string; onChanged?: 
                 >
                   <span className="pick-name">{preset.name}</span>
                   <span className="pick-note">
-                    {preset.kind}
-                    {preset.knob_count ? ` · ${preset.knob_count} knobs` : ''}
+                    {preset.knob_count ? `${preset.knob_count} knobs` : 'no sampler knobs'}
                   </span>
                   {current === preset.id && <span className="pick-tick">✓</span>}
                 </button>

@@ -3,6 +3,7 @@ import { useParams } from 'react-router';
 import { apiJson } from '../lib/api';
 import { messageOf, useAsync } from '../lib/hooks';
 import { AppBar, BackLink } from '../components/AppBar';
+import { useToast } from '../components/Toast';
 import type { RecallHit } from '../lib/memoryTypes';
 
 /**
@@ -55,16 +56,18 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
     [id],
   );
 
+  // Kept for `NewFact`'s validation refusal, which is about the field above it.
   const [actionError, setActionError] = useState<string | null>(null);
+  const toast = useToast();
 
   /** Every mutation re-reads the list: the Worker is the only writer worth trusting. */
-  async function mutate(path: string, init: RequestInit): Promise<void> {
-    setActionError(null);
+  async function mutate(path: string, init: RequestInit, done: string): Promise<void> {
     try {
       await apiJson(path, init);
+      toast.success(done);
       reload();
     } catch (cause) {
-      setActionError(messageOf(cause));
+      toast.failure(messageOf(cause));
     }
   }
 
@@ -114,27 +117,39 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
                       fact={fact}
                       bordered={index > 0}
                       onSave={(text) =>
-                        mutate(`/api/memory/facts/${fact.id}`, {
-                          method: 'PATCH',
-                          body: JSON.stringify({ text }),
-                        })
+                        mutate(
+                          `/api/memory/facts/${fact.id}`,
+                          {
+                            method: 'PATCH',
+                            body: JSON.stringify({ text }),
+                          },
+                          'Fact saved.',
+                        )
                       }
                       onTogglePin={() =>
-                        mutate(`/api/memory/facts/${fact.id}`, {
-                          method: 'PATCH',
-                          body: JSON.stringify({ pinned: fact.pinned !== 1 }),
-                        })
+                        mutate(
+                          `/api/memory/facts/${fact.id}`,
+                          {
+                            method: 'PATCH',
+                            body: JSON.stringify({ pinned: fact.pinned !== 1 }),
+                          },
+                          fact.pinned === 1 ? 'Fact unpinned.' : 'Fact pinned.',
+                        )
                       }
                       onToggleStatus={() =>
-                        mutate(`/api/memory/facts/${fact.id}`, {
-                          method: 'PATCH',
-                          body: JSON.stringify({
-                            status: fact.status === 'active' ? 'superseded' : 'active',
-                          }),
-                        })
+                        mutate(
+                          `/api/memory/facts/${fact.id}`,
+                          {
+                            method: 'PATCH',
+                            body: JSON.stringify({
+                              status: fact.status === 'active' ? 'superseded' : 'active',
+                            }),
+                          },
+                          fact.status === 'active' ? 'Fact superseded.' : 'Fact restored.',
+                        )
                       }
                       onDelete={() =>
-                        mutate(`/api/memory/facts/${fact.id}`, { method: 'DELETE' })
+                        mutate(`/api/memory/facts/${fact.id}`, { method: 'DELETE' }, 'Fact deleted.')
                       }
                     />
                   ))}
@@ -158,13 +173,17 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
                 <SummaryList
                   entries={arcs}
                   onSave={(entryId, content) =>
-                    mutate(`/api/memory/summaries/${entryId}`, {
-                      method: 'PATCH',
-                      body: JSON.stringify({ content }),
-                    })
+                    mutate(
+                      `/api/memory/summaries/${entryId}`,
+                      {
+                        method: 'PATCH',
+                        body: JSON.stringify({ content }),
+                      },
+                      'Arc saved.',
+                    )
                   }
                   onDelete={(entryId) =>
-                    mutate(`/api/memory/summaries/${entryId}`, { method: 'DELETE' })
+                    mutate(`/api/memory/summaries/${entryId}`, { method: 'DELETE' }, 'Arc deleted.')
                   }
                 />
               )}
@@ -186,13 +205,21 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
                 <SummaryList
                   entries={scenes}
                   onSave={(entryId, content) =>
-                    mutate(`/api/memory/summaries/${entryId}`, {
-                      method: 'PATCH',
-                      body: JSON.stringify({ content }),
-                    })
+                    mutate(
+                      `/api/memory/summaries/${entryId}`,
+                      {
+                        method: 'PATCH',
+                        body: JSON.stringify({ content }),
+                      },
+                      'Scene summary saved.',
+                    )
                   }
                   onDelete={(entryId) =>
-                    mutate(`/api/memory/summaries/${entryId}`, { method: 'DELETE' })
+                    mutate(
+                      `/api/memory/summaries/${entryId}`,
+                      { method: 'DELETE' },
+                      'Scene summary deleted.',
+                    )
                   }
                 />
               )}

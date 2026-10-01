@@ -18,8 +18,9 @@ import { encryptKey } from '../../../src/lib/crypto';
  *
  *  - a supersede target that was not in the list is DROPPED, because retiring the wrong
  *    fact silently removes a true one from the prompt;
- *  - superseding happens BEFORE the new fact lands, so there is never a turn where two
- *    contradictory facts are both active.
+ *  - the retire and the insert commit together, so there is never a committed turn where
+ *    two contradictory facts are both active — and `superseded_by` can name the
+ *    replacement, which only has an id once it exists.
  */
 
 const MIGRATIONS = [
@@ -85,6 +86,11 @@ function makeEnv(): { env: Env; db: Database } {
   );
 
   const DB = {
+    async batch(statements: Array<{ run: () => Promise<unknown> }>) {
+      const out = [];
+      for (const statement of statements) out.push(await statement.run());
+      return out;
+    },
     prepare(sql: string) {
       const trimmed = sql.replace(/\s+/g, ' ').trim();
       let params: unknown[] = [];
@@ -138,6 +144,14 @@ const factsOf = (db: Database): Array<{ text: string; status: string }> =>
     status: string;
   }>;
 
+/** `superseded_by` per fact, keyed by text, which is what the Memory viewer renders. */
+const supersededBy = (db: Database): Record<string, string | null> => {
+  const rows = db
+    .query('SELECT text, superseded_by FROM facts')
+    .all() as Array<{ text: string; superseded_by: string | null }>;
+  return Object.fromEntries(rows.map((row) => [row.text, row.superseded_by]));
+};
+
 describe('extractFacts', () => {
   test('writes the facts the model returns', async () => {
     const { env, db } = makeEnv();
@@ -178,6 +192,44 @@ describe('extractFacts', () => {
       { text: 'The debt is forty crowns.', status: 'superseded' },
       { text: 'The debt is sixty crowns.', status: 'active' },
     ]);
+  });
+
+  test('names the REPLACEMENT in superseded_by, never the superseded row itself', async () => {
+    // The column is rendered as user-visible prose in the Memory viewer, so pointing it at
+    // the superseded fact's own id showed the reader "superseded by <its own id>".
+    const { env, db } = makeEnv();
+    seedFact(db, 'f1', 'The debt is forty crowns.');
+    stubProvider(
+      JSON.stringify({
+        facts: [{ text: 'The debt is sixty crowns.' }],
+        supersede: [{ id: 1 }],
+      }),
+    );
+
+    await extractFacts(env, 'chat-1', 0, 9999);
+    const replacement = db
+      .query("SELECT id FROM facts WHERE text = 'The debt is sixty crowns.'")
+      .get() as { id: string };
+
+    const by = supersededBy(db);
+    expect(by['The debt is forty crowns.']).toBe(replacement.id);
+    expect(by['The debt is forty crowns.']).not.toBe('f1');
+  });
+
+  test('leaves superseded_by null when there is no single replacement', async () => {
+    // Two new facts were extracted, so naming one of them as "the replacement" would be a
+    // guess; zero facts means there is nothing to name at all.
+    const { env, db } = makeEnv();
+    seedFact(db, 'f1', 'The debt is forty crowns.');
+    stubProvider(
+      JSON.stringify({
+        facts: [{ text: 'The debt is sixty crowns.' }, { text: 'The debt was paid.' }],
+        supersede: [{ id: 1 }],
+      }),
+    );
+
+    await extractFacts(env, 'chat-1', 0, 9999);
+    expect(supersededBy(db)['The debt is forty crowns.']).toBeNull();
   });
 
   test('accepts a numeric string for the supersede target', async () => {

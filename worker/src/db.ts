@@ -100,6 +100,45 @@ export const DEFAULT_SYSTEM_PROMPT =
   'You are a skilled collaborative fiction writer. Write in the present tense, ' +
   'in prose, staying in character. Never speak or act for {{user}}.';
 
+/**
+ * Sampler defaults for an install that has never set any.
+ *
+ * The value is not arbitrary. A model driven at an unset temperature follows its own
+ * distribution rather than the prompt, and the preset family this app's craft rules are
+ * tuned against ships `temperature 0.7 / top_p 0.8`. Every install starts with an empty
+ * `knobs` row, so the unset case is the common case and the default has to be the good
+ * one. An install that HAS set knobs keeps them verbatim — only the empty case changes.
+ *
+ * Without this, `worker/src/providers/kenari.ts` spread `...req.knobs` over nothing and
+ * no `temperature` or `top_p` reached the provider at all.
+ */
+export const DEFAULT_KNOBS: Record<string, number> = { temperature: 0.7, top_p: 0.8 };
+
+/**
+ * The stored knob map, with the empty one replaced by `DEFAULT_KNOBS`.
+ *
+ * The emptiness test is on the PARSED map, not on the column text. The settings row for an
+ * install that has never touched the knob editor holds the two characters `{}` — a truthy
+ * string that parses to an empty object — so a truthiness check on `raw.knobs` would hand
+ * an empty map to the provider and leave the defaults unreachable, which is exactly the
+ * defect they exist to fix.
+ *
+ * A map with anything in it is used verbatim: an install that set `temperature` to 0.2
+ * meant 0.2, and quietly adding `top_p` beside it would be a second opinion nobody asked
+ * for. A malformed value falls back rather than throwing, on the same principle as the
+ * rest of this reader — a corrupt settings row must not break every turn.
+ */
+function parseKnobs(raw: string | undefined): Record<string, number | string | string[]> {
+  if (!raw) return DEFAULT_KNOBS;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, number | string | string[]>;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return DEFAULT_KNOBS;
+    return Object.keys(parsed).length > 0 ? parsed : DEFAULT_KNOBS;
+  } catch {
+    return DEFAULT_KNOBS;
+  }
+}
+
 export async function loadChatSettings(env: Env): Promise<ChatSettings> {
   const raw = await getSettings(env);
   return {
@@ -109,7 +148,7 @@ export async function loadChatSettings(env: Env): Promise<ChatSettings> {
     authorsNote: raw.authorsNote ?? '',
     maxTokens: Number(raw.maxTokens ?? 1024) || 1024,
     contextBudget: Number(raw.contextBudget ?? 16384) || 16384,
-    knobs: raw.knobs ? (JSON.parse(raw.knobs) as Record<string, number | string | string[]>) : {},
+    knobs: parseKnobs(raw.knobs),
     idrPerUsd: raw.idrPerUsd ? Number(raw.idrPerUsd) : null,
     loreScanDepth: Number(raw.loreScanDepth ?? 4) || 4,
     loreTokenBudget: Number(raw.loreTokenBudget ?? 1024) || 1024,

@@ -3,25 +3,6 @@ import type { Role } from './types';
 export interface AssembleInput {
   /** Static. NEVER contains time, date, or IDs. */
   systemPrompt: string;
-  /**
-   * The preset's own prompt list, already resolved and ordered.
-   *
-   * When present this REPLACES the standard head composition entirely. The preset's
-   * order names its own positions for the card's description, the persona and the
-   * examples, so emitting both would send the same content twice in a different order —
-   * and the preset's order is the one its author tested.
-   *
-   * Null for a preset with no prompt list, which is every preset that only carries
-   * sampler values. Those assemble exactly as Tessera did before this existed.
-   */
-  presetHead?: Array<{ role: Role; content: string }> | null;
-  /**
-   * Preset entries that sit AFTER the history but before Tessera's own tail blocks.
-   *
-   * Tessera's memory/state/cast blocks stay last on purpose: they are the app's own
-   * per-turn state, and a preset cannot know about them.
-   */
-  presetAfterHistory?: Array<{ role: Role; content: string }> | null;
   character: {
     name: string;
     description: string;
@@ -32,6 +13,13 @@ export interface AssembleInput {
   persona: { name: string; description: string } | null;
   /** Always-on, FIXED order by id. */
   lorebook: Array<{ id: string; content: string }>;
+  /**
+   * The preset's pre-history instructions, emitted last in the head when present.
+   *
+   * Head, not tail: that is what "pre-history" means — it precedes the conversation and
+   * frames it — and the value is static per chat, so it belongs in the cached prefix.
+   */
+  preHistory?: string;
   /**
    * How the scene should be written. Static for the chat's life, so it lives in the cached
    * prefix; changing it costs one cache miss, which is correct for a deliberate act.
@@ -59,6 +47,14 @@ export interface AssembleInput {
      * system text before the reader's message, it outweighs the conversation that follows.
      */
     contentPolicy?: string;
+    /**
+     * The vocalisation block, when the reader has it on.
+     *
+     * Tail-only for the same measured reason as `contentPolicy`: in the prefix the model
+     * ignored it and described every sound instead of writing it; in the tail the same
+     * text produced the sounds. See `renderVocalisation`.
+     */
+    vocalisation?: string;
     authorsNote?: string;
     /** Card `post_history_instructions`. Tail-only: cannot perturb the cached prefix. */
     postHistoryInstructions?: string;

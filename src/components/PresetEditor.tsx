@@ -4,21 +4,16 @@ import type { ModelInfo } from '../lib/apiTypes';
 import { messageOf, useAsync } from '../lib/hooks';
 import type { PresetConfig, ResponseLength } from '../lib/presets/presetConfig';
 import { RESPONSE_LENGTHS } from '../lib/presets/presetConfig';
-import type { PromptEntry } from '../lib/presets/types';
 import { KnobEditor } from './KnobEditor';
-import { PromptListEditor } from './PromptListEditor';
+import { useToast } from './Toast';
 
 /** One preset, as `/api/presets/:id` returns it. */
 export interface PresetDetail {
   id: string;
   name: string;
-  kind: string;
   knobs: Record<string, number | string | string[]>;
   /** Always complete: the Worker runs `parsePresetConfig` before it answers. */
   config: PresetConfig;
-  regex: unknown[];
-  /** The imported prompt list, rendered as the tick list. */
-  prompts: PromptEntry[];
   created_at: number;
   updated_at: number;
 }
@@ -27,14 +22,11 @@ export interface PresetDetail {
 export interface PresetSummary {
   id: string;
   name: string;
-  kind: string;
   created_at: number;
   updated_at: number;
   /** `json_each` count over the stored knob map. */
   knob_count: number;
-  /** SQLite 0/1, not booleans — the columns are `(x IS NOT NULL)` expressions. */
-  has_regex: number;
-  has_prompts: number;
+  /** SQLite 0/1, not a boolean — the column is an `(x IS NOT NULL)` expression. */
   has_config: number;
 }
 
@@ -75,8 +67,8 @@ export function PresetEditor({
   const [knobsJson, setKnobsJson] = useState(() => JSON.stringify(numericKnobs(preset.knobs)));
   const [config, setConfig] = useState<PresetConfig>(preset.config);
   const [stopText, setStopText] = useState(() => (preset.config.stopStrings ?? []).join('\n'));
-  const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
   // The preset's own model list, independent of what the chat is set to: this is the
   // model the preset will force when it is attached.
@@ -88,16 +80,10 @@ export function PresetEditor({
     [config.provider],
   );
 
-  const carried = Object.entries(preset.knobs).filter(([, value]) => typeof value !== 'number');
-
   async function save() {
     setBusy(true);
-    setStatus(null);
     try {
-      // Non-numeric knobs are merged back untouched: they came from an import that knew
-      // what they were (a stop sequence list, a sampler-chain string), and a form that
-      // cannot edit them must not be a form that deletes them.
-      const knobs: Record<string, number | string | string[]> = { ...Object.fromEntries(carried) };
+      const knobs: Record<string, number> = {};
       for (const [key, value] of Object.entries(JSON.parse(knobsJson) as Record<string, number>)) {
         if (typeof value === 'number' && Number.isFinite(value)) knobs[key] = value;
       }
@@ -111,9 +97,10 @@ export function PresetEditor({
           config: { ...config, stopStrings: splitStops(stopText) },
         }),
       });
+      toast.success('Preset saved.');
       onSaved();
     } catch (cause) {
-      setStatus(messageOf(cause));
+      toast.failure(messageOf(cause));
     } finally {
       setBusy(false);
     }
@@ -133,21 +120,6 @@ export function PresetEditor({
         value={knobsJson}
         onChange={setKnobsJson}
       />
-
-      {carried.length > 0 && (
-        <div className="space-y-1">
-          <p className="text-[var(--text-xs)] text-[var(--ink-dim)]">
-            Carried through from the import — not editable here, and preserved on save:
-          </p>
-          <ul className="space-y-0.5 font-mono text-[var(--text-xs)] text-[var(--ink-faint)]">
-            {carried.map(([key, value]) => (
-              <li key={key}>
-                {key} = {JSON.stringify(value)}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
 
       <section className="space-y-3">
         <h3 className="text-[var(--text-sm)] font-semibold uppercase tracking-wide text-[var(--ink-dim)]">
@@ -231,11 +203,6 @@ export function PresetEditor({
           onChange={(value) => setConfig({ ...config, assistantPrefill: value })}
           rows={1}
         />
-        <PromptListEditor
-          entries={preset.prompts}
-          order={config.promptOrder ?? []}
-          onChange={(next) => setConfig({ ...config, promptOrder: next })}
-        />
 
         <ConfigText
           label="Stop strings"
@@ -309,16 +276,6 @@ export function PresetEditor({
             onChange={(value) => setConfig({ ...config, includeNames: value })}
           />
           <ConfigFlag
-            label="Ban emojis"
-            checked={config.banEmojis === true}
-            onChange={(value) => setConfig({ ...config, banEmojis: value })}
-          />
-          <ConfigFlag
-            label="Trim an unfinished final sentence"
-            checked={config.trimIncompleteSentences === true}
-            onChange={(value) => setConfig({ ...config, trimIncompleteSentences: value })}
-          />
-          <ConfigFlag
             label="Let a matched lore entry trigger further entries"
             checked={config.loreRecursive === true}
             onChange={(value) => setConfig({ ...config, loreRecursive: value })}
@@ -338,7 +295,6 @@ export function PresetEditor({
         <button type="button" className="btn min-h-10" onClick={onCancel} disabled={busy}>
           Cancel
         </button>
-        {status && <span className="text-[var(--text-sm)] text-[var(--danger)]">{status}</span>}
       </div>
     </section>
   );

@@ -56,6 +56,8 @@ export interface Craft {
   earnedKnowledge: boolean;
   /** NPCs have their own wants and may refuse, lose interest, or disagree. */
   independentNpcs: boolean;
+  /** Write what the body sounds like, and let speech break under stress. */
+  vocalisation: boolean;
   /** Track character-to-character relationships in world state. */
   bonds: boolean;
   /** Track unresolved plot threads in world state. */
@@ -70,6 +72,7 @@ export const DEFAULT_CRAFT: Craft = {
   interiority: true,
   earnedKnowledge: true,
   independentNpcs: true,
+  vocalisation: true,
   bonds: false,
   threads: false,
 };
@@ -177,12 +180,12 @@ export const REGISTER_OPTIONS: Array<{
 ];
 
 /**
- * The seven switches the craft panel shows, in the order it shows them, with
+ * The eight switches the craft panel shows, in the order it shows them, with
  * `contentPolicy` first — it is the one a reader arriving from a preset is most likely to
  * change, because their preset already carries its own instructions.
  */
 export const CRAFT_TOGGLES: Array<{
-  key: 'contentPolicy' | 'antiSlop' | 'interiority' | 'earnedKnowledge' | 'independentNpcs' | 'bonds' | 'threads';
+  key: 'contentPolicy' | 'antiSlop' | 'interiority' | 'earnedKnowledge' | 'independentNpcs' | 'vocalisation' | 'bonds' | 'threads';
   label: string;
   description: string;
 }> = [
@@ -211,6 +214,11 @@ export const CRAFT_TOGGLES: Array<{
     key: 'independentNpcs',
     label: 'Independent NPCs',
     description: 'NPCs have their own wants and may refuse, lose interest, or disagree.',
+  },
+  {
+    key: 'vocalisation',
+    label: 'Vocalisation',
+    description: 'Write what the body sounds like, and let speech break under stress.',
   },
   {
     key: 'bonds',
@@ -299,6 +307,7 @@ function parseCraft(value: unknown, fallback: Craft): Craft {
     interiority: flag('interiority'),
     earnedKnowledge: flag('earnedKnowledge'),
     independentNpcs: flag('independentNpcs'),
+    vocalisation: flag('vocalisation'),
     bonds: flag('bonds'),
     threads: flag('threads'),
   };

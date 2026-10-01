@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { renderCraftBlock, renderContentPolicy } from './craftBlock';
+import { renderCraftBlock, renderContentPolicy, renderVocalisation } from './craftBlock';
 import { DEFAULT_CRAFT, type Craft } from '../scene/setup';
 
 /**
@@ -21,10 +21,13 @@ describe('renderCraftBlock', () => {
     expect(block).not.toContain('<craft_content>');
   });
 
-  test("pov 'off' drops the person instruction and leaves no blank line", () => {
+  test("pov 'off' drops the person instruction without leaving an empty block", () => {
     const block = renderCraftBlock({ ...DEFAULT_CRAFT, pov: 'off' });
     expect(block).not.toContain('Address the reader as "you"');
-    expect(block).not.toMatch(/\n\n/);
+    // An `'off'` POV contributes nothing at all. The assertion is that the block does not
+    // OPEN on a blank line (an empty pushed segment), not that the document has no blank
+    // lines anywhere — the blocks themselves are separated by one.
+    expect(block).not.toMatch(/<craft>\n\n/);
   });
 
   test("register 'off' drops all three register sentences", () => {
@@ -43,6 +46,7 @@ describe('renderCraftBlock', () => {
       interiority: false,
       earnedKnowledge: false,
       independentNpcs: false,
+      vocalisation: false,
       bonds: false,
       threads: false,
     };
@@ -59,6 +63,7 @@ describe('renderCraftBlock', () => {
       interiority: true,
       earnedKnowledge: false,
       independentNpcs: true,
+      vocalisation: true,
       bonds: true,
       threads: true,
     };
@@ -78,6 +83,39 @@ describe('renderCraftBlock', () => {
     for (const variant of variants) {
       expect(renderCraftBlock(variant)).not.toBe(base);
     }
+  });
+
+  test('vocalisation is NOT in the prefix, whatever its toggle says', () => {
+    // It is a tail renderer (`renderVocalisation`) because position decides whether the
+    // model obeys it — in the prefix the same text was ignored. Pinning the absence here
+    // is what stops it being moved back by accident.
+    expect(renderCraftBlock(DEFAULT_CRAFT)).not.toContain('<craft_vocalisation>');
+    expect(renderCraftBlock({ ...DEFAULT_CRAFT, vocalisation: false })).not.toContain(
+      '<craft_vocalisation>',
+    );
+  });
+});
+
+describe('renderVocalisation', () => {
+  test('is emitted when the toggle is on, and carries a concrete sound', () => {
+    const block = renderVocalisation(DEFAULT_CRAFT);
+    expect(block).toContain('<craft_vocalisation>');
+    expect(block).toContain('A-Ah');
+    // The restraint sentence is load-bearing: without it the block is a list of sounds
+    // and the model over-generates, which is the measured failure mode it exists to
+    // prevent (arXiv 2412.12710: 12.9 insertions/sample against a human 5.0).
+    expect(block).toMatch(/most lines carry no sound at all/i);
+  });
+
+  test('is the empty string when the toggle is off', () => {
+    expect(renderVocalisation({ ...DEFAULT_CRAFT, vocalisation: false })).toBe('');
+  });
+
+  test('is independent of every other field', () => {
+    // The other craft blocks must not be able to switch it on or off.
+    const base = renderVocalisation(DEFAULT_CRAFT);
+    expect(renderVocalisation({ ...DEFAULT_CRAFT, pov: 'off', register: 'off' })).toBe(base);
+    expect(renderVocalisation({ ...DEFAULT_CRAFT, antiSlop: false, interiority: false })).toBe(base);
   });
 });
 

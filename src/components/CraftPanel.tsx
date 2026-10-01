@@ -7,6 +7,7 @@ import {
   REGISTER_OPTIONS,
   type Craft,
 } from '../lib/scene/setup';
+import { useToast } from './Toast';
 
 /**
  * How the scene is written, reachable from inside the chat.
@@ -28,22 +29,23 @@ export function CraftPanel({ chatId }: { chatId: string }) {
   );
 
   const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
+  const toast = useToast();
 
   const craft = data?.setup.craft;
 
   async function patch(change: Partial<Craft>) {
     if (!craft) return;
     setBusy(true);
-    setFailure(null);
     try {
       await apiJson(`/api/chats/${encodeURIComponent(chatId)}/scene`, {
         method: 'PATCH',
         body: JSON.stringify({ craft: { ...craft, ...change } }),
       });
+      // No success toast: the panel re-renders the server's echo, so the control moving is
+      // the confirmation. A failure is the thing that needs saying.
       reload();
     } catch (cause) {
-      setFailure(messageOf(cause));
+      toast.failure(messageOf(cause));
     } finally {
       setBusy(false);
     }
@@ -53,7 +55,6 @@ export function CraftPanel({ chatId }: { chatId: string }) {
     <div>
       {loading && <p className="sheet-sub">Loading…</p>}
       {error && <div className="note danger">{error}</div>}
-      {failure && <div className="note danger">{failure}</div>}
 
       {craft && (
         <>

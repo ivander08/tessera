@@ -5,6 +5,7 @@ import type { WorldState } from '../lib/state/schema';
 import { messageOf, useAsync } from '../lib/hooks';
 import { AppBar, BackLink } from '../components/AppBar';
 import { BondMeters, ThreadList } from '../components/StateMeters';
+import { useToast } from '../components/Toast';
 
 type Bonds = NonNullable<WorldState['bonds']>;
 type Threads = NonNullable<WorldState['threads']>;
@@ -109,8 +110,11 @@ export default function State({ embedded = false }: { embedded?: boolean } = {})
   // The meters write here rather than into `edits`, which is `Record<string, string>` and
   // cannot hold a structured value.
   const [structured, setStructured] = useState<{ bonds?: Bonds; threads?: Threads }>({});
+  // Only ever holds "Nothing changed.", which is not a save and must not claim to be one —
+  // so it stays inline rather than becoming a toast.
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
   const state = data?.state ?? {};
 
@@ -198,10 +202,10 @@ export default function State({ embedded = false }: { embedded?: boolean } = {})
       });
       setEdits({});
       setStructured({});
-      setStatus('Saved. The next turn will use this.');
+      toast.success('World state saved. The next turn will use it.');
       reload();
     } catch (cause) {
-      setStatus(messageOf(cause));
+      toast.failure(messageOf(cause));
     } finally {
       setBusy(false);
     }
@@ -214,10 +218,10 @@ export default function State({ embedded = false }: { embedded?: boolean } = {})
       await apiJson(`/api/state/${encodeURIComponent(id)}`, { method: 'DELETE' });
       setEdits({});
       setStructured({});
-      setStatus('Cleared.');
+      toast.success('World state cleared.');
       reload();
     } catch (cause) {
-      setStatus(messageOf(cause));
+      toast.failure(messageOf(cause));
     } finally {
       setBusy(false);
     }

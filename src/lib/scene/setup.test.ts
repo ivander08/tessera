@@ -112,11 +112,19 @@ describe('parseSceneSetup — craft', () => {
         interiority: true,
         earnedKnowledge: false,
         independentNpcs: true,
+        vocalisation: false,
         bonds: true,
         threads: false,
       },
     };
     expect(parseSceneSetup(JSON.parse(JSON.stringify(setup)))).toEqual(setup);
+  });
+
+  test('a patch turning vocalisation off leaves the other craft fields at the fallback', () => {
+    const parsed = parseSceneSetup({ craft: { vocalisation: false } });
+    expect(parsed.craft.vocalisation).toBe(false);
+    expect(parsed.craft.antiSlop).toBe(DEFAULT_CRAFT.antiSlop);
+    expect(parsed.craft.independentNpcs).toBe(DEFAULT_CRAFT.independentNpcs);
   });
 
   test('the content policy is a flag on craft, not a separate document', () => {

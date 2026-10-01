@@ -7,6 +7,7 @@ import { AppBar } from '../components/AppBar';
 import { Avatar } from '../components/Avatar';
 import { ConfirmPrompt } from '../components/ConfirmPrompt';
 import { NamePrompt } from '../components/NamePrompt';
+import { useToast } from '../components/Toast';
 
 /** `chat_count` comes back from `GET /api/characters` alongside the summary columns. */
 interface CharacterRow extends CharacterSummary {
@@ -56,8 +57,7 @@ export default function Characters() {
   );
   const navigate = useNavigate();
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
+  const toast = useToast();
   // The character being forked, while the name sheet is open. Null means no sheet.
   const [forking, setForking] = useState<CharacterRow | null>(null);
   // The character the reader has asked to delete, held until they confirm.
@@ -71,16 +71,15 @@ export default function Characters() {
 
   async function fork(character: CharacterRow, name: string) {
     setBusyId(character.id);
-    setStatus(null);
-    setFailure(null);
     try {
       const created = await apiJson<{ id: string }>('/api/characters/fork', {
         method: 'POST',
         body: JSON.stringify({ id: character.id, name }),
       });
+      toast.success(`Forked as "${name}".`);
       navigate(`/characters/${created.id}/edit`);
     } catch (cause) {
-      setFailure(`Could not fork ${character.name}: ${messageOf(cause)}`);
+      toast.failure(`Could not fork ${character.name}: ${messageOf(cause)}`);
     } finally {
       setBusyId(null);
       setForking(null);
@@ -89,15 +88,13 @@ export default function Characters() {
 
   async function remove(character: CharacterRow) {
     setBusyId(character.id);
-    setStatus(null);
-    setFailure(null);
     try {
       await apiJson(`/api/characters/${encodeURIComponent(character.id)}`, { method: 'DELETE' });
-      setStatus(`Deleted ${character.name}.`);
+      toast.success(`Deleted ${character.name}.`);
       setConfirming(null);
       reload();
     } catch (cause) {
-      setFailure(`Could not delete ${character.name}: ${messageOf(cause)}`);
+      toast.failure(`Could not delete ${character.name}: ${messageOf(cause)}`);
     } finally {
       setBusyId(null);
     }
@@ -142,8 +139,6 @@ export default function Characters() {
 
         {loading && <p className="sheet-sub">Loading…</p>}
         {error && <div className="note danger">{error}</div>}
-        {failure && <div className="note danger">{failure}</div>}
-        {status && <div className="note">{status}</div>}
 
         {data && data.length === 0 && (
           <div className="empty">
@@ -164,7 +159,7 @@ export default function Characters() {
           </div>
         )}
 
-        <div className="plates" style={failure || status ? { marginTop: 14 } : undefined}>
+        <div className="plates" style={{ marginTop: 14 }}>
           {data?.map((character) => {
             const shown = character.shownName ?? character.name;
             const busy = busyId === character.id;

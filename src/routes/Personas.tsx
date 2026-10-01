@@ -4,6 +4,7 @@ import { messageOf, useAsync } from '../lib/hooks';
 import { AppBar } from '../components/AppBar';
 import { Avatar } from '../components/Avatar';
 import { ConfirmPrompt } from '../components/ConfirmPrompt';
+import { useToast } from '../components/Toast';
 
 /** The row shape `/api/personas` returns. */
 interface PersonaSummary {
@@ -36,10 +37,12 @@ export default function Personas() {
     [],
   );
 
-  const [status, setStatus] = useState<string | null>(null);
+  // `problem` stays: it is the inline message for a *validation* refusal from the form
+  // (an empty name), which points at the field that caused it. Write failures go to a toast.
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const toast = useToast();
   // The persona the reader has asked to delete, held until they confirm.
   const [confirming, setConfirming] = useState<PersonaSummary | null>(null);
 
@@ -51,14 +54,13 @@ export default function Personas() {
   async function mutate(run: () => Promise<unknown>, done: string): Promise<boolean> {
     setBusy(true);
     setProblem(null);
-    setStatus(null);
     try {
       await run();
-      setStatus(done);
+      toast.success(done);
       reload();
       return true;
     } catch (cause) {
-      setProblem(messageOf(cause));
+      toast.failure(messageOf(cause));
       return false;
     } finally {
       setBusy(false);
@@ -116,7 +118,6 @@ export default function Personas() {
       {loading && <p className="sheet-sub" style={{ marginTop: 16 }}>Loading…</p>}
       {error && <div className="note danger" style={{ marginTop: 16 }}>{error}</div>}
       {problem && <div className="note danger" style={{ marginTop: 16 }}>{problem}</div>}
-      {status && <p className="form-hint" style={{ marginTop: 16 }}>{status}</p>}
 
       <section className="section">
         <span className="eyebrow">

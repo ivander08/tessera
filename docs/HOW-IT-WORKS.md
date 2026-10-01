@@ -1,8 +1,8 @@
 # Tessera — how the roleplay features work
 
-A reference for the questions asked: the two preset types, the full text of every
-"how it's written" prompt, how relationship/thread tracking works, whether facts /
-arcs / scenes / recall / notes actually run, and how Tessera compares to other apps.
+A reference for the questions asked: what a preset is, the full text of every "how it's
+written" prompt, how relationship/thread tracking works, whether facts / arcs / scenes /
+recall / notes actually run, and how Tessera compares to other apps.
 
 **Everything here is grounded in source.** Where a claim is an inference rather than
 an observation it is marked. Where something is stored but does nothing, that is
@@ -14,146 +14,85 @@ called out as a bug rather than described as a feature.
 
 ---
 
-## 1. The two preset types
+## 1. What a preset is
 
-There are **two independent classifications** in the code, and the one you probably
-mean by "two types" is not the one stored in the database.
+A preset is an **authored document**. It is the thing you write: a system prompt, pre-
+and post-history instructions, an impersonation prompt, an assistant prefill, stop
+strings, reply-length rule, lorebook scan settings, and the sampler values and model it
+was tuned for. Attach one to a chat from that chat's menu.
 
-### 1a. `kind` — where the file came from (a label)
+That is the whole of it. There is no second preset type.
 
-`migrations/0003_presets.sql`:
+### What is NOT a preset any more
+
+The SillyTavern / Freaky Frankenstein importer is gone, and with it the three things
+that existed only to carry an imported file's internals:
+
+| Removed | What it was |
+|---|---|
+| `src/lib/presets/importSt.ts` | the normalizer for ST's two sampler namespaces |
+| `src/lib/presets/ff5.ts` | the FF5 kind, forced by a checkbox |
+| `src/lib/presets/resolvePrompts.ts` | the prompt-list resolver |
+| `src/lib/presets/regexScripts.ts` | the regex-script engine |
+| `presets.kind`, `presets.prompt_json`, `presets.regex_json` | the three columns they wrote |
+
+The techniques from that preset family worth keeping were **ported into Tessera's own
+craft blocks** (§2), so every chat gets them with no file to import. The rows that
+carried an imported prompt list or regex pack were deleted by
+`migrations/0013_presets_authored.sql` — a row whose prompt list has no reader is not a
+preset that still works, it is one whose behaviour would silently change.
+
+### The schema
 
 ```sql
-kind TEXT NOT NULL CHECK (kind IN ('textgen','chat','ff5')),
+CREATE TABLE presets (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  knobs_json  TEXT NOT NULL,
+  config_json TEXT,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER
+) STRICT;
 ```
 
-| `kind` | What it is |
-|---|---|
-| `textgen` | SillyTavern **text-completion** namespace. Carries DRY / XTC sampler knobs. |
-| `chat` | SillyTavern **chat-completion** namespace. DRY / XTC deliberately absent. |
-| `ff5` | Freaky Frankenstein bundle. Forced by the caller via a checkbox, not detected. No sampler knobs at all. |
-
-So there are really **three** kinds. `ff5` exists because an FF5 file is
-byte-for-byte a chat-completion preset — no shape check can separate them — so the
-import dialog asks, and ticking it keeps the prompts and the regex pack together
-(`src/routes/Presets.tsx:244`).
-
-`kind` is **cosmetic**: it renders as a tag in the preset list and drives one
-validation (`requiresRegexPack`, only meaningful for FF5). It does not change how a
-preset is assembled into a prompt.
-
-### 1b. Sampler-only vs prompt-list — the distinction that actually matters
-
-This is the behavioural split, decided in `worker/src/effective.ts` and consumed in
-`worker/src/prompt.ts`:
-
-```ts
-const presetActive =
-  presetResolved !== null &&
-  (presetResolved.head.length > 0 ||
-    presetResolved.afterHistory.length > 0 ||
-    presetResolved.injected.length > 0);
-```
-
-| | **Sampler-only preset** | **Prompt-list preset** |
-|---|---|---|
-| Carries | `knobs` (+ optional config) | an ordered list of prompt entries |
-| `presetActive` | `false` | `true` |
-| Tessera's own head | used (system prompt, card, persona, lorebook) | **replaced entirely** |
-| What it changes | the numbers sent to the provider | the whole system prompt, the card's placement, the persona, the examples, the history |
-| Extra powers | — | depth-injected prompts spliced into the transcript; regex scripts rewriting history |
-
-**A sampler-only preset changes the numbers and nothing else.** A prompt-list preset
-takes over the head — which is what makes an imported preset mean what its author
-intended.
-
-There is a deliberate edge case: **if every entry is toggled off, Tessera falls back
-to its standard head** rather than sending a prompt with no system message. That is
-what makes the "All off" button safe to press.
-
----
-
-## 2. What an imported preset carries
-
-### What the importer actually reads
-
-`parsePresetFile` returns exactly four things: **knobs, regex scripts, the prompt
-list, and the prompt order.** Everything else in an ST file is never read.
+`knobs_json` holds sampler values and `config_json` everything else, because the two
+mean different things: a knob is a number the provider either accepts or refuses, so the
+editor gates it on the selected model's advertised support, while the config is prompt
+structure and is independent of the model entirely.
 
 ### Field-by-field: is it consumed at runtime?
 
 | Field | Consumed? | Where |
 |---|---|---|
 | `knobs` (temperature, top_p, …) | ✅ | `turn.ts` → provider request |
-| `regex` scripts | ✅ | prompt side + display side |
-| `prompts` + `promptOrder` | ✅ | `resolvePrompts` |
 | `provider` / `model` | ✅ | provider call |
 | `systemPrompt` | ✅ | head |
+| `preHistoryInstructions` | ✅ | head, last before the history |
 | `postHistoryInstructions` | ✅ | tail |
+| `impersonationPrompt` | ✅ | `impersonate` turn instruction |
 | `assistantPrefill` | ✅ | trailing assistant message |
 | `includeNames` | ✅ | history row prefixes |
 | `stopStrings` | ✅ | provider request |
 | `maxTokens` / `contextSize` | ✅ | turn + budget |
 | `loreScanDepth` / `loreTokenBudget` / `loreRecursive` | ✅ | lorebook matching |
-| `responseLength` | ✅ | reply-length rule |
-| `preHistoryInstructions` | ❌ **stored only** | editor only |
-| `impersonationPrompt` | ❌ **stored only** | editor only |
-| `banEmojis` | ❌ **stored only** | editor only |
-| `trimIncompleteSentences` | ❌ **stored only** | editor only |
+| `responseLength` / `responseLengthCustom` | ✅ | reply-length rule |
 
-**The last four are dead settings.** They persist, they have working checkboxes in
-the preset editor, and nothing reads them. `impersonate` uses its own hardcoded
-instruction instead of `impersonationPrompt`.
+`banEmojis` and `trimIncompleteSentences` were removed earlier: stored, edited, and never
+read by anything, which is worse than no control at all. `impersonate` falls back to its
+built-in instruction when the preset sets no `impersonationPrompt`.
 
-### The prompt-list path
+### Where the sampler defaults come from
 
-`resolvePrompts` walks the enabled entries in order and sorts each into one of three
-buckets:
-
-1. **Markers** — an entry that carries no content but names a slot. Tessera fills it
-   with its own rendering: `charDescription` → the card's description,
-   `dialogueExamples` → `mesExample`, `scenario` → the card's scenario, and so on. A
-   marker whose block is empty is skipped rather than emitted as an empty segment.
-2. **Depth injections** — spliced *into the transcript* at a given distance from the
-   end, not into the static head.
-3. **Static** — before or after the history, split at the `chatHistory` entry, which
-   is the pivot.
-
-### Regex scripts
-
-Two axes:
-
-- **`promptOnly`** — applies to what is sent to the model, not what you see. This is
-  how a reply whose chain-of-thought was never stripped is cleaned before it becomes
-  history and trains the next turn.
-- **`markdownOnly`** — applies to what you see, not the prompt. A cosmetic colouriser
-  must not spend prompt tokens.
-
-Neither set → both sides. `placement` selects user-side vs AI-side; absent
-`placement` defaults to AI output, because every pre-`placement` script targets the
-reply.
-
-### What is dropped on import
-
-ST fields silently ignored: `assistant_prefill`, `custom_stopping_strings`,
-`names_behavior`, `wrap_in_quotes`, `squash_system_messages`, `continue_prefill`,
-`continue_postfix`, `use_sysprompt`, bias presets, `impersonation_prompt`, and all
-Instruct/Context-Template fields. The llama.cpp sampler chain is refused outright and
-reported in `dropped`.
-
-Prompt-entry fields discarded: `injection_order`, `injection_trigger`,
-`forbid_overrides`, `system_prompt`, `extension`, `position`.
-
-**`injection_trigger` matters.** ST can gate a prompt to fire only on Continue, or
-only on Regenerate. Tessera has no generation-type gating, so a prompt gated to
-"Continue only" in ST **fires on every turn** in Tessera.
-
-Per-character prompt order is also collapsed: Tessera reads only the first
-`{character_id, order}` block, since it has one order per preset.
+An install that has never opened the knob editor stores the literal `{}`, which is an
+empty map rather than an unset one. `worker/src/db.ts` replaces the empty map with
+`DEFAULT_KNOBS` — `temperature 0.7`, `top_p 0.8` — because a model driven at an unset
+temperature follows its own distribution rather than the prompt, and those are the values
+the preset family these craft rules are tuned against ships. A preset's own knobs
+replace the global ones wholesale.
 
 ---
 
-## 3. "How it's written" — the full prompt text
+## 2. "How it's written" — the full prompt text
 
 Nine controls, all per-chat, all in the **cached prefix** except the content policy.
 
@@ -169,15 +108,18 @@ Nine controls, all per-chat, all in the **cached prefix** except the content pol
 Address the reader as "you". Never write their actions, words or thoughts.
 Concrete and visual. Name what is in the room, what it sounds like, what it does.
 <craft_antislop>
-Write what a thing IS. One direct assertion. No negated foil ("not X, but Y") and no
-balanced halves — polished antithesis is the fingerprint of a language model.
+Write what a thing IS. One direct assertion; no negated foil, no balanced halves.
+The shape counts whatever the wording: "not X, but Y" | "isn't X — it's Y" | "not just
+X, but Y" | "X, not Y" | "less X than Y" | "no X, only Y" | "X? No. Y."
+Written as: the assertion alone, then one concrete specific that earns the emphasis.
 A spoken line carries content, never the announcement that content is coming. Do not
 present, frame, or brief before the point.
 Force comes from words and action, not punctuation. Do not strand a modifier or a
 fragment as a sentence for rhythm.
 Vary list length. Three parallel items is machine cadence; use one strong detail, or
 two, or occasionally four.
-Register a new stimulus once. Do not re-describe it, including in different words.
+Register a new stimulus once. Do not re-describe it, including in different words. Do
+not restate a fact the reader just read; the second telling is the tell.
 These do not appear: breath hitching, breath catching, husky, pupils blown wide,
 pupils dilated, predatory, ozone, a shiver ran down, barely above a whisper, the air
 was thick with, something shifted in.
@@ -186,24 +128,69 @@ was thick with, something shifted in.
 NPC interiority is brief and tactical: a thought that changes what that character does
 next, never an essay. The reader's interior is never written — not their thoughts,
 their feelings, or what they notice about themselves.
+
+An NPC speaks only to what it can observe. The reader's wants, sincerity and conviction
+are not observable, so no NPC line asserts them — as praise, as challenge, or as an
+order. "You're someone who…", "you want this", "I know you mean it" are all the same
+move. Written as: the evidence that produced the read — name the specific thing the
+reader did and react to that. An NPC may voice a guess, in a form the reader can
+contradict next turn; a flat verdict is never a guess.
 </craft_interiority>
 <craft_earned_knowledge>
 An NPC knows only what they witnessed or were explicitly told. No knowledge bridges
 between scenes: an NPC in one room does not know what happened in another, and does
 not know it by scent, intuition, or atmosphere. Treat people they have just met as
 strangers.
+
+Check the line of sight before a detail is revealed. A closed door, a wall, a distance,
+a gag or a phone left in another room blocks it — describe the obstruction, not what
+was behind it. A stranger is answered as a stranger: an NPC who was not told does not
+already know, and says so in their own voice rather than explaining that they do not.
+
+Sound is blocked by walls unless it is loud enough to carry: an NPC behind a closed
+door does not hear what was said through it.
 </craft_earned_knowledge>
 <craft_independent_npcs>
 NPCs have their own wants and act on them. They may disagree, refuse, lose interest,
 or push back, and they do not soften for the reader's satisfaction. Agreement is
 earned. Nothing about the reader — their stated interests, tastes, or history — is a
 source for an NPC's own traits.
+
+An NPC acts, then lets the reader react to what they did. No asking permission with a
+look — no waiting to see if it was okay, no pausing for approval before the thing
+happens. When an NPC wants something, they take the step and live with the answer.
+
+An NPC answers from their own wants, never by reflecting the reader's feelings back.
+At most one question a turn, and only one they want answered for their own reasons.
 </craft_independent_npcs>
 </craft>
 ```
 
-**Each block is switched by one control.** With all nine off, the function returns
-`''` and your preset or system prompt governs alone.
+**Each block is switched by one control.** With all ten off, the function returns
+`''` and your system prompt governs alone.
+
+### Where the preset techniques went
+
+The blocks above absorbed the strongest modules of the Realistic Frankenstein 2.2.1
+family when the importer was deleted, so the value of that preset family is in every
+chat rather than in a file:
+
+| Technique | Block |
+|---|---|
+| the construction list for antithesis — every wording of "not X, but Y" | `craft_antislop` |
+| the inner-state killswitch — an NPC cannot assert what the reader wants or is | `craft_interiority` |
+| the emphatic-restatement fix — the second telling is the tell | `craft_antislop` |
+| no stutter in a thought; one break per sentence, two at the very most | `craft_vocalisation` |
+| sound is blocked by walls unless it is loud enough to carry | `craft_earned_knowledge` |
+| the anti-therapy question cap — one question, and only for the NPC's own reasons | `craft_independent_npcs` |
+
+Every one of these **replaced or extended** an existing line rather than being appended:
+the Douyin README warns that a sparse-attention model *"HATES long, complex presets… the
+harder you micromanage a SA model, the more of your instructions it drops."* The net
+growth of `craftBlock.ts` was kept under 25 lines.
+
+`<craft_vocalisation>` is **not** in the prefix — it is emitted into the tail, beside the
+content policy, for the same measured reason. See below.
 
 ### Emitted in the tail
 
@@ -230,7 +217,63 @@ it must not be written as a lecture against one either. The prose takes no posit
 </craft_content>
 ```
 
-### The nine controls
+`<craft_vocalisation>` is emitted here too, immediately after the content policy. It is a
+list of **trigger → sound** bindings (pleasure, effort, fear, pain, crying, laughing,
+kissing, oral, throat, surprise…) plus the formatting levers — capitals for a shout,
+`?!` for disbelief, `—` for a cut-off, `...` for a trail-off, a stretched vowel for
+something drawn out, a `~` for something playful. The full text is in
+`src/lib/prompt/craftBlock.ts`.
+
+**Why it lives in the tail and not the prefix is measured, not stylistic.** In the prefix
+the model ignored it outright and wrote every sound as a *description* — "the breath comes
+out of her in a long wet rush" — which is the one thing the block forbids; the
+`vocalisation-on` eval scenario scored zero sounds across four turns while the identical
+prompt with the toggle OFF scored the same. The prompt was 110 tokens larger with the
+block on, so it was being sent; it was not being obeyed. Moved to the tail, the same text
+produced `"Th-there"`, `"M-mh"`, `"Ah"`. The mechanism is the one documented for the
+content policy: an output-format instruction read early loses to the model's prior of
+describing rather than transcribing.
+
+The restraint clauses are the other load-bearing half. The measured failure mode is
+**over**-generation, not under-generation: a fine-tuned model inserted **12.9 typical
+disfluencies per sample against a human baseline of 5.0**, with precision 52.2% against
+recall 85.8% (Hassan, Lison & Halvorsen, arXiv 2412.12710, Tables 4–5). Hence "most lines
+carry no sound at all", "never two lines in a row", "never the same sound twice in a
+scene". A block that lists sounds without the restraint rule makes output *worse*.
+
+**The block was iterated against measurements, not written once.** Five revisions, each
+scored on the `vocalisation-on` eval scenario (both sound probes, four turns) and on a
+17-beat per-category probe (`scripts/eval/probe.ts --turns-file
+scripts/eval/candidates/categories.txt --each`, which opens a fresh chat per beat so the
+categories cannot bleed into one another):
+
+| Revision | `vocalisation-on` failures | What changed |
+|---|---|---|
+| initial | 8 / 8 | a short list of sounds, in the **prefix** — ignored outright |
+| v1 | — | moved to the **tail**; prose appeared (`"Mmh—"`, `"Haa—"`) |
+| v3 | 6 / 8 | added the formatting levers, restraint reworded |
+| v5 | 1 / 8, then 7 / 8 | **trigger → sound bindings** |
+
+The v5 change is the one that mattered. The earlier revisions listed *vocabulary*; the
+model then wrote sounds only when a body was in physical extremity (sex, pain, effort) and
+kept **describing** them in every emotional beat — crying, pleading, fear, surprise all
+produced "her jaw worked" instead of a sound. Binding each sound to the **cause** that
+produces it ("fear, shock, alarm -> `Huhh?!`, a hard gasp"; "pleading, unable to say ->
+`P-Please..!`") closed that gap, and the multi-punctuation and ellipsis counts went from
+0 to 10 on the same probe set. The same finding appears in the shipped preset corpus as
+`Use emotional delivery via orthographic cues (all CAP words for yelling/emphasis,
+stammering/stutter shown in dialogue during fear/uncertainty` — a lever bound to a trigger,
+not a vocabulary list.
+
+**Two v5 numbers are given above because a single scenario is a noisy instrument.** The
+same block scored 1 failure on one run and 7 on the next; the difference was the scene the
+model chose to write, not the prompt — one run reached the explicit beat and produced
+`"Mmmch!"`, `"Haa… haa…"`, `"Nngh—"`, `"Hah."`, the other stayed at a slow-burn approach
+and produced `"Mmph—"`, `"Hn—"`. The **per-category probe** (16 beats, fresh chat each) is
+the stable measurement: it moved 32 → 50 devices between v4 and v5, with multi-punctuation
+and ellipsis going 0 → 10 each. Judge the block on that, not on one scenario's count.
+
+### The ten controls
 
 | Control | Default | Effect |
 |---|---|---|
@@ -239,6 +282,7 @@ it must not be written as a lecture against one either. The prose takes no posit
 | **NPC interiority** | on | `<craft_interiority>` |
 | **Earned knowledge** | on | `<craft_earned_knowledge>` |
 | **Independent NPCs** | on | `<craft_independent_npcs>` |
+| **Vocalisation** | on | `<craft_vocalisation>` |
 | **Track relationships** | **off** | bonds in world state |
 | **Track plot threads** | **off** | threads in world state |
 | **Narrative person** | Second person | or First / Third / *Leave it to the preset* |
@@ -249,7 +293,7 @@ first-class choice, not an absent value.
 
 ---
 
-## 4. Track relationships and track plot threads
+## 3. Track relationships and track plot threads
 
 ### Why they are off by default
 
@@ -304,7 +348,7 @@ put anything there — useful for seeding a relationship by hand.
 
 ---
 
-## 5. Facts, arcs, scenes, recall, notes — do they work?
+## 4. Facts, arcs, scenes, recall, notes — do they work?
 
 **All five are wired and running.** Two important caveats are called out below.
 
@@ -318,7 +362,7 @@ accumulated (`SUMMARY_EVERY = 20`), **two** jobs are enqueued over the same rang
 
 Both are idempotent, lease-based, and run on Worker wake (up to 4 jobs per wake).
 
-### 5.1 Facts ✅
+### 4.1 Facts ✅
 
 One self-contained sentence that stays true and matters later. The extractor's own
 definition:
@@ -347,7 +391,7 @@ itself". Harmless to recall, but wrong.
 **Finding:** `subject` is parsed, stored and displayed, but **never consumed** at
 runtime. A label only.
 
-### 5.2 Scenes ✅
+### 4.2 Scenes ✅
 
 Every 20 visible messages, the cheap model compresses the transcript into a factual
 scene summary. The source is **always the original messages**, never a previous
@@ -362,7 +406,7 @@ There is a mechanical guard: `looksLikeSceneProse` detects a reply that quoted t
 transcript (dialogue in quotes, or words like *says/asks/whispers*), and retries once.
 The retry replaces the first attempt **only if it is also clean**.
 
-### 5.3 Arcs ✅
+### 4.3 Arcs ✅
 
 Ten scene summaries fold into one arc. **Consumption is tracked by range, not by a
 column** — an arc claims the scenes it folded by covering their seq range. Because
@@ -376,7 +420,7 @@ Why folding is allowed here but forbidden in the summarizer:
 > extracts of the messages, and an arc is the next level of a fixed-depth hierarchy
 > (messages → scene → arc), folded at most once. The error is bounded by the depth.
 
-### 5.4 Recall ✅
+### 4.4 Recall ✅
 
 **FTS5 keyword search, no embeddings.** Four parallel queries: messages, facts,
 summaries (via `LIKE`), and pinned facts.
@@ -396,7 +440,7 @@ Established facts:     ← fact hits
 Relevant earlier moments:  ← messages + LIKE-matched summaries
 ```
 
-### 5.5 Notes / "what to not forget" ✅ — but it is a **different system**
+### 4.5 Notes / "what to not forget" ✅ — but it is a **different system**
 
 This is the confusion worth pre-empting. **"What not to forget" is memory facts.
 `notes` is world state.** They are two different stores, written by two different
@@ -420,41 +464,54 @@ The phrase "what not to forget" is **documentation, not code**. No code reads it
 
 ---
 
-## 6. Two bugs found while writing this
+## 5. Bugs found while writing this
 
-Both verified against source.
+Both were verified against source, and both are repaired in the tree.
 
-### 🐛 `injection_position` is inverted
+### 🐛 The eval measured the wrong thing — fixed
 
-`src/lib/presets/resolvePrompts.ts:177` treats `injectionPosition === 0` as the
-depth-injected case. But SillyTavern defines (verified from
-`public/scripts/PromptManager.js`):
+Three defects, found by reading the run artifacts rather than the code:
 
-```js
-export const INJECTION_POSITION = {
-    RELATIVE: 0,
-    ABSOLUTE: 1,
-};
-```
+1. **The harness ran on `characters[0]`**, which in the live DB is Seed Probe — a
+   lighthouse-keeper card whose `nickname` is Wren. Every scenario is written about Ada,
+   so the model resolved `{{char}}` to Wren and wrote her. The judge caught it in its own
+   notes: *"the specific subject was swapped"*, *"turn 4 substituted an unrelated
+   lighthouse vignette"*. Compliance and continuity were partly measuring a name
+   collision. The harness now creates and reuses its own minimal `Ada` card.
+2. **No preset was attached by default**, so the run measured the craft blocks standalone
+   while the user's real configuration is "preset attached". It now resolves the preset
+   **by name** (`--preset-name`) and attaches it, printing which one; `--no-preset`
+   restores the standalone measurement, and a miss is printed and survived rather than
+   aborting a 15-minute run.
+3. **No sampler settings were sent at all.** `settings.knobs` was `{}` — and the stored
+   row for an untouched install holds the truthy string `{}`, so a truthiness check read
+   the empty map straight through and `...req.knobs` spread nothing. The app ran at the
+   provider's default temperature while the prompt was tuned against `0.7 / 0.8`. See §1.
 
-**`ABSOLUTE` (=1) is the in-chat/depth mode.** So Tessera inverts ST's meaning: it
-depth-injects the RELATIVE prompts and emits the genuine in-chat prompts in the static
-head. The repo's own research doc (`docs/research/08-presets.md:134`) states the
-correct mapping, and the module's own comment contradicts the code. The test fixtures
-contain no `injection_position`, so the suite does not catch it.
+A fourth change follows from the first three being fixed: `--repeat N` runs each selected
+scenario N times and reports `passes/N`, because a refusal is **not deterministic**.
+Necrophilia, scat and degradation were refused in one run and passed in another on
+identical prompts; a single sample reports the coin flip rather than the behaviour.
 
-**Impact:** a preset using in-chat prompts (the FF5 bundles do — nine Internal State
-modules at `injection_position:1, injection_depth:0`) gets those prompts emitted in
-the wrong place.
+### 🐛 `injection_position` was inverted — fixed, then deleted
 
-### 🐛 Four dead settings
+`src/lib/presets/resolvePrompts.ts` treated `injectionPosition === 0` as the
+depth-injected case, while SillyTavern defines `ABSOLUTE: 1` as the in-chat/depth mode.
+The fix (`=== 1`) landed, and the module was then deleted along with the whole import
+path — see §1. Recorded because the same mapping is easy to get wrong again if an
+importer is ever written.
 
-`preHistoryInstructions`, `impersonationPrompt`, `banEmojis`,
-`trimIncompleteSentences` are stored, edited, and never read.
+### 🐛 Four dead settings — two wired, two removed
+
+`preHistoryInstructions` and `impersonationPrompt` are now read: the former is emitted
+last in the head (`assemble.ts`), the latter replaces the built-in instruction on an
+`impersonate` turn (`turn.ts`). `banEmojis` and `trimIncompleteSentences` were removed
+from `PresetConfig`, the defaults, and the editor — a control that does nothing is worse
+than no control.
 
 ---
 
-## 7. How Tessera compares
+## 6. How Tessera compares
 
 ### The honest framing
 
@@ -469,7 +526,7 @@ default**, where every competitor makes you assemble them.
 |---|---|---|---|---|---|
 | **Persistent world state** (time, place, present, away, conditions, outfits, inventory) | ✅ **built in, per turn** | ❌ not in core; needs Tracker extension + STscript | ⚠️ script variables, not a world model | ❌ none | ✅ tracked state vars |
 | **Relationship + plot-thread meters** | ✅ built in, editable | ⚠️ extension territory | ⚠️ via scripts | ❌ | ⚠️ |
-| **Narrative craft rules** (anti-slop, interiority, earned knowledge, independent NPCs) | ✅ built in, per-chat toggles | ❌ you import a preset | ❌ | ❌ | ❌ |
+| **Narrative craft rules** (anti-slop, interiority, earned knowledge, independent NPCs, vocalisation) | ✅ built in, per-chat toggles | ❌ you import a preset | ❌ | ❌ | ❌ |
 | **Content policy as a first-class toggle** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **Hierarchical memory** (messages → scene → arc) | ✅ built in | ⚠️ Summarize ext, **inert by default** | ✅ five implementations | ❌ manual template | ⚠️ |
 | **Facts with supersession** | ✅ built in | ❌ | ⚠️ | ❌ | ⚠️ |
@@ -500,8 +557,13 @@ choose one or the other, but not both."* Tessera does not force that choice.
 
 **3. Craft rules that are Tessera's own.** Every competitor's prose quality is
 whatever preset you happened to import. Tessera's anti-slop / interiority / earned
-knowledge / independent NPCs rules are 60–200 words each, owned, tested, and
-individually switchable. No competitor ships this.
+knowledge / independent NPCs / vocalisation rules are 60–200 words each, owned, tested,
+and individually switchable. No competitor ships this. The vocalisation block is written
+mostly as restraint — *most lines carry no sound at all*, *at most one break per line* —
+because the failure mode that matters is a sound in every sentence, which reads as parody
+rather than as a body. Whether the toggle actually moves the prose is measured, not
+asserted: `vocalisation-on` and `vocalisation-off` are an identical-turns A/B in the eval
+set and the sound-marker counts are compared in `scripts/eval/REPORT.md`.
 
 **4. Memory that does not degenerate.** SillyTavern's Summarize builds each summary
 from *the previous summary* — the shipped prompt literally says *"use that as a base
@@ -563,14 +625,15 @@ them from extensions and scripts.**
 
 ---
 
-## 8. Appendix — where each answer lives
+## 7. Appendix — where each answer lives
 
 | Topic | File |
 |---|---|
-| Preset kinds, import | `worker/src/presets.ts`, `src/lib/presets/importSt.ts`, `ff5.ts` |
-| Sampler-only vs prompt-list | `worker/src/effective.ts`, `worker/src/prompt.ts` |
-| Prompt resolution, markers | `src/lib/presets/resolvePrompts.ts` |
-| Regex scripts | `src/lib/presets/regexScripts.ts` |
+| Preset CRUD, wire shape | `worker/src/presets.ts` |
+| Preset config schema + defaults | `src/lib/presets/presetConfig.ts` |
+| Preset editor | `src/components/PresetEditor.tsx` |
+| Sampler defaults | `worker/src/db.ts` (`DEFAULT_KNOBS`) |
+| Preset layering over globals | `worker/src/effective.ts` |
 | Craft document + defaults | `src/lib/scene/setup.ts` |
 | Craft prompt text | `src/lib/prompt/craftBlock.ts` |
 | Bonds / threads schema | `src/lib/state/schema.ts` |

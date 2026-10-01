@@ -1,5 +1,4 @@
 import { asRecord } from '../json';
-import type { PromptOrderEntry } from './types';
 
 /**
  * The chub-shaped preset config — everything a preset carries that is NOT a sampler knob.
@@ -43,9 +42,6 @@ export interface PresetConfig {
   impersonationPrompt?: string;
   /** Prefix every history line with the speaker's name. */
   includeNames?: boolean;
-  banEmojis?: boolean;
-  /** Drop a trailing sentence the model did not finish. */
-  trimIncompleteSentences?: boolean;
   /** Text the reply must begin with. Sent as a trailing assistant turn, not a request. */
   assistantPrefill?: string;
   stopStrings?: string[];
@@ -68,19 +64,6 @@ export interface PresetConfig {
   responseLength?: ResponseLength;
   /** Replaces the built-in rule when `responseLength` is `custom`. */
   responseLengthCustom?: string;
-  /**
-   * Which imported prompt entries are on, and in what order.
-   *
-   * Seeded from the preset file's own `prompt_order` at import, so an imported preset
-   * arrives with exactly the toggles its author shipped — the reader does not have to
-   * re-tick twenty boxes to get the preset they downloaded. Editing it is how they
-   * deviate from that.
-   *
-   * Stored here rather than in a column of its own because it is the same kind of thing
-   * as everything else in this object: the preset's non-sampler half. Empty means the
-   * preset has no prompt list, and the prompt is assembled the way Tessera always has.
-   */
-  promptOrder?: PromptOrderEntry[];
 }
 
 /**
@@ -180,8 +163,6 @@ export const DEFAULT_PRESET_CONFIG: PresetConfig = {
   postHistoryInstructions: '',
   impersonationPrompt: '',
   includeNames: false,
-  banEmojis: false,
-  trimIncompleteSentences: false,
   assistantPrefill: '',
   stopStrings: [],
   maxTokens: 1024,
@@ -266,8 +247,6 @@ export function parsePresetConfig(raw: string | null | undefined): PresetConfig 
     impersonationPrompt:
       typeof record.impersonationPrompt === 'string' ? record.impersonationPrompt : '',
     includeNames: record.includeNames === true,
-    banEmojis: record.banEmojis === true,
-    trimIncompleteSentences: record.trimIncompleteSentences === true,
     assistantPrefill: typeof record.assistantPrefill === 'string' ? record.assistantPrefill : '',
     stopStrings: stops,
     maxTokens: clampNumber(record.maxTokens, 'maxTokens'),
@@ -278,28 +257,7 @@ export function parsePresetConfig(raw: string | null | undefined): PresetConfig 
     responseLength: isResponseLength(record.responseLength) ? record.responseLength : 'auto',
     responseLengthCustom:
       typeof record.responseLengthCustom === 'string' ? record.responseLengthCustom : '',
-    promptOrder: parsePromptOrder(record.promptOrder),
   };
-}
-
-/**
- * The stored toggle list, defensively.
- *
- * Undefined rather than `[]` when absent, because the two mean different things: absent
- * is "this preset has no prompt list, assemble the way Tessera always has", while an
- * empty array is "the reader turned everything off". Collapsing them would make turning
- * the last prompt off silently restore the default prompt.
- */
-function parsePromptOrder(value: unknown): PromptOrderEntry[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  return value
-    .map((entry) => asRecord(entry))
-    .filter((entry): entry is Record<string, unknown> => entry !== null)
-    .map((entry) => ({
-      identifier: typeof entry.identifier === 'string' ? entry.identifier : '',
-      enabled: entry.enabled === true,
-    }))
-    .filter((entry) => entry.identifier.length > 0);
 }
 
 function isResponseLength(value: unknown): value is ResponseLength {

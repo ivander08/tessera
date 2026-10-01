@@ -4,6 +4,7 @@ import type { CharacterSummary } from '../lib/apiTypes';
 import { messageOf, useAsync } from '../lib/hooks';
 import { Avatar } from './Avatar';
 import { ConfirmPrompt } from './ConfirmPrompt';
+import { useToast } from './Toast';
 
 /**
  * Who is in the scene.
@@ -34,24 +35,24 @@ export function CastPanel({ chatId, onChanged }: { chatId: string; onChanged?: (
 
   const [picking, setPicking] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
+  const toast = useToast();
   // The member the reader has asked to remove, held until they confirm. Null is "no sheet
   // open", which is also what a cancel returns to.
   const [confirming, setConfirming] = useState<{ id: string; name: string } | null>(null);
 
   async function promote(memberId: string, characterId: string) {
     setBusy(true);
-    setFailure(null);
     try {
       await apiJson(
         `/api/chats/${encodeURIComponent(chatId)}/cast/${encodeURIComponent(memberId)}/promote`,
         { method: 'POST', body: JSON.stringify({ characterId }) },
       );
+      toast.success('Promoted to a full character.');
       setPicking(null);
       reload();
       onChanged?.();
     } catch (cause) {
-      setFailure(messageOf(cause));
+      toast.failure(messageOf(cause));
     } finally {
       setBusy(false);
     }
@@ -59,17 +60,17 @@ export function CastPanel({ chatId, onChanged }: { chatId: string; onChanged?: (
 
   async function remove(memberId: string) {
     setBusy(true);
-    setFailure(null);
     try {
       await apiJson(
         `/api/chats/${encodeURIComponent(chatId)}/cast/${encodeURIComponent(memberId)}`,
         { method: 'DELETE' },
       );
+      toast.success('Removed from the scene.');
       setConfirming(null);
       reload();
       onChanged?.();
     } catch (cause) {
-      setFailure(messageOf(cause));
+      toast.failure(messageOf(cause));
     } finally {
       setBusy(false);
     }
@@ -79,7 +80,6 @@ export function CastPanel({ chatId, onChanged }: { chatId: string; onChanged?: (
     <div>
       {loading && <p className="sheet-sub">Loading…</p>}
       {error && <div className="note danger">{error}</div>}
-      {failure && <div className="note danger">{failure}</div>}
 
       {data && (
         <>

@@ -5,6 +5,7 @@ import { messageOf, useAsync } from '../lib/hooks';
 import { AppBar } from '../components/AppBar';
 import { KnobEditor } from '../components/KnobEditor';
 import { ThemeEditor, useLiveTheme } from '../components/ThemeEditor';
+import { useToast } from '../components/Toast';
 import { parseTheme, type Theme } from '../lib/theme';
 
 const PROVIDERS = ['openrouter', 'kenari'] as const;
@@ -32,8 +33,8 @@ export default function Settings() {
 
   const [edits, setEdits] = useState<SettingsShape>({});
   const [theme, setTheme] = useState<Theme>(() => parseTheme(null));
-  const [status, setStatus] = useState<string | null>(null);
   const [keyDraft, setKeyDraft] = useState<Record<string, string>>({});
+  const toast = useToast();
 
   // The loaded settings are the base; local edits layer on top. Deriving the form
   // during render rather than copying `data` into state in an effect removes a
@@ -62,10 +63,23 @@ export default function Settings() {
 
   const modelList = models.data ?? [];
 
+  // The cheap model is an independent setting, so its fetch is gated on the cheap provider
+  // and not on the main one. An empty provider means "fall back to the main model" —
+  // `worker/src/cheap.ts` reads `raw.cheapProvider || raw.provider` — so there is nothing
+  // to fetch in that case.
+  const cheapModels = useAsync(
+    () =>
+      form.cheapProvider
+        ? apiJson<ModelInfo[]>(`/api/models/${form.cheapProvider}`)
+        : Promise.resolve([]),
+    [form.cheapProvider, keys.data],
+  );
+
+  const cheapModelList = cheapModels.data ?? [];
+
   const keyed = new Set((keys.data ?? []).map((row) => row.provider));
 
   async function save() {
-    setStatus(null);
     const entries: Array<[string, string]> = [
       ['provider', form.provider ?? ''],
       ['model', form.model ?? ''],
@@ -86,10 +100,10 @@ export default function Settings() {
           body: JSON.stringify({ key, value }),
         });
       }
-      setStatus('Saved.');
+      toast.success('Settings saved.');
       reload();
     } catch (cause) {
-      setStatus(messageOf(cause));
+      toast.failure(messageOf(cause));
     }
   }
 
@@ -102,10 +116,10 @@ export default function Settings() {
         body: JSON.stringify({ key: value }),
       });
       setKeyDraft((current) => ({ ...current, [providerId]: '' }));
-      setStatus(`${providerId} key stored.`);
+      toast.success(`${providerId} key stored.`);
       keys.reload();
     } catch (cause) {
-      setStatus(messageOf(cause));
+      toast.failure(messageOf(cause));
     }
   }
 
@@ -235,22 +249,51 @@ export default function Settings() {
             />
           </Field>
         </div>
-        <Field label="Cheap model provider (used for summaries, state updates and drafting)">
-          <input
-            value={form.cheapProvider ?? ''}
-            onChange={(event) => setForm({ ...form, cheapProvider: event.target.value })}
-            placeholder={form.provider ?? 'same as above'}
-            className="field" style={{ maxWidth: 48 * 4 }}
-          />
-        </Field>
-        <Field label="Cheap model id">
-          <input
-            value={form.cheapModel ?? ''}
-            onChange={(event) => setForm({ ...form, cheapModel: event.target.value })}
-            placeholder={form.model ?? 'same as above'}
-            className="field" style={{ maxWidth: 64 * 4 }}
-          />
-        </Field>
+        <div className="field-list two">
+          <label className="block" htmlFor="settings-cheap-provider">
+            <span className="form-label">
+              <span>Cheap provider</span>
+            </span>
+            <select
+              id="settings-cheap-provider"
+              value={form.cheapProvider ?? ''}
+              onChange={(event) =>
+                setForm({ ...form, cheapProvider: event.target.value, cheapModel: '' })
+              }
+              className="field"
+            >
+              {/* Load-bearing: an empty value is how the fallback to the main model is
+                  expressed, and it is what every existing install stores. */}
+              <option value="">— same as above —</option>
+              {PROVIDERS.map((providerId) => (
+                <option key={providerId} value={providerId}>
+                  {providerId}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block" htmlFor="settings-cheap-model">
+            <span className="form-label">
+              <span>Cheap model</span>
+            </span>
+            <select
+              id="settings-cheap-model"
+              value={form.cheapModel ?? ''}
+              onChange={(event) => setForm({ ...form, cheapModel: event.target.value })}
+              disabled={!form.cheapProvider}
+              className="field"
+            >
+              <option value="">— same as above —</option>
+              {cheapModelList.map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.name ? `${entry.name} (${entry.id})` : entry.id}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {cheapModels.error && <p className="note warn">{cheapModels.error}</p>}
         <Field label="IDR per USD (Kenari bills in Rupiah; blank leaves costs unreported)">
           <input
             value={form.idrPerUsd ?? ''}
@@ -273,7 +316,6 @@ export default function Settings() {
         >
           Save settings
         </button>
-        {status && <span className="form-hint">{status}</span>}
       </div>
     </Frame>
   );

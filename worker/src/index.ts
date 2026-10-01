@@ -28,7 +28,7 @@ import {
   duplicatePreset,
   getChatPreset,
   getPreset,
-  importPreset,
+  createPreset,
   listPresets,
   updatePreset,
 } from './presets';
@@ -40,8 +40,6 @@ import { exportChat } from './export';
 import { seedOpeningState } from './state/update';
 import { loadAlternatives, loadPathTail } from './branch';
 import { substituteHead } from '../../src/lib/prompt/macros';
-import { applyScripts, placementForRole } from '../../src/lib/presets/regexScripts';
-import { loadEffectiveSettings } from './effective';
 import { EMPTY_STATE, validatePatch } from '../../src/lib/state/schema';
 import type { WorldState } from '../../src/lib/state/schema';
 import {
@@ -62,6 +60,7 @@ import {
 } from './personas';
 import { onWorkerWake } from './jobs';
 import { runPendingMemoryJob } from './memory/schedule';
+import { complete } from './cheap';
 
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -302,7 +301,7 @@ async function route(req: Request, env: Env, url: URL, ctx: ExecutionContext): P
 
   if (path === '/api/presets') {
     if (method === 'GET') return listPresets(env);
-    if (method === 'POST') return importPreset(env, req);
+    if (method === 'POST') return createPreset(env, req);
     return notFound();
   }
 
@@ -331,6 +330,31 @@ async function route(req: Request, env: Env, url: URL, ctx: ExecutionContext): P
   if (path === '/api/forge/suggest' && method === 'POST') return forgeSuggest(env, req);
 
   if (path === '/api/chat' && method === 'POST') return handleChat(req, env, ctx);
+
+  // The eval harness's rating call. It needs a model call but no provider credentials of
+  // its own, so it goes through the Worker's configured cheap model like every other
+  // side-channel. It exposes no data — a caller supplies the system and user text and gets
+  // a completion back — and it carries the same bearer auth as every other route.
+  if (path === '/api/eval/judge' && method === 'POST') {
+    const body = await readJson<{ system?: string; user?: string }>(req);
+    if (!body || typeof body.user !== 'string' || body.user.length === 0) {
+      return badRequest('user is required');
+    }
+    try {
+      const reply = await complete(env, {
+        system: typeof body.system === 'string' ? body.system : undefined,
+        user: body.user,
+        maxTokens: 1200,
+        json: true,
+      });
+      return json({ text: reply.text });
+    } catch (error) {
+      // The harness must be able to record a rating failure per scenario rather than
+      // aborting the whole run, so the message comes back as a 200-shaped error body the
+      // script can catch and skip.
+      return json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  }
 
   return notFound();
 }
@@ -573,28 +597,13 @@ async function listMessages(env: Env, chatId: string, url: URL): Promise<Respons
   // chat: 616 of the 617 `swipes` arrays held nothing but the row's own id, which was
   // 32 KB of the response carrying no information. Absent and "length 1" mean the same
   // thing to the client, so the common case pays nothing.
-  // The preset's display-side regex scripts. Applied HERE rather than at write time so
-  // the stored row stays exactly what the model produced — the reader can always see the
-  // raw reply by looking at the database or the export, and a preset's cleanup can be
-  // retuned without rewriting history.
-  //
-  // Depth is the row's distance from the newest, which is what `minDepth`/`maxDepth`
-  // target. Computed over the returned window, so it agrees with what is on screen.
-  const presetRegex = chat.preset_id
-    ? (await loadEffectiveSettings(env, chat.preset_id)).presetRegex
-    : [];
-
-  const messages = path.map((row, index) => {
+  const messages = path.map((row) => {
     const alternatives = siblings.get(row.parent_id ?? '') ?? [];
-    const depth = path.length - 1 - index;
     const base = {
       seq: row.seq,
       id: row.id,
       role: row.role,
-      content: applyScripts(row.content, presetRegex, 'display', {
-        placement: placementForRole(row.role),
-        depth,
-      }),
+      content: row.content,
       content_tokens: row.content_tokens,
       prompt_tokens: row.prompt_tokens,
       completion_tokens: row.completion_tokens,
