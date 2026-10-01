@@ -2,11 +2,12 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { CardParseError, parseCardFile } from '../lib/cards/import';
 import { CARD_FIELD_ROWS } from '../lib/cards/fields';
-import type { ParsedCard } from '../lib/cards/types';
+import type { GreetingState, ParsedCard } from '../lib/cards/types';
 import { loadTokenCounter } from '../lib/tokenizerClient';
 import { apiJson } from '../lib/api';
 import { messageOf } from '../lib/hooks';
 import { AppBar, BackLink } from '../components/AppBar';
+import { GreetingStateFields, GreetingsEditor } from '../components/GreetingsEditor';
 
 /**
  * Per-field token counts matter because most of these fields are paid on every single
@@ -81,6 +82,7 @@ function blankCard(): ParsedCard {
     systemPrompt: '',
     postHistoryInstructions: '',
     alternateGreetings: [],
+    greetingStates: [],
     creatorNotes: '',
     tags: [],
     characterBook: null,
@@ -163,9 +165,22 @@ export default function CharacterNew() {
     setSaving(true);
     setError(null);
     try {
+      // Normalised the same way the edit screen normalises on save: trimmed, and an empty
+      // field dropped rather than stored as `""`. Both screens write the same shape, so a
+      // card created here and one edited later do not differ in a way that shows up as a
+      // blank scene line.
+      const greetingStates = (card.greetingStates ?? []).map((entry) => {
+        const out: GreetingState = {};
+        for (const field of ['time', 'location', 'weather'] as const) {
+          const text = entry[field]?.trim();
+          if (text) out[field] = text;
+        }
+        return out;
+      });
+
       const created = await apiJson<{ id: string }>('/api/characters', {
         method: 'POST',
-        body: JSON.stringify({ card, avatar }),
+        body: JSON.stringify({ card: { ...card, greetingStates }, avatar }),
       });
       navigate(`/characters?created=${encodeURIComponent(created.id)}`);
     } catch (cause) {
@@ -373,6 +388,54 @@ export default function CharacterNew() {
               </Field>
             ))}
 
+            {group.title === 'Greetings' && (
+              <>
+                {/* The same two components the edit screen uses, so a card written here
+                    and a card edited later present their openings identically. Before
+                    this, `first_mes` had no scene fields at all and the alternates were
+                    one textarea asking the reader to separate openings with blank lines
+                    — a format nothing else uses, which silently split any opening that
+                    contained a blank line of its own. */}
+                <GreetingStateFields
+                  value={card.greetingStates?.[0] ?? {}}
+                  onChange={(patch) =>
+                    setCard((current) =>
+                      current
+                        ? {
+                            ...current,
+                            greetingStates: [
+                              { ...(current.greetingStates?.[0] ?? {}), ...patch },
+                              ...(current.greetingStates?.slice(1) ?? []),
+                            ],
+                          }
+                        : current,
+                    )
+                  }
+                  idPrefix="first"
+                />
+                <GreetingsEditor
+                  greetings={card.alternateGreetings}
+                  onChange={(next) =>
+                    setCard((current) =>
+                      current ? { ...current, alternateGreetings: next } : current,
+                    )
+                  }
+                  states={(card.greetingStates ?? []).slice(1)}
+                  onStatesChange={(next) =>
+                    setCard((current) =>
+                      current
+                        ? {
+                            ...current,
+                            greetingStates: [current.greetingStates?.[0] ?? {}, ...next],
+                          }
+                        : current,
+                    )
+                  }
+                  countTokens={(text) => (ready ? tokensOf(text) : 0)}
+                />
+              </>
+            )}
+
             {group.title === 'Meta' && (
               <>
                 {/* Editable here rather than only on the edit screen. A card that arrives
@@ -404,36 +467,6 @@ export default function CharacterNew() {
                     }
                     placeholder="comma, separated, tags"
                   />
-                </div>
-
-                <div className="form-row">
-                  <span className="form-label">
-                    <span>alternate greetings</span>
-                    <span className="data">{card.alternateGreetings.length} · never sent</span>
-                  </span>
-                  <textarea
-                    className="field"
-                    rows={8}
-                    value={card.alternateGreetings.join('\n\n')}
-                    onChange={(event) =>
-                      setCard((current) =>
-                        current
-                          ? {
-                              ...current,
-                              alternateGreetings: event.target.value
-                                .split(/\n{2,}/)
-                                .map((entry) => entry.trim())
-                                .filter(Boolean),
-                            }
-                          : current,
-                      )
-                    }
-                    placeholder="one per paragraph — blank line between"
-                  />
-                  <p className="form-hint" style={{ marginTop: 6 }}>
-                    Each is a separate opening, offered when a new chat starts. Separate them
-                    with a blank line.
-                  </p>
                 </div>
 
                 <div className="form-row">
