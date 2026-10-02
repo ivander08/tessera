@@ -14,7 +14,7 @@ import { asRecord } from '../json';
  */
 export interface SceneSetup {
   /** How much in-world time one exchange advances. */
-  timePace: 'minute' | 'hour' | 'scene' | 'manual';
+  timePace: 'auto' | 'minute' | 'hour' | 'scene' | 'manual';
   /** Who maintains the world state. */
   stateMode: 'automatic' | 'manual' | 'off';
   /** Generate time/weather/location/outfits from the greeting when the scene opens. */
@@ -78,7 +78,7 @@ export const DEFAULT_CRAFT: Craft = {
 };
 
 export const DEFAULT_SCENE_SETUP: SceneSetup = {
-  timePace: 'scene',
+  timePace: 'auto',
   stateMode: 'automatic',
   generateOpeningState: true,
   craft: DEFAULT_CRAFT,
@@ -94,6 +94,11 @@ export const TIME_PACE_OPTIONS: Array<{
   label: string;
   description: string;
 }> = [
+  {
+    value: 'auto',
+    label: 'Let the narrator decide',
+    description: 'Time moves by what the scene implies — a minute, an hour, or overnight.',
+  },
   { value: 'minute', label: 'Minute by minute', description: '1 exchange ≈ 1 minute' },
   { value: 'hour', label: 'Hourly', description: '1 exchange ≈ 1 hour' },
   {

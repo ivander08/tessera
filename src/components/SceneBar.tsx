@@ -6,7 +6,7 @@ import type { WorldState } from '../lib/state/schema';
  * The reader wanted the current time, place and weather visible without opening
  * anything — that is what tells you the narrator has drifted. The first version tried to
  * show every field at once in a single strip, which truncated the time to
- * "Wednesday, 30 September 2026, ..." and was too small to read at a glance.
+ * "Friday, 27 February 2026, ..." and was too small to read at a glance.
  *
  * So this shows the two facts that orient you — where and when — in a size you can read
  * while scrolling, and opens the full document for everything else. The full document is

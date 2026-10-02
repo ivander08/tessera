@@ -38,6 +38,12 @@ export const kenari: Provider = {
           stream: true,
           max_tokens: req.maxTokens,
           ...req.knobs,
+          // Measured against `deepseek-v4-flash`, which reasons by default: this flag
+          // produced zero reasoning tokens, while the OpenRouter-style
+          // `reasoning: { enabled: false }` — which kenari documents as the unified
+          // control — still produced 10,000 characters of it. Measured behaviour beats
+          // the documented behaviour, and the backend is a passthrough either way.
+          ...(req.disableReasoning ? { enable_thinking: false } : {}),
         }),
       },
     };

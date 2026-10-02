@@ -88,7 +88,7 @@ const NOT_A_NAME: Record<string, true> = {
   they: true, someone: true, anyone: true, everyone: true, nobody: true, user: true,
   'the user': true, myself: true, yourself: true,
   // The state block's field labels, as rendered by `renderStateBlock`.
-  'world state': true, time: true, location: true, weather: true, present: true,
+  'world state': true, time: true, 'date/time': true, location: true, weather: true, present: true,
   away: true, conditions: true, outfits: true, inventory: true, notes: true,
 };
 

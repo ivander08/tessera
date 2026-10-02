@@ -120,6 +120,7 @@ describe('the sampler defaults', () => {
         maxTokens: 4096,
         knobs: settings.knobs,
         sessionId: 'session-1',
+        disableReasoning: settings.disableReasoning,
       },
       'key',
     );

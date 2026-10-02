@@ -12,6 +12,7 @@ describe('openrouter adapter', () => {
         maxTokens: 100,
         knobs: { temperature: 0.9 },
         sessionId: 'session-abc',
+        disableReasoning: false,
       },
       'sk-test',
     );
@@ -93,6 +94,56 @@ describe('openrouter adapter', () => {
   test('a frame with no reason, no text and no usage is still dropped', () => {
     expect(openrouter.parseFrame(JSON.stringify({ choices: [{ delta: {} }] }))).toBeNull();
   });
+
+  /**
+   * The reasoning flag, which is the difference between a reply and no reply on a model
+   * that reasons by default.
+   *
+   * `require_parameters: true` makes the model check load-bearing rather than tidy:
+   * OpenRouter refuses to route to any provider that would drop a parameter, so the
+   * parameter must never be sent to a model that does not advertise it.
+   */
+  test('suppresses reasoning only for models whose id says they reason', () => {
+    const bodyFor = (model: string) => {
+      const { init } = openrouter.buildRequest(
+        {
+          model,
+          messages: [{ role: 'user', content: 'hi' }],
+          stream: true,
+          maxTokens: 100,
+          knobs: {},
+          sessionId: 'session-abc',
+          disableReasoning: true,
+        },
+        'sk-test',
+      );
+      return JSON.parse(String(init.body)) as Record<string, unknown>;
+    };
+
+    expect(bodyFor('deepseek/deepseek-r1').reasoning).toEqual({ enabled: false });
+    expect(bodyFor('openai/o3-mini').reasoning).toEqual({ enabled: false });
+
+    // A model that does not reason must not be sent the parameter at all: under
+    // `require_parameters` that request would have no eligible provider and fail.
+    expect(bodyFor('anthropic/claude-sonnet-5.5')).not.toHaveProperty('reasoning');
+    expect(bodyFor('meta-llama/llama-3.3-70b-instruct')).not.toHaveProperty('reasoning');
+  });
+
+  test('sends no reasoning parameter when the setting is off', () => {
+    const { init } = openrouter.buildRequest(
+      {
+        model: 'deepseek/deepseek-r1',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+        maxTokens: 100,
+        knobs: {},
+        sessionId: 'session-abc',
+        disableReasoning: false,
+      },
+      'sk-test',
+    );
+    expect(JSON.parse(String(init.body))).not.toHaveProperty('reasoning');
+  });
 });
 
 describe('kenari adapter', () => {
@@ -105,6 +156,7 @@ describe('kenari adapter', () => {
         maxTokens: 100,
         knobs: {},
         sessionId: 'ignored',
+        disableReasoning: false,
       },
       'kn-test',
     );
@@ -112,6 +164,32 @@ describe('kenari adapter', () => {
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
     expect(body.model).toBe('deepseek-v4-1-flash');
     expect(body).not.toHaveProperty('session_id');
+    // Nothing is sent unless the setting asks for it: this is the flag that has to be
+    // absent for a model whose reasoning the reader wants.
+    expect(body).not.toHaveProperty('enable_thinking');
+  });
+
+  test('uses enable_thinking, which is the flag the backend actually honours', () => {
+    // Measured on `deepseek-v4-flash`, which reasons by default and spent a whole reply
+    // on it: `enable_thinking: false` produced zero reasoning tokens and a normal answer,
+    // while the OpenRouter-style `reasoning: { enabled: false }` that kenari documents as
+    // the unified control still produced 10,000 characters of reasoning and no content.
+    const { init } = kenari.buildRequest(
+      {
+        model: 'deepseek-v4-flash',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+        maxTokens: 100,
+        knobs: {},
+        sessionId: 'ignored',
+        disableReasoning: true,
+      },
+      'kn-test',
+    );
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body.enable_thinking).toBe(false);
+    // The documented control is NOT what gets sent — the measurement is the contract.
+    expect(body).not.toHaveProperty('reasoning');
   });
 
   test('reports no cost — Kenari sends no cost field', () => {

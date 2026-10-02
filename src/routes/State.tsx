@@ -39,8 +39,8 @@ const GROUPS: Array<{ heading: string; fields: Field[] }> = [
     fields: [
       {
         key: 'time',
-        label: 'Time',
-        hint: 'Real date and time — "Wednesday, 30 September 2026, 05:34 AM".',
+        label: 'Date and time',
+        hint: 'Real date and clock — "Friday, 27 February 2026, 05:35 AM".',
       },
       {
         key: 'location',

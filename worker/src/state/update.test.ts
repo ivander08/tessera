@@ -148,6 +148,7 @@ const setupWith = (pace: SceneSetup['timePace']): SceneSetup => ({
 
 describe('updateState: the pace rule', () => {
   test.each([
+    ['auto', 'whatever the\n                exchange implies'],
     ['minute', 'a minute per exchange'],
     ['hour', 'an hour per exchange'],
     ['scene', 'only when the exchange establishes that time has passed'],
@@ -203,7 +204,7 @@ describe('updateState: the pace rule', () => {
   });
 
   test('no pace leaves a placeholder in the prompt', async () => {
-    for (const pace of ['minute', 'hour', 'scene', 'manual'] as const) {
+    for (const pace of ['auto', 'minute', 'hour', 'scene', 'manual'] as const) {
       const { env, sent } = makeEnv();
       stubProvider(sent, '{}');
       await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith(pace));
@@ -278,7 +279,7 @@ describe('seedOpeningState', () => {
     const { env, sent } = makeEnv();
     stubProvider(
       sent,
-      '{"time":"Wednesday, 30 September 2026, 05:34 AM","location":"the lantern room",' +
+      '{"time":"Friday, 27 February 2026, 05:35 AM","location":"the lantern room",' +
         '"weather":"warm, clear morning","outfits":{"Quill":"oilskin coat, salt-stained"}}',
     );
 
@@ -295,7 +296,7 @@ describe('seedOpeningState', () => {
 
     expect(result.applied).toBe(true);
     expect(await loadState(env, 'chat-1')).toEqual({
-      time: 'Wednesday, 30 September 2026, 05:34 AM',
+      time: 'Friday, 27 February 2026, 05:35 AM',
       location: 'the lantern room',
       weather: 'warm, clear morning',
       outfits: { Quill: 'oilskin coat, salt-stained' },

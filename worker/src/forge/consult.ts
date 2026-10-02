@@ -69,7 +69,7 @@ The card is stored with these fields, and this app sends them like this:
 
 "greeting_states" is index-aligned with the openings: entry 0 belongs to "first_mes", entry 1 to
 the first alternate, and so on. Each entry states the scene that opening begins in — "time",
-"location" and "weather" as short strings ("Wednesday, 30 September 2026, 04:00 PM", "a
+"location" and "weather" as short strings ("Friday, 27 February 2026, 05:35 AM", "a
 rain-soaked tavern on the edge of the map", "heavy rain"). They are stored as machine-readable
 fields rather than folded into the greeting's prose, so the narrator starts the scene already
 knowing where and when it is instead of inferring it from the opening paragraph. State them

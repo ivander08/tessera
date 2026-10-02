@@ -401,7 +401,7 @@ describe('state block: weather', () => {
       notes: ['something'],
     };
     const tight = renderStateBlock(state, 20);
-    expect(tight).toContain('Time: late evening');
+    expect(tight).toContain('Date/Time: late evening');
   });
 });
 

@@ -84,21 +84,28 @@ const SYSTEM = [
  * Each entry is the Allowed-keys line it replaces, including its indentation.
  */
 const TIME_KEY: Record<SceneSetup['timePace'], string> = {
+  auto: [
+    '  "time"       string  — the real-world clock time of the scene, as a full date and',
+    '                time: "Friday, 27 February 2026, 05:35 AM". Advance it by whatever the',
+    '                exchange implies: a few minutes for a continuous conversation, hours',
+    '                when the scene skips ahead, the next morning when it breaks for the',
+    '                night. Do not invent a fantasy calendar.',
+  ].join('\n'),
   minute: [
     '  "time"       string  — the real-world clock time of the scene, as a full date and',
-    '                time: "Wednesday, 30 September 2026, 05:34 AM". Advance it by roughly',
+    '                time: "Friday, 27 February 2026, 05:35 AM". Advance it by roughly',
     '                one minute per exchange unless the text says otherwise. Do not invent',
     '                a fantasy calendar.',
   ].join('\n'),
   hour: [
     '  "time"       string  — the real-world clock time of the scene, as a full date and',
-    '                time: "Wednesday, 30 September 2026, 05:34 AM". Advance it by roughly',
+    '                time: "Friday, 27 February 2026, 05:35 AM". Advance it by roughly',
     '                one hour per exchange unless the text says otherwise. Do not invent a',
     '                fantasy calendar.',
   ].join('\n'),
   scene: [
     '  "time"       string  — the real-world clock time of the scene, as a full date and',
-    '                time: "Wednesday, 30 September 2026, 05:34 AM". Change it only when the',
+    '                time: "Friday, 27 February 2026, 05:35 AM". Change it only when the',
     '                exchange establishes that time has passed. Do not invent a fantasy',
     '                calendar.',
   ].join('\n'),
@@ -135,6 +142,13 @@ const THREADS_KEY = [
 
 /** The recording rule for the Rules block, per pace. */
 const TIME_BULLET: Record<SceneSetup['timePace'], string> = {
+  auto: [
+    '- "time" is the reader\'s real-world time, not an in-fiction day count. If the',
+    '  exchange gives a date, a clock time, or a day of the week, record it in full.',
+    '  Otherwise move the clock by what the scene implies and by nothing else: a',
+    '  continuous conversation is minutes, a scene that moves on is hours, a night\'s',
+    '  sleep is the next morning.',
+  ].join('\n'),
   minute: [
     '- "time" is the reader\'s real-world time, not an in-fiction day count. If the',
     '  exchange gives a date, a clock time, or a day of the week, record it in full, then',

@@ -156,6 +156,16 @@ export function ConsultPanel({
   const { messages, turn, answer, brief } = session;
   const [pending, setPending] = useState('');
   const [busy, setBusy] = useState(false);
+  /**
+   * Which part of the reply is being written.
+   *
+   * The prose arrives in a few seconds and the card in the same reply can take twenty more,
+   * so without this the pane looks finished while it is still working — the reported bug
+   * was "there's no indicator that the AI is currently cooking up the diff". `say` is
+   * required to be the first key, so the appearance of `question` or `card` is exactly the
+   * moment the prose stops and the part the user is waiting for starts.
+   */
+  const [phase, setPhase] = useState<'say' | 'question' | 'card'>('say');
   const [failure, setFailure] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const toast = useToast();
@@ -190,6 +200,7 @@ export function ConsultPanel({
     patch({ messages: next, answer: '', turn: null });
     setPending('');
     setFailure(null);
+    setPhase('say');
     setBusy(true);
 
     let streamed = '';
@@ -205,6 +216,10 @@ export function ConsultPanel({
           if (frame.type === 'delta') {
             streamed = frame.text;
             setPending(frame.text);
+            return;
+          }
+          if (frame.type === 'phase') {
+            setPhase(frame.phase);
             return;
           }
           if (frame.type === 'error') {
@@ -329,6 +344,20 @@ export function ConsultPanel({
             <Markdown content={pending} />
             <span className="caret" aria-hidden="true" />
           </div>
+        )}
+
+        {/* The prose is done and the card is still being written. Without this the pane
+            looks finished the moment `say` stops streaming, while the model is still
+            composing the part the user is actually waiting for. */}
+        {busy && pending.length > 0 && phase !== 'say' && (
+          <p className="consult-working" role="status">
+            <span className="thinking" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
+            {phase === 'card' ? 'Writing the card…' : 'Writing the question…'}
+          </p>
         )}
 
         {/* Before the first token there is nothing to read, so the wait itself is drawn —

@@ -230,6 +230,7 @@ async function runTurn(
           ? { ...settings.knobs, stop: settings.stopStrings }
           : settings.knobs,
         sessionId: chat.session_id,
+        disableReasoning: settings.disableReasoning,
       },
       apiKey.key,
     );

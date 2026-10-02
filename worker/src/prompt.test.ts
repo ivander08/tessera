@@ -190,6 +190,7 @@ function settings(contextBudget: number): EffectiveSettings {
     loreScanDepth: 4,
     loreTokenBudget: 1024,
     loreRecursive: false,
+    disableReasoning: true,
     stopStrings: [],
     assistantPrefill: '',
     includeNames: false,

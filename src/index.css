@@ -2445,6 +2445,23 @@ html[data-layout="bubble"] .turn-segment:not(:first-child) {
   }
 }
 
+/* The prose has stopped and the card is still being written. Sits under the streamed reply
+   in the same quiet register as the pre-first-token dots, because it is the same fact —
+   work in progress — one phase later. */
+.consult-working {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 6px 0 0;
+  font-family: var(--font-data);
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+}
+
+.consult-working .thinking {
+  height: 1em;
+}
+
 /* Inside the dock the pane is not its own frame: the dock is. */
 .consult-dock .consult-pane {
   max-height: none;

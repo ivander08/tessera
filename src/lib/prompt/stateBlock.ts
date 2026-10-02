@@ -110,7 +110,7 @@ function collect(state: WorldState, options: { bonds?: boolean; threads?: boolea
   };
 
   const time = state.time?.trim() ?? '';
-  add('time', time.length > 0 ? `Time: ${time}` : '');
+  add('time', time.length > 0 ? `Date/Time: ${time}` : '');
   const location = state.location?.trim() ?? '';
   add('location', location.length > 0 ? `Location: ${location}` : '');
   // Weather sits with time and location: it is scene atmosphere the narrator writes

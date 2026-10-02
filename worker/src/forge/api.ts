@@ -9,11 +9,34 @@ import type { GreetingState, ParsedCard } from '../../../src/lib/cards/types';
  * The consult stream's own protocol, separate from the chat stream's `Frame` union in
  * `worker/src/frame.ts` — the two share only the `data: <json>\n\n` envelope. Exactly one
  * terminal frame ends a stream: `turn` on success, `error` on failure.
+ *
+ * `phase` is progress, not content: it names which part of the reply is being written, and
+ * exists because `say` arrives long before the card does. The pane renders it as the wait
+ * label, so a card that takes another twenty seconds to write does not read as a hang.
  */
+export type ConsultPhase = 'say' | 'question' | 'card';
+
 export type ConsultFrame =
   | { type: 'delta'; text: string }
+  | { type: 'phase'; phase: ConsultPhase }
   | { type: 'turn'; turn: ConsultTurn }
   | { type: 'error'; message: string; code: string };
+
+/**
+ * Which part of the reply the stream has reached.
+ *
+ * `say` is required to be the first key, so the appearance of a later key is what says the
+ * prose is finished. Read from the raw buffer rather than by parsing it: the document is
+ * half-written by definition, and a key is recognizable long before the object around it
+ * is. The match is safe on a partial document because a quote inside a string value is
+ * escaped (`\"card\"`), so only a real key can match — a card the model *describes* in its
+ * `say` text cannot be mistaken for the card it is about to write.
+ */
+function phaseOf(buffer: string): ConsultPhase {
+  if (/"card"\s*:\s*\{/.test(buffer)) return 'card';
+  if (/"question"\s*:\s*\{/.test(buffer)) return 'question';
+  return 'say';
+}
 
 /** The four card formats `characters.source_format` can hold. */
 const FORMATS: Record<string, ParsedCard['sourceFormat']> = {
@@ -138,6 +161,9 @@ export async function forgeConsult(env: Env, req: Request): Promise<Response> {
       // scanner returns a prefix, so re-emitting an unchanged prefix would repeat text.
       let buffer = '';
       let emitted = '';
+      // Which part of the reply is being written. Sent only when it changes: a frame per
+      // delta would be the same fact repeated a hundred times.
+      let phase: ConsultPhase = 'say';
 
       try {
         const turn = await consult(env, {
@@ -147,9 +173,16 @@ export async function forgeConsult(env: Env, req: Request): Promise<Response> {
           onDelta: (fragment) => {
             buffer += fragment;
             const prefix = partialField(buffer, 'say');
-            if (prefix === null || prefix.length <= emitted.length) return;
-            emitted = prefix;
-            send<ConsultFrame>(controller, { type: 'delta', text: prefix });
+            if (prefix !== null && prefix.length > emitted.length) {
+              emitted = prefix;
+              send<ConsultFrame>(controller, { type: 'delta', text: prefix });
+            }
+
+            const next = phaseOf(buffer);
+            if (next !== phase) {
+              phase = next;
+              send<ConsultFrame>(controller, { type: 'phase', phase });
+            }
           },
         });
 

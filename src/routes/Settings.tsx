@@ -21,6 +21,8 @@ interface SettingsShape {
   idrPerUsd?: string;
   cheapProvider?: string;
   cheapModel?: string;
+  /** `'on'` keeps the model's reasoning; anything else (including absent) suppresses it. */
+  reasoning?: string;
   theme?: string;
 }
 
@@ -80,26 +82,27 @@ export default function Settings() {
   const keyed = new Set((keys.data ?? []).map((row) => row.provider));
 
   async function save() {
-    const entries: Array<[string, string]> = [
-      ['provider', form.provider ?? ''],
-      ['model', form.model ?? ''],
-      ['systemPrompt', form.systemPrompt ?? ''],
-      ['authorsNote', form.authorsNote ?? ''],
-      ['maxTokens', form.maxTokens ?? ''],
-      ['contextBudget', form.contextBudget ?? ''],
-      ['knobs', form.knobs ?? '{}'],
-      ['idrPerUsd', form.idrPerUsd ?? ''],
-      ['cheapProvider', form.cheapProvider ?? ''],
-      ['cheapModel', form.cheapModel ?? ''],
-      ['theme', JSON.stringify(theme)],
-    ];
+    // One request for the whole form. This used to be a `PUT` per key — eleven round trips
+    // for one button, each its own chance to fail and leave the form half-saved.
+    const settings: Record<string, string> = {
+      provider: form.provider ?? '',
+      model: form.model ?? '',
+      systemPrompt: form.systemPrompt ?? '',
+      authorsNote: form.authorsNote ?? '',
+      maxTokens: form.maxTokens ?? '',
+      contextBudget: form.contextBudget ?? '',
+      knobs: form.knobs ?? '{}',
+      idrPerUsd: form.idrPerUsd ?? '',
+      cheapProvider: form.cheapProvider ?? '',
+      cheapModel: form.cheapModel ?? '',
+      reasoning: form.reasoning ?? 'default',
+      theme: JSON.stringify(theme),
+    };
     try {
-      for (const [key, value] of entries) {
-        await apiJson('/api/settings', {
-          method: 'PUT',
-          body: JSON.stringify({ key, value }),
-        });
-      }
+      await apiJson('/api/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ settings }),
+      });
       toast.success('Settings saved.');
       reload();
     } catch (cause) {
@@ -302,6 +305,25 @@ export default function Settings() {
             className="field" style={{ maxWidth: 32 * 4 }}
           />
         </Field>
+        <label className="block" htmlFor="settings-reasoning">
+          <span className="form-label">
+            <span>Reasoning</span>
+            <span className="form-hint">
+              {form.reasoning === 'on'
+                ? 'The model thinks before every reply. Slower, and the thinking is billed as output tokens you never read.'
+                : 'The model answers directly. A scene has no place to show a reasoning trace, so thinking is latency and tokens spent on nothing.'}
+            </span>
+          </span>
+          <select
+            id="settings-reasoning"
+            value={form.reasoning ?? 'off'}
+            onChange={(event) => setForm({ ...form, reasoning: event.target.value })}
+            className="field"
+          >
+            <option value="off">Off — answer directly (recommended)</option>
+            <option value="on">On — let the model reason first</option>
+          </select>
+        </label>
       </section>
 
       <ThemeEditor value={theme} onChange={setTheme} />

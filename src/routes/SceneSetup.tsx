@@ -22,7 +22,7 @@ interface CharacterDetail {
 }
 
 /** The steps, in order. The wizard is short enough that the whole list is the navigation. */
-const STEPS = ['Opening', 'Time', 'World state'] as const;
+const STEPS = ['Opening', 'Date/Time', 'World state'] as const;
 
 /**
  * Starting a scene.

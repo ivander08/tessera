@@ -173,16 +173,13 @@ describe('forgeConsult with no cheap model configured', () => {
 });
 
 describe('forgeConsult streaming', () => {
-  test('emits the say field as deltas, then one terminal turn frame', async () => {
-    const env = await configuredEnv();
+  /**
+   * Stubs the provider with a chunked SSE reply, so the scanner has to reassemble the
+   * document rather than being handed it whole. Shared by the tests below because the
+   * framing is the same and only the reply differs.
+   */
+  function stubReply(reply: string): () => void {
     const original = globalThis.fetch;
-    const reply = JSON.stringify({
-      say: 'Tell me about the character.',
-      question: { text: 'Who are they?', options: ['A detective', 'A smuggler'], recommended: 0 },
-      card: null,
-    });
-
-    // Chunked so the deltas have to be reassembled by the scanner rather than arriving whole.
     const encoder = new TextEncoder();
     globalThis.fetch = (async () => {
       const stream = new ReadableStream<Uint8Array>({
@@ -200,7 +197,23 @@ describe('forgeConsult streaming', () => {
       });
       return new Response(stream, { headers: { 'content-type': 'text/event-stream' } });
     }) as unknown as typeof fetch;
+    return () => {
+      globalThis.fetch = original;
+    };
+  }
 
+  const phasesOf = (frames: Array<Record<string, unknown>>): string[] =>
+    frames.filter((frame) => frame.type === 'phase').map((f) => asString(f.phase));
+
+  test('emits the say field as deltas, then one terminal turn frame', async () => {
+    const env = await configuredEnv();
+    const reply = JSON.stringify({
+      say: 'Tell me about the character.',
+      question: { text: 'Who are they?', options: ['A detective', 'A smuggler'], recommended: 0 },
+      card: null,
+    });
+
+    const restore = stubReply(reply);
     try {
       const res = await forgeConsult(
         env,
@@ -225,7 +238,62 @@ describe('forgeConsult streaming', () => {
       expect(asString(turn?.say)).toBe('Tell me about the character.');
       expect(asString(asRecord(turn?.question)?.text)).toBe('Who are they?');
     } finally {
-      globalThis.fetch = original;
+      restore();
+    }
+  });
+
+  test('reports the phase so a card still being written does not read as finished', async () => {
+    // The reported bug: the prose lands in seconds, the card in the same reply can take
+    // twenty more, and the pane looked done the whole time. The phase is the only signal
+    // the client has for that second half.
+    const env = await configuredEnv();
+    const reply = JSON.stringify({
+      say: 'Here is the card.',
+      question: null,
+      card: { name: 'Ada', first_mes: 'The door is open.' },
+    });
+
+    const restore = stubReply(reply);
+    try {
+      const res = await forgeConsult(
+        env,
+        post({ mode: 'draft', messages: [{ role: 'user', content: 'a cartographer' }] }),
+      );
+      const frames = await framesOf(res);
+
+      // `say` is the implicit start and is never sent; the two later keys are announced once
+      // each, in the order they appear in the reply.
+      expect(phasesOf(frames)).toEqual(['card']);
+      // A phase is progress, not content: it must never be mistaken for text to render.
+      expect(frames.filter((frame) => frame.type === 'delta').every((f) => asString(f.text).length > 0)).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  test('a say that mentions a card does not fake a phase', async () => {
+    // The scanner reads the raw half-written document, so the one thing it must not do is
+    // match a key the model only *talked* about. A quote inside a JSON string is escaped,
+    // which is what makes the naive-looking regex safe — this is the test that pins it.
+    const env = await configuredEnv();
+    const reply = JSON.stringify({
+      say: 'I would set "card": {"name": "Ada"} if I were proposing one, but I am not.',
+      question: { text: 'Shall I?', options: ['Yes', 'No'], recommended: 0 },
+      card: null,
+    });
+
+    const restore = stubReply(reply);
+    try {
+      const res = await forgeConsult(
+        env,
+        post({ mode: 'draft', messages: [{ role: 'user', content: 'a cartographer' }] }),
+      );
+      const frames = await framesOf(res);
+
+      // The question is announced; the card the model merely described is not.
+      expect(phasesOf(frames)).toEqual(['question']);
+    } finally {
+      restore();
     }
   });
 });

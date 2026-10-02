@@ -8,6 +8,14 @@ export interface ChatRequest {
   knobs: Record<string, number | string | string[]>;
   /** Per-chat, stable for the chat's life. Sticky routing depends on it. */
   sessionId: string;
+  /**
+   * Ask the provider not to reason before answering.
+   *
+   * The narrator has no UI for a reasoning trace, so thinking is pure latency and output
+   * tokens the reader never sees. It is a request-level flag rather than a sampler knob
+   * because the two providers spell it differently, and because `knobs` holds numbers.
+   */
+  disableReasoning: boolean;
 }
 
 export interface NormalizedUsage {

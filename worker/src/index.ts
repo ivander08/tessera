@@ -1,7 +1,7 @@
 import { isAuthorized, unauthorized } from './auth';
 import { preflight, withCors } from './cors';
 import { badRequest, json, notFound, readJson } from './http';
-import { getChat, getCharacter, getPersona as loadPersonaRow, getSettings, putSetting } from './db';
+import { getChat, getCharacter, getPersona as loadPersonaRow, getSettings, putSetting, putSettings } from './db';
 import { loadProviderKey, storeProviderKey } from './keys';
 import { getProvider } from './providers';
 import { handleChat } from './chat';
@@ -40,6 +40,7 @@ import { exportChat } from './export';
 import { seedOpeningState } from './state/update';
 import { loadAlternatives, loadPathTail } from './branch';
 import { substituteHead } from '../../src/lib/prompt/macros';
+import { asRecord, asString } from '../../src/lib/json';
 import { EMPTY_STATE, validatePatch } from '../../src/lib/state/schema';
 import type { WorldState } from '../../src/lib/state/schema';
 import { forgeConsult } from './forge/api';
@@ -102,10 +103,25 @@ async function route(req: Request, env: Env, url: URL, ctx: ExecutionContext): P
   if (path === '/api/settings') {
     if (method === 'GET') return json(await getSettings(env));
     if (method === 'PUT') {
-      const body = await readJson<{ key?: string; value?: string }>(req);
-      if (!body?.key || typeof body.value !== 'string') return badRequest('key and value required');
-      await putSetting(env, body.key, body.value);
-      return json({ ok: true });
+      const body = await readJson<{ key?: unknown; value?: unknown; settings?: unknown }>(req);
+
+      // The map form is what the settings screen sends: eleven keys, one request, one D1
+      // batch. The single-key form stays because it is the natural shape for one setting
+      // (the theme panel's autosave, the eval harness) and rewriting those callers would
+      // trade a clear request for a wrapper object.
+      if (body?.settings !== undefined) {
+        const entries = asSettingsMap(body.settings);
+        if (typeof entries === 'string') return badRequest(entries);
+        await putSettings(env, entries);
+        return json({ ok: true, written: entries.length });
+      }
+
+      const key = asString(body?.key);
+      if (key.length === 0 || typeof body?.value !== 'string') {
+        return badRequest('key and value required');
+      }
+      await putSetting(env, key, body.value);
+      return json({ ok: true, written: 1 });
     }
     return notFound();
   }
@@ -674,6 +690,29 @@ function readShownName(cardJson: string): string {
   } catch {
     return '';
   }
+}
+
+/**
+ * A settings map from the wire, or the reason it is not one.
+ *
+ * Every value must be a string, because that is what the column holds and what every
+ * reader of it expects: a number that arrived as a JSON number would be stored as `5`
+ * and read back as `"5"` by some paths and `5` by others. Rejecting the whole map is
+ * deliberate — a partial write would leave the form half-saved, which is the failure the
+ * batch exists to prevent.
+ */
+function asSettingsMap(value: unknown): Array<{ key: string; value: string }> | string {
+  const record = asRecord(value);
+  if (!record) return 'settings must be an object of key/value strings';
+
+  const entries: Array<{ key: string; value: string }> = [];
+  for (const [key, entry] of Object.entries(record)) {
+    if (key.length === 0) return 'settings keys must not be empty';
+    if (typeof entry !== 'string') return `setting "${key}" must be a string`;
+    entries.push({ key, value: entry });
+  }
+  if (entries.length === 0) return 'settings must not be empty';
+  return entries;
 }
 
 async function listModels(env: Env, providerId: string): Promise<Response> {

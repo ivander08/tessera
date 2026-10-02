@@ -93,6 +93,11 @@ async function prepare(
       maxTokens: opts.maxTokens ?? 1024,
       knobs: settings.knobs,
       sessionId: 'side-channel',
+      // Every side-channel caller wants the answer, and the flag is also forced onto the
+      // built body below. It is passed here so a provider that spells the flag differently
+      // gets it through its own `buildRequest` rather than through a key the other provider
+      // happens to understand.
+      disableReasoning: true,
     },
     apiKey.key,
   );
@@ -122,6 +127,9 @@ function sideChannelBody(
   const body = { ...(JSON.parse(String(init.body)) as Record<string, unknown>) };
   body.stream = opts.stream;
   if (opts.json) body.response_format = { type: 'json_object' };
+  // Forced, not merely requested through `buildRequest`: `enable_thinking` is Kenari's
+  // spelling and this call must not silently start reasoning because a provider chose not
+  // to forward the flag it was handed.
   body.enable_thinking = false;
   return body;
 }

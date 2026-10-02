@@ -2,6 +2,16 @@ import type { ChatRequest, ParsedFrame, Provider } from './types';
 
 const ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 
+/**
+ * Whether a model id names a reasoning model.
+ *
+ * A name check rather than the live `supported_parameters` list, because `buildRequest` is
+ * synchronous and has no model catalogue. It is the safe direction to be wrong in: a
+ * reasoning model that slips through simply reasons, while a non-reasoning model that got
+ * the parameter would fail the request under `require_parameters`.
+ */
+const REASONING_MODEL = /(^|[/-])(r1|o1|o3|o4|thinking|reasoning|reasoner)/i;
+
 interface OpenRouterFrame {
   error?: { message?: string; code?: number | string };
   choices?: Array<{ delta?: { content?: string | null }; finish_reason?: string | null }>;
@@ -42,6 +52,17 @@ export const openrouter: Provider = {
           // both load balancing and sticky routing — the mechanism caching depends on.
           provider: { require_parameters: true },
           ...req.knobs,
+          // `reasoning.enabled: false` is OpenRouter's own control, translated per backend
+          // (effort "none" for OpenAI/DeepSeek, an omitted thinking block for Anthropic).
+          //
+          // Sent only when the model's id says it reasons. `require_parameters: true` is
+          // what makes that check necessary rather than tidy: OpenRouter refuses to route
+          // to any provider that would drop a parameter in the request, so sending this to
+          // a model that does not advertise `reasoning` leaves no eligible provider at all
+          // and the turn fails outright.
+          ...(req.disableReasoning && REASONING_MODEL.test(req.model)
+            ? { reasoning: { enabled: false } }
+            : {}),
         }),
       },
     };

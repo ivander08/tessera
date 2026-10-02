@@ -29,7 +29,7 @@ Test chat: `b92d536f-d276-40a8-950c-e6dd583fbe74`, a 601-message seeded conversa
 
 | Field | Populated? | Example observed |
 |---|---|---|
-| `time` | yes | `Wednesday, 30 September 2026, 05:34 AM` |
+| `time` | yes | `Friday, 27 February 2026, 05:35 AM` |
 | `location` | yes | `Sydney, on the coast, sitting on the edge of the bed` |
 | `weather` | yes | `warm, clear morning` |
 | `present` | yes | `["Quill"]` |
@@ -76,7 +76,7 @@ Time: past midnight, day 301
 ```
 
 The reader's actual intent, stated directly: *"time in my head is supposed to be the actual
-time. Let's say, Wednesday, 30 September 2026, 05:34 AM."* — and likewise for location, which
+time. Let's say, Friday, 27 February 2026, 05:35 AM."* — and likewise for location, which
 should name a real place at real specificity ("Sydney's coast, on the bed"), not a generic
 one.
 
@@ -85,7 +85,7 @@ time, and for location to name the city or region when it is known. Verified aft
 change:
 
 ```
-time:     Wednesday, 30 September 2026, 05:34 AM
+time:     Friday, 27 February 2026, 05:35 AM
 location: Sydney, on the coast, sitting on the edge of the bed
 weather:  warm, clear morning
 ```
@@ -140,7 +140,7 @@ The full rendered block, from the chat under test:
 
 ```
 World state:
-Time: Wednesday, 30 September 2026, 05:34 AM
+Date/Time: Friday, 27 February 2026, 05:35 AM
 Location: Sydney, on the coast, sitting on the edge of the bed
 Weather: warm, clear morning
 Present: Quill
@@ -164,7 +164,7 @@ CHAT="<chat id>"
 # Send a turn that establishes time, place and weather, wait ~10s, then read it back.
 curl -s -N -X POST "https://tessera.ivanderseah08.workers.dev/api/chat" \
   -H "Authorization: Bearer $TOK" -H "Content-Type: application/json" \
-  --data-binary "{\"chatId\":\"$CHAT\",\"content\":\"It is Wednesday, 30 September 2026, 05:34 AM. I am in Sydney, on the coast, on the bed.\",\"mode\":\"send\"}"
+  --data-binary "{\"chatId\":\"$CHAT\",\"content\":\"It is Friday, 27 February 2026, 05:35 AM. I am in Sydney, on the coast, on the bed.\",\"mode\":\"send\"}"
 sleep 10
 curl -s -H "Authorization: Bearer $TOK" "https://tessera.ivanderseah08.workers.dev/api/state/$CHAT"
 ```

@@ -121,6 +121,8 @@ export interface NormalizedUsage {
  */
 export type ConsultFrame =
   | { type: 'delta'; text: string }
+  /** Which part of the reply is being written. Progress, not content. */
+  | { type: 'phase'; phase: 'say' | 'question' | 'card' }
   | { type: 'turn'; turn: unknown }
   | { type: 'error'; message: string; code: string };
 

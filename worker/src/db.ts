@@ -66,6 +66,35 @@ export async function putSetting(env: Env, key: string, value: string): Promise<
     .run();
 }
 
+/**
+ * Write many settings in one round trip.
+ *
+ * The settings screen saves eleven keys at once, and one `PUT` per key meant eleven
+ * sequential requests — each one its own network round trip, its own D1 write, and its own
+ * chance to fail halfway and leave the form half-saved. `batch` is D1's own primitive for
+ * exactly this: the statements go in one request and run in one transaction, so a save
+ * either lands or does not.
+ *
+ * `updated_at` is computed once rather than per row, so every key written by one save
+ * carries the same timestamp — which is what makes "what did that save touch" answerable
+ * from the table alone.
+ */
+export async function putSettings(
+  env: Env,
+  entries: Array<{ key: string; value: string }>,
+): Promise<void> {
+  if (entries.length === 0) return;
+  const now = Date.now();
+  await env.DB.batch(
+    entries.map((entry) =>
+      env.DB.prepare(
+        `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      ).bind(entry.key, entry.value, now),
+    ),
+  );
+}
+
 export async function getChat(env: Env, chatId: string): Promise<ChatRow | null> {
   return await env.DB.prepare('SELECT * FROM chats WHERE id = ?').bind(chatId).first<ChatRow>();
 }
@@ -94,6 +123,19 @@ export interface ChatSettings {
   loreTokenBudget: number;
   /** Let a matched entry's own text trigger further entries. */
   loreRecursive: boolean;
+  /**
+   * Whether to ask the provider to skip reasoning on the narrator's turn.
+   *
+   * Defaults to ON. The narrator has no UI for a reasoning trace, so thinking is latency
+   * and output tokens the reader never sees; measured on the cheap model, reasoning ran
+   * 16,366 characters with `content` empty and `finish_reason: length`, which reaches the
+   * user as a turn that produced nothing.
+   *
+   * A reader who wants the model to think can turn it off, and a model that does not
+   * support the flag is never sent it — the request would be rejected under
+   * `require_parameters` on OpenRouter.
+   */
+  disableReasoning: boolean;
 }
 
 export const DEFAULT_SYSTEM_PROMPT =
@@ -153,5 +195,10 @@ export async function loadChatSettings(env: Env): Promise<ChatSettings> {
     loreScanDepth: Number(raw.loreScanDepth ?? 4) || 4,
     loreTokenBudget: Number(raw.loreTokenBudget ?? 1024) || 1024,
     loreRecursive: raw.loreRecursive === 'true',
+    // The stored value names the state of reasoning itself: `on` keeps it, anything else
+    // (including a row that has never been written) suppresses it. Only an explicit `on`
+    // lets the model reason, so an unrecognized value can never silently re-enable the
+    // latency this setting exists to remove.
+    disableReasoning: raw.reasoning !== 'on',
   };
 }
