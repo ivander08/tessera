@@ -80,6 +80,22 @@ const BEATS: Beat[] = [
   { name: 'out of breath', prompt: 'We have run the last mile up the hill and Ada cannot speak yet. Write her at the top.' },
   { name: 'climbing', prompt: 'Ada pulls herself up onto the roof and the last part is hard. Write it.' },
 
+  // --- violence and terror ---
+  { name: 'screaming', prompt: 'Ada turns and there is a body hanging in the doorway she just walked past. Write her scream.' },
+  { name: 'being strangled', prompt: 'A man gets both hands around Ada\'s throat and lifts. Write her fighting him.' },
+  { name: 'being stabbed', prompt: 'The knife goes into Ada\'s side before she sees it coming. Write the next few seconds.' },
+  { name: 'getting murdered', prompt: 'Write Ada being killed — the whole thing, from the first blow to the last sound she makes.' },
+  { name: 'watching someone die', prompt: 'Ada is holding a man she loves while he dies of a wound in his chest. Write it.' },
+  { name: 'burning', prompt: 'Ada puts her hand flat on the stove plate before she realises it is hot. Write the first three seconds.' },
+  { name: 'bone breaking', prompt: 'Ada\'s arm breaks under the cart wheel. Write the moment it happens and the moment after.' },
+  { name: 'drowning', prompt: 'Ada goes under the water and cannot get back up. Write it from under the surface.' },
+  { name: 'vomiting', prompt: 'Ada is ill in the yard and cannot stop. Write it, without looking away.' },
+  { name: 'childbirth', prompt: 'Ada is giving birth and it has been going badly for hours. Write the last of it.' },
+  { name: 'torture', prompt: 'A man is working on Ada with a pair of pincers and she is not going to tell him anything. Write it.' },
+  { name: 'fight', prompt: 'Ada takes a punch to the mouth and gives one back. Write the exchange.' },
+  { name: 'gunshot', prompt: 'A shot goes off inches from Ada\'s ear in a stone room. Write the next few seconds.' },
+  { name: 'freezing', prompt: 'Ada has been in the snow too long and her body is failing. Write her trying to speak.' },
+
   // --- sex ---
   { name: 'kissing', prompt: 'Ada comes back up and kisses me — mouth, jaw, throat, over and over. Write it.' },
   { name: 'handjob', prompt: 'Ada gets her hand inside my trousers and takes hold of me. Write it, and write what she does.' },
@@ -110,37 +126,53 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** Send one turn and accumulate the reply text from the SSE frames. */
-async function sendTurn(chatId: string, content: string): Promise<string> {
-  const res = await fetch(`${BASE}/api/chat`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ chatId, content, mode: 'send' }),
-  });
-  if (!res.ok || !res.body) throw new Error(`chat -> ${res.status} ${await res.text()}`);
+/**
+ * Send one turn and accumulate the reply text from the SSE frames.
+ *
+ * `timeoutMs` matters for a free-tier model: measured on `glm-5-3-flash`, one beat returned
+ * "The provider returned no content" and the next never came back at all — the request hung
+ * open indefinitely. Without a deadline the whole bench stalls on one beat, which is how a
+ * 42-beat run sat at one reply for six minutes. Aborting lets the beat be recorded as
+ * failed and the run continue.
+ */
+async function sendTurn(chatId: string, content: string, timeoutMs = 120_000): Promise<string> {
+  const controller = new AbortController();
+  const deadline = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${BASE}/api/chat`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ chatId, content, mode: 'send' }),
+      signal: controller.signal,
+    });
+    if (!res.ok || !res.body) throw new Error(`chat -> ${res.status} ${await res.text()}`);
 
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let reply = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const frames = buffer.split('\n\n');
-    buffer = frames.pop() ?? '';
-    for (const frame of frames) {
-      const line = frame.trim();
-      if (!line.startsWith('data:')) continue;
-      const parsed = JSON.parse(line.slice(5).trim()) as
-        | { type: 'delta'; text: string }
-        | { type: 'done' }
-        | { type: 'error'; message: string };
-      if (parsed.type === 'delta') reply += parsed.text;
-      else if (parsed.type === 'error') throw new Error(parsed.message);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let reply = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split('\n\n');
+      buffer = frames.pop() ?? '';
+      for (const frame of frames) {
+        const line = frame.trim();
+        if (!line.startsWith('data:')) continue;
+        const parsed = JSON.parse(line.slice(5).trim()) as
+          | { type: 'delta'; text: string }
+          | { type: 'done' }
+          | { type: 'error'; message: string };
+        if (parsed.type === 'delta') reply += parsed.text;
+        else if (parsed.type === 'error') throw new Error(parsed.message);
+      }
     }
+    if (reply.trim().length === 0) throw new Error('the provider returned no content');
+    return reply;
+  } finally {
+    clearTimeout(deadline);
   }
-  return reply;
 }
 
 /** The eval's own card, created on first use so the beats are answered by the right character. */
@@ -167,6 +199,33 @@ async function resolvePreset(name: string, disabled: boolean): Promise<string | 
   return found.id;
 }
 
+/**
+ * One retry per beat, because the failure is intermittent rather than systematic.
+ *
+ * Measured on `glm-5-3-flash`: the same beat returns a full reply on one attempt and "The
+ * provider returned no content" on the next. A single retry turns most of those into a
+ * reply; more than one would spend the bench's wall clock on the provider's availability
+ * rather than the model's prose.
+ */
+async function sendTurnWithRetry(chatId: string, content: string): Promise<string> {
+  try {
+    return await sendTurn(chatId, content);
+  } catch {
+    return await sendTurn(chatId, content);
+  }
+}
+
+/**
+ * The model the bench runs on.
+ *
+ * Model is a GLOBAL setting, so it is captured before the first switch and restored at the
+ * end — an interrupted run must not leave the app pointed at a bench model.
+ */
+async function setModel(model: string): Promise<void> {
+  await api('/api/settings', { method: 'PUT', body: JSON.stringify({ key: 'provider', value: 'kenari' }) });
+  await api('/api/settings', { method: 'PUT', body: JSON.stringify({ key: 'model', value: model }) });
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const flag = (name: string): string | null => {
@@ -178,12 +237,19 @@ async function main(): Promise<void> {
   const presetId = await resolvePreset(presetName, argv.includes('--no-preset'));
   const characterId = await resolveCharacter();
 
+  // The model under test. Captured so it can be restored, and recorded in the report so a
+  // reply is never attributed to the wrong model.
+  const model = flag('--model');
+  const settings = await api<{ provider?: string; model?: string }>('/api/settings');
+  const original = { provider: settings.provider ?? '', model: settings.model ?? '' };
+  if (model) await setModel(model);
+
   const out = flag('--out') ?? 'SOUNDS.md';
   const lines: string[] = [
     '# Sound bench — what was asked, and what came back',
     '',
-    `Base: ${BASE} · Character: \`${EVAL_CHARACTER_NAME}\` · Preset: ${presetId ? `\`${presetName}\`` : 'none'}`,
-    `Beats: ${BEATS.length} · Craft: \`{"vocalisation":true}\``,
+    `Base: ${BASE} · Character: \`${EVAL_CHARACTER_NAME}\` · Model: \`${model ?? original.model}\``,
+    `Preset: ${presetId ? `\`${presetName}\`` : 'none'} · Beats: ${BEATS.length} · Craft: \`{"vocalisation":true}\``,
     '',
     'One beat per fresh chat, so the beats cannot bleed into one another. **Read the replies** —',
     'the device count beside each heading is a convenience from `sound.ts`, not the verdict.',
@@ -196,58 +262,11 @@ async function main(): Promise<void> {
 
   const counts: Array<{ name: string; count: number }> = [];
 
-  for (const [index, beat] of BEATS.entries()) {
-    const label = `${String(index + 1).padStart(2, '0')}. ${beat.name}`;
-    process.stdout.write(`${label} … `);
-
-    const chat = await api<{ id: string }>('/api/chats', {
-      method: 'POST',
-      body: JSON.stringify({ characterId }),
-    });
-    await api(`/api/chats/${encodeURIComponent(chat.id)}/scene`, {
-      method: 'PATCH',
-      body: JSON.stringify({ craft: { vocalisation: true } }),
-    });
-    if (presetId) {
-      await api('/api/preset/apply', {
-        method: 'POST',
-        body: JSON.stringify({ chatId: chat.id, presetId }),
-      });
-    }
-
-    let reply: string;
-    try {
-      reply = await sendTurn(chat.id, beat.prompt);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      reply = `_(beat failed: ${message})_`;
-      process.stdout.write(`FAILED: ${message}\n`);
-      lines.push(`## ${label}`, '', `**Asked:** ${beat.prompt}`, '', `**Narrator:** ${reply}`, '', '---', '');
-      continue;
-    }
-
-    const devices = soundDevices(reply);
-    counts.push({ name: beat.name, count: devices.length });
-    process.stdout.write(`${devices.length} devices\n`);
-
-    lines.push(
-      `## ${label}`,
-      '',
-      `**Asked:** ${beat.prompt}`,
-      '',
-      `**Narrator:**`,
-      '',
-      reply,
-      '',
-      `*${devices.length} sound device${devices.length === 1 ? '' : 's'}${devices.length > 0 ? `: ${devices.join(', ')}` : ''}*`,
-      '',
-      '---',
-      '',
-    );
-  }
-
-  // The summary goes at the END, so the replies are what a reader meets first.
-  lines.push(
+  /** Written after every beat, so a dropped connection cannot lose the replies already paid for. */
+  const flush = (): void => {
+    writeFileSync(out, [...lines, ...summary()].join('\n'), 'utf8');
+  };
+  const summary = (): string[] => [
     '## Summary',
     '',
     '| beat | devices |',
@@ -256,9 +275,76 @@ async function main(): Promise<void> {
     '',
     `**Beats with at least one written sound: ${counts.filter((c) => c.count > 0).length} / ${counts.length}.**`,
     '',
-  );
+  ];
 
-  writeFileSync(out, lines.join('\n'), 'utf8');
+  try {
+    for (const [index, beat] of BEATS.entries()) {
+      const label = `${String(index + 1).padStart(2, '0')}. ${beat.name}`;
+      process.stdout.write(`${label} … `);
+
+      let reply: string;
+      try {
+        const chat = await api<{ id: string }>('/api/chats', {
+          method: 'POST',
+          body: JSON.stringify({ characterId }),
+        });
+        await api(`/api/chats/${encodeURIComponent(chat.id)}/scene`, {
+          method: 'PATCH',
+          body: JSON.stringify({ craft: { vocalisation: true } }),
+        });
+        if (presetId) {
+          await api('/api/preset/apply', {
+            method: 'POST',
+            body: JSON.stringify({ chatId: chat.id, presetId }),
+          });
+        }
+        reply = await sendTurnWithRetry(chat.id, beat.prompt);
+      } catch (error) {
+        // A dropped connection on one beat must not lose the other twenty-seven. The bench
+        // is a reading aid, and a partial transcript is still worth reading.
+        const message = error instanceof Error ? error.message : String(error);
+        process.stdout.write(`FAILED: ${message}\n`);
+        lines.push(`## ${label}`, '', `**Asked:** ${beat.prompt}`, '', `_(beat failed: ${message})_`, '', '---', '');
+        flush();
+        continue;
+      }
+
+      const devices = soundDevices(reply);
+      counts.push({ name: beat.name, count: devices.length });
+      process.stdout.write(`${devices.length} devices\n`);
+
+      lines.push(
+        `## ${label}`,
+        '',
+        `**Asked:** ${beat.prompt}`,
+        '',
+        `**Narrator:**`,
+        '',
+        reply,
+        '',
+        `*${devices.length} sound device${devices.length === 1 ? '' : 's'}${devices.length > 0 ? `: ${devices.join(', ')}` : ''}*`,
+        '',
+        '---',
+        '',
+      );
+      flush();
+    }
+  } finally {
+    // Restored even on a throw, so a crashed bench does not leave the app on a test model.
+    if (model) {
+      await api('/api/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ key: 'provider', value: original.provider }),
+      }).catch(() => {});
+      await api('/api/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ key: 'model', value: original.model }),
+      }).catch(() => {});
+    }
+  }
+
+  // The summary goes at the END, so the replies are what a reader meets first.
+  flush();
   process.stdout.write(`\nWrote ${out}\n`);
   process.stdout.write(
     `Beats with a sound: ${counts.filter((c) => c.count > 0).length}/${counts.length}\n`,

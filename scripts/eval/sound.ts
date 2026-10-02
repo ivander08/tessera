@@ -54,11 +54,18 @@ const COMMON = new Set(
   ).split(' '),
 );
 
-/** A short burst a body makes: a held letter, a tilde, a broken word, or a vowelless noise. */
+/**
+ * A short burst a body makes: a held letter, a tilde, a broken word, or a vowelless noise.
+ *
+ * Asterisked italics are NOT here. Matching an asterisked word as a sound scored `walked`,
+ * `tired`, `shit` and `lie` — emphasis on an ordinary word, which a real run used
+ * constantly. A standalone italicised burst is caught by the span rule instead, which
+ * requires it to be short, standalone and not an ordinary word.
+ */
 const BURST_SHAPES: RegExp[] = [
   /([A-Za-z])\1\1/, // Aaaahh, Nnngh, Haaah, Schluup
+  /([A-Za-z]{2,3})\1+/, // Hahaha, Hehehe, Waha — a syllable repeated
   /[A-Za-z]~/, // Mmm~, Nghh~, Chu~
-  /\*[A-Za-z]+\*/, // *pop*, *gulp*
   /\b([A-Za-z]{1,3})-\1[A-Za-z]/, // T-The, A-Ah
   /\b[b-df-hj-np-tv-z]{2,}\b/, // Hmm, Tsk, Pfft, Ngh, Hrh, Grr
 ];
@@ -163,6 +170,14 @@ export function soundDevices(text: string): string[] {
     out.push(match);
   };
 
+  // A standalone quoted or italicised burst. Checked BEFORE the prose shapes below, because
+  // a whole burst like `"BBBWAAHHAHAAA!!"` otherwise matches three of them separately and
+  // scores as three sounds. One quoted burst is one sound.
+  for (const match of text.matchAll(SPAN)) {
+    const span = (match[1] ?? match[2] ?? '').trim();
+    if (isSoundSpan(span)) add(span);
+  }
+
   // The distinctive shapes, anywhere in the prose.
   for (const shape of BURST_SHAPES) {
     for (const match of text.matchAll(new RegExp(shape.source, 'gi'))) {
@@ -183,12 +198,6 @@ export function soundDevices(text: string): string[] {
     if (bare.length >= 2 && !COMMON.has(bare) && !SHORT_WORDS.has(bare) && !VOWELLESS_WORDS.has(bare)) {
       add(match[0]);
     }
-  }
-
-  // A standalone quoted or italicised burst.
-  for (const match of text.matchAll(SPAN)) {
-    const span = (match[1] ?? match[2] ?? '').trim();
-    if (isSoundSpan(span)) add(span);
   }
 
   return out;

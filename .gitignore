@@ -59,6 +59,7 @@ scripts/eval/DEEPSEEK.md
 scripts/eval/MIMO.md
 scripts/eval/RATINGS.md
 scripts/eval/SOUNDS.md
+scripts/eval/SOUNDS.*.md
 scripts/eval/last-run.*.md
 scripts/eval/REPORT.*.md
 

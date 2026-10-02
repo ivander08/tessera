@@ -157,6 +157,8 @@ described as happening:
   climax                  -> the sound breaks open: "Aaaahh!", "Nnngh!", "Haaah—"
   effort, lifting, strain -> "Nngh—", "Hnng!", "Ughh!", "Grhh!", "Khh~"
   fear, shock, alarm      -> "Huhh?!", "Eh?!", "Haaah-!", "Hiee?!", a hard gasp
+  terror, a scream        -> "Aaaahh!!", "HHAAA—", "Nnnno—!", a scream that tears; a
+                             body that has stopped being in charge of its own voice
   surprise, startled      -> "Eep!", "Kya!", "A-Ah...", a jump and the breath out of her
   pain, a knock, a burn   -> "Ow!", "Ahh—!", "Nngghh...!", a hiss through the teeth
   pleading, unable to say -> "P-Please..!", "Hh-Hey..!", "Nnnnh~!", "Ehhhn~!"
@@ -164,11 +166,17 @@ described as happening:
                              a sentence that dies mid-word dies ON the page — "I c—", "it's n-not—",
                              never "the words stopped" or "she could not finish"
   laughing                -> "Hah", "Hehe…", "Pfft…!", "Hahah!", "BWAHAHA!", a snort
-  panting, out of breath  -> "Haa… haa…", "Huff… huff…"
+  panting, out of breath  -> "Haa… haa…", "Huff… huff…", "Hff—", a breath dragged in
+                             through the mouth in raw pulls; at the top of a hill, after
+                             a run, mid-sentence when the lungs are not keeping up
   kissing                 -> "Mwah!!", "Chu~", "Mmmch!", "Mwah mwah mwah!"
   mouth full, oral        -> "Mmmph!", "Glk—glk—glk—", "Slurp… slurrrp!", "Gulp…!", "*pop*!"
   eating, drinking        -> "Mm-Mm!", "Crunch crunch!", "Slurp!", "Ahhh~", "Mmmf!"
-  throat, voice going     -> "Ahem.", a cough, a swallow, "Nngh." tested low
+  throat, voice going     -> "Ahem.", "Hm-hm", a cough, a clearing of it, a swallow,
+                             "Nngh." tested low; a voice that will not start — "Listen—"
+                             cracking in the middle, the first word thin
+  yawning, tired          -> a long open "Haaaah…" on the exhale, the jaw cracking loose,
+                             a sentence ridden out through it and finished wrong
   annoyed, dismissive     -> "Tsk!", "Che!", "Pfft.", "Hmph."
   sleepy, content         -> "Zzz...", "Mmm…", a long breath out
 
@@ -183,8 +191,14 @@ the vowel, not the consonant tail — "Nooo" and not "Noooo", "argh" into "aaarg
 One stretched word per line at most. A trailing "~" softens a sound into something
 playful or coaxing: "Mmm~", "Nnnnh~!".
 
-Volume and interruption are written, not described:
-  ALL CAPS for a shout or a hard emphasis — "WHAT?!", "I SAID NO", "don't you DARE".
+Volume and loss of control are written, not described:
+  ALL CAPS for a shout, a hard emphasis, or a voice no longer under its owner's control —
+  "WHAT?!", "I SAID NO", "don't you DARE", "HAHAHAHAHA!!", "NNNO—", "SSSTOP IT".
+  The last of those is the point: a body that has lost its composure does not say
+  "Hahaha!", it says "HAHAHAHAHA!!" and cannot stop. Write the loss of control in the
+  letters themselves, never as "she laughed helplessly" or "she could not stop laughing".
+  A repeated syllable IS a sound — "Hahaha", "Hehehe", "nonono", "no no no no" — and the
+  longer it runs, the more it says. Do not tidy it into one neat "Haha".
   Stacked "?!", "!?!", "....!?" for disbelief or a voice cracking upward: "W-What....?!"
   A trailing "..." for something not finished, a word abandoned, a thought lost.
   "—" for a cut-off: another speaker talking over them, a hand at the throat, a hit.
@@ -198,10 +212,17 @@ and...". "She gasps" is a report; the gasp on the page is the sound.
 
 Restraint, so the rest of this holds: most lines carry no sound at all. Sound is an
 accent, not a baseline, and one repeated sound drains itself — so never two lines in a
-row, and never the same sound twice in a scene. But when a beat genuinely calls for a
-sound — a first touch, a hit, a climax, a laugh that lands, someone shouted at, a mouth
-that is full — write it, and write it fully. A quiet scene should have none; a scene
+row, and never the same sound twice in a scene. A quiet scene should have none; a scene
 with real heat should have several, and they should be different from each other.
+
+But the list above is a list of CAUSES, not of occasions, and every cause on it counts
+at every intensity. A cough is a cough whether it comes from a deathbed or a tickle in
+the throat. A yawn is audible. Someone who has run up a hill and cannot speak yet is
+heard getting her breath back. Someone frightened says "Don't move" in a voice that
+comes out wrong, and the wrongness is on the page. If a body on the list is doing the
+thing, the sound is written — the question is never whether the scene is exciting
+enough. What stays quiet is a scene where no body is doing any of it: two people
+talking, someone reading, a room at rest.
 </craft_vocalisation>`;
 
 /** The narrative-person line per value. `'off'` maps to `''` so the assembly drops it. */
