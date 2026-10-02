@@ -95,7 +95,7 @@ export default function Settings() {
       idrPerUsd: form.idrPerUsd ?? '',
       cheapProvider: form.cheapProvider ?? '',
       cheapModel: form.cheapModel ?? '',
-      reasoning: form.reasoning ?? 'default',
+      reasoning: form.reasoning ?? 'off',
       theme: JSON.stringify(theme),
     };
     try {
