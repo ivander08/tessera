@@ -2592,16 +2592,124 @@ html[data-layout="bubble"] .turn-segment:not(:first-child) {
   border-top: 1px solid var(--line);
   background: var(--surface);
   flex: 0 0 auto;
+  /* The composer grows with its text, so the button must not stretch with it — a Send
+     button the height of a five-line paste reads as a second text box. */
+  align-items: flex-end;
 }
 
 .consult-compose .field {
   flex: 1;
   min-width: 0;
+  /* The composer is a textarea so a pasted premise or a multi-line answer is possible, but
+     it must not look like a form field: it stays one line tall until the text wraps, and
+     grows from there. `resize: vertical` from the shared rule would let a drag stretch it
+     over the transcript, so the handle is removed here. */
+  resize: none;
+  max-height: 40vh;
+  overflow-y: auto;
+  field-sizing: content;
 }
 
 /* A card the consultant wants to write, listed as field/value rows. */
 .consult-field + .consult-field {
   margin-top: 10px;
+}
+
+/* ---------------------------------------------------------------- diff */
+
+/* The consultant's proposal, shown as a diff rather than a before/after pair: what a reader
+   needs to decide on an "apply" is which lines changed and where in the line the change
+   landed, not two paragraphs to compare by eye. */
+.diff {
+  margin-top: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--ground);
+  overflow: hidden;
+  font-family: var(--font-data);
+  font-size: var(--text-xs);
+  line-height: 1.65;
+}
+
+.diff-line {
+  display: flex;
+  gap: 6px;
+  padding: 0 8px;
+  /* A long line wraps rather than scrolling sideways: the pane is 440px wide, and a
+     horizontal scrollbar inside a diff is where changes go to hide. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.diff-gutter {
+  flex: none;
+  width: 2.2em;
+  text-align: right;
+  color: var(--ink-faint);
+  user-select: none;
+}
+
+.diff-mark {
+  flex: none;
+  width: 1em;
+  color: var(--ink-faint);
+  user-select: none;
+}
+
+.diff-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--ink-dim);
+}
+
+/* A line that arrived, a line that went, and a line that was edited in place. The edited
+   line is the common case and the quietest of the three: only the changed columns shout. */
+.diff-line-add {
+  background: color-mix(in srgb, var(--good) 12%, transparent);
+}
+
+.diff-line-add .diff-text,
+.diff-line-add .diff-mark {
+  color: color-mix(in srgb, var(--good) 85%, var(--ink));
+}
+
+.diff-line-remove {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.diff-line-remove .diff-text,
+.diff-line-remove .diff-mark {
+  color: color-mix(in srgb, var(--danger) 80%, var(--ink));
+}
+
+.diff-line-edited .diff-change {
+  background: color-mix(in srgb, var(--brass) 26%, transparent);
+  color: var(--ink);
+  border-radius: 2px;
+  /* The columns are marked, not shouted: no bold, no underline — the tint is the signal. */
+  padding: 0 1px;
+}
+
+/* A change too short for a diff — a tag list, one scene field — reads as one labelled pair. */
+.diff-pair + .diff-pair {
+  margin-top: 6px;
+}
+
+.diff-pair-label {
+  display: block;
+  color: var(--ink-faint);
+  font-family: var(--font-data);
+  font-size: var(--text-xs);
+}
+
+.diff-stat {
+  float: right;
+  color: var(--ink-faint);
+  font-family: var(--font-data);
+  font-size: var(--text-xs);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .consult-field-label {
@@ -2639,6 +2747,10 @@ html[data-layout="bubble"] .turn-segment:not(:first-child) {
   font-size: var(--text-sm);
   line-height: 1.5;
   color: var(--ink-dim);
+  /* The composer accepts newlines now, so a multi-line answer has to render as one. Without
+     this the reader's own paragraph collapses to a single line the moment they send it. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* Where the conversation IS the screen: one centred column, tall enough to work in. */

@@ -10,7 +10,11 @@ import { useToast } from '../components/Toast';
 import { GreetingsEditor, GreetingStateFields } from '../components/GreetingsEditor';
 import { Avatar } from '../components/Avatar';
 import { ConsultDock } from '../components/ConsultDock';
-import { ConsultPanel } from '../components/ConsultPanel';
+import {
+  ConsultPanel,
+  emptyConsultSession,
+  type ConsultSession,
+} from '../components/ConsultPanel';
 import { NamePrompt } from '../components/NamePrompt';
 import { AppBar, BackLink, CrumbSep } from '../components/AppBar';
 
@@ -137,9 +141,13 @@ export default function CharacterEdit() {
   // Whether the fork name sheet is open. The suggested name is read from the form when
   // the sheet renders, so nothing has to be captured when it opens.
   const [forkOpen, setForkOpen] = useState(false);
-  // Whether the consultant sheet is open. Its conversation lives inside `ConsultPanel`,
-  // so opening and closing it deliberately starts a fresh interview.
+  // Whether the consultant sheet is open.
   const [consultOpen, setConsultOpen] = useState(false);
+  // The conversation itself, held here rather than inside `ConsultPanel` so that closing the
+  // sheet and reopening it continues the interview. The panel unmounts on close, and state
+  // owned by it would go with it — which is what made a close lose everything the consultant
+  // had been told. It is cleared when the character changes, since it is about that card.
+  const [consultSession, setConsultSession] = useState<ConsultSession>(emptyConsultSession);
   // Validation failures (an empty name, an oversized avatar, a broken lorebook) stay
   // inline, because they point at the field that caused them. Save failures go to a toast.
   const [failure, setFailure] = useState<string | null>(null);
@@ -286,12 +294,19 @@ export default function CharacterEdit() {
   /**
    * Writes a proposed card into the form.
    *
-   * Into the existing state, field by field, rather than replacing it: the greeting scenes,
-   * the avatar and the lorebook are the user's, not the consultant's, and the consultant
-   * never proposes them. Nothing is persisted here — this screen's contract is that Save is
-   * the only thing that writes, so an applied revision is still one undo away.
+   * Into the existing state, field by field, rather than replacing it: the avatar and the
+   * lorebook are the user's, not the consultant's, and the consultant never proposes them.
+   * Nothing is persisted here — this screen's contract is that Save is the only thing that
+   * writes, so an applied revision is still one undo away.
+   *
+   * A field the proposal OMITS keeps its current value. That distinction is load-bearing for
+   * the two list-valued fields: the consultant returns only what it changed, so treating an
+   * absent `greetingStates` as "no scenes" would wipe every opening's time and place on
+   * Apply — silently, and with no way back.
    */
   function applyCard(proposed: CharacterCardJson) {
+    // Only fields the proposal actually carries are written: `toParsedCard` omits a field the
+    // model did not mention, so an absent key here means "unchanged", not "blank".
     const next: Record<string, string> = {};
     for (const field of FIELDS) {
       const value = proposed[field.key];
@@ -300,7 +315,7 @@ export default function CharacterEdit() {
     setEdits((current) => ({ ...current, ...next }));
     setTagsText(proposed.tags.join(', '));
     setGreetings(proposed.alternateGreetings);
-    setGreetingStates(proposed.greetingStates ?? []);
+    if (proposed.greetingStates !== undefined) setGreetingStates(proposed.greetingStates);
   }
 
   async function fork(name: string) {
@@ -659,6 +674,8 @@ export default function CharacterEdit() {
                 card={currentCard()}
                 onApply={applyCard}
                 onClose={() => setConsultOpen(false)}
+                session={consultSession}
+                onSession={setConsultSession}
                 dragHandlers={dragHandlers}
               />
             )}

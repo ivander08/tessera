@@ -60,6 +60,17 @@ question, an object, a gesture, a decision pending — then stop, with the situa
 rather than resolved. Roughly five to seven lines. Write it in {{char}}'s voice, present
 tense.
 
+## greeting_states
+Every opening — "first_mes" and each entry of "alternate_greetings" — gets a matching entry in
+"greeting_states", in the same order. It is the scene that opening begins in, as three short
+strings: "time", "location" and "weather". The greeting's prose says what is happening; this
+says where and when, in the form the narrator can read directly instead of inferring from the
+paragraph. An opening that begins "the rain has not let up since the market closed" states
+"weather": "heavy rain" here. An opening that does not establish a time gets no "time" key —
+leave it out rather than inventing one. An opening with no scene at all gets an empty object.
+Keep "time" in-world and specific: "Wednesday, 30 September 2026, 04:00 PM" or "the small
+hours", never a real timestamp.
+
 ## mes_example
 The {{user}}: / {{char}}: block format, two to six short exchanges, showing voice rather than
 describing it. Show how they speak when it matters, not small talk.

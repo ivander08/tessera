@@ -1,6 +1,11 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { AppBar } from '../components/AppBar';
-import { ConsultPanel } from '../components/ConsultPanel';
+import {
+  ConsultPanel,
+  emptyConsultSession,
+  type ConsultSession,
+} from '../components/ConsultPanel';
 import { apiJson } from '../lib/api';
 import type { ParsedCard } from '../lib/cards/types';
 
@@ -17,6 +22,9 @@ import type { ParsedCard } from '../lib/cards/types';
  */
 export default function Forge() {
   const navigate = useNavigate();
+  // The interview in progress. Held on the route so a re-render — or navigating back to
+  // Forge — does not discard everything the consultant has been told.
+  const [session, setSession] = useState<ConsultSession>(emptyConsultSession);
 
   return (
     <>
@@ -25,6 +33,8 @@ export default function Forge() {
       <main className="consult-standalone">
         <ConsultPanel
           mode="draft"
+          session={session}
+          onSession={setSession}
           onDone={async (card: ParsedCard) => {
             // The card is created and the browser lands on the ordinary editor, so anything
             // the interview got wrong is one field edit away rather than a second interview.

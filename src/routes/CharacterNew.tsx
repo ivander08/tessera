@@ -9,7 +9,11 @@ import { messageOf } from '../lib/hooks';
 import { AppBar, BackLink } from '../components/AppBar';
 import { Avatar } from '../components/Avatar';
 import { ConsultDock } from '../components/ConsultDock';
-import { ConsultPanel } from '../components/ConsultPanel';
+import {
+  ConsultPanel,
+  emptyConsultSession,
+  type ConsultSession,
+} from '../components/ConsultPanel';
 import { GreetingStateFields, GreetingsEditor } from '../components/GreetingsEditor';
 import { useToast } from '../components/Toast';
 
@@ -112,6 +116,10 @@ export default function CharacterNew() {
   // Whether the consultant sheet is open. Its conversation lives inside `ConsultPanel`,
   // so closing it deliberately starts a fresh interview.
   const [consultOpen, setConsultOpen] = useState(false);
+  // Held here so closing the sheet and reopening it continues the interview — see the same
+  // note on the edit screen. The panel unmounts on close and would otherwise take the
+  // conversation with it.
+  const [consultSession, setConsultSession] = useState<ConsultSession>(emptyConsultSession);
   const toast = useToast();
   const [avatar, setAvatar] = useState<{ contentType: string; dataBase64: string } | null>(null);
   // Why the card's portrait was not kept, when it was not. Null means it was, or that the
@@ -362,6 +370,8 @@ export default function CharacterNew() {
                 mode="consult"
                 card={card}
                 onClose={() => setConsultOpen(false)}
+                session={consultSession}
+                onSession={setConsultSession}
                 dragHandlers={dragHandlers}
                 onApply={(proposed) =>
                   // Same contract as the edit screen: the proposal lands in the form and Save
@@ -371,6 +381,13 @@ export default function CharacterNew() {
                       ? {
                           ...current,
                           ...proposed,
+                          // A field the proposal omits is one the model did not touch, so the
+                          // form keeps what it has. `toParsedCard` omits rather than blanks for
+                          // exactly this reason.
+                          greetingStates:
+                            proposed.greetingStates !== undefined
+                              ? proposed.greetingStates
+                              : current.greetingStates,
                           // The card's own provenance and book are not the consultant's to
                           // change, so they survive the merge.
                           characterBook: current.characterBook,

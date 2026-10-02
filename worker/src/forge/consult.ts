@@ -3,8 +3,9 @@ import { asRecord, asString, asStringArray } from '../../../src/lib/json';
 import { estimateTokens } from '../../../src/lib/tokenEstimate';
 import { analyzeTokenCost } from '../../../src/lib/forge/tokenCost';
 import { cardForPrompt, findSmuggledInstructions } from './smuggle';
+import { partialField } from './partial';
 import { CARD_CRAFT, MAX_QUESTIONS } from './craft';
-import type { ParsedCard } from '../../../src/lib/cards/types';
+import type { GreetingState, ParsedCard } from '../../../src/lib/cards/types';
 import type { WireMessage } from '../providers/types';
 
 /** One turn of the conversation as the client holds it. */
@@ -39,14 +40,16 @@ export interface ConsultTurn {
  */
 const CARD_KEYS = `{
   "name": string,
+  "nickname": string,
   "description": string,
   "personality": string,
   "scenario": string,
   "first_mes": string,
+  "alternate_greetings": string[],
+  "greeting_states": [{ "time": string, "location": string, "weather": string }],
   "mes_example": string,
   "system_prompt": string,
   "post_history_instructions": string,
-  "alternate_greetings": string[],
   "creator_notes": string,
   "tags": string[]
 }`;
@@ -63,6 +66,15 @@ The card is stored with these fields, and this app sends them like this:
   "post_history_instructions" (the prompt tail, after the history).
 - One-time: "first_mes" becomes the chat's opening message. "alternate_greetings", "tags" and
   "creator_notes" are never sent as prompt text at all.
+
+"greeting_states" is index-aligned with the openings: entry 0 belongs to "first_mes", entry 1 to
+the first alternate, and so on. Each entry states the scene that opening begins in — "time",
+"location" and "weather" as short strings ("Wednesday, 30 September 2026, 04:00 PM", "a
+rain-soaked tavern on the edge of the map", "heavy rain"). They are stored as machine-readable
+fields rather than folded into the greeting's prose, so the narrator starts the scene already
+knowing where and when it is instead of inferring it from the opening paragraph. State them
+whenever the opening implies them; omit a field the opening does not establish rather than
+inventing one. An opening with no stated scene gets an empty object.
 
 A "character_book" may be attached to the card. Keyed entries there cost nothing until their
 keywords fire, so backstory, setting detail and world knowledge are cheaper in the book than in
@@ -87,7 +99,12 @@ the options are a shortcut, not a limit.
 Ask at most ${MAX_QUESTIONS} questions. The moment you have enough to write a card that plays,
 stop asking and write it.
 Prefer asking about the thing that most changes the card over the thing that is easiest to
-answer. Never ask for something the card does not need.`,
+answer. Never ask for something the card does not need.
+
+Every turn must either ask a question or propose a card — one of the two, always. A turn that
+does neither strands the user with nothing to click and nothing to answer, so it is never a
+valid reply. If you find you have nothing left to ask, that is the signal to write the card:
+propose it now rather than describing what you would write.`,
 
     `# What to find out, in rough order of leverage
 
@@ -118,7 +135,19 @@ it is empty, ask your own first question. Interview, then propose the finished c
 
 This is an EXISTING card, given below. The user is asking you about it — a critique, a question
 about a field, or a request to change something. Answer what they asked, then propose a card
-only when you are actually changing something.`,
+only when you are actually changing something.
+
+You can change ANY field of the card, not just the prose ones. That includes "nickname" (what
+the transcript calls them), each entry of "alternate_greetings", and each entry of
+"greeting_states" — the time, location and weather an opening begins in. When the user names a
+specific opening ("the second alternate", "the morning one"), change that entry and leave the
+others as they are. When they ask for a scene change, change "greeting_states" rather than
+folding the time into the greeting's prose: the prose is what the model reads, and the scene is
+what the narrator reads.
+
+When you change one opening, return the WHOLE "alternate_greetings" and the WHOLE
+"greeting_states" arrays, index-aligned, with the unchanged entries carried through exactly as
+they were. A returned array that drops an entry deletes that opening.`,
 
     `# Output
 
@@ -137,6 +166,9 @@ Return ONLY a JSON object, with "say" as the FIRST key:
 - In consult mode, propose a card only when you are actually changing something. A critique
   that finds nothing to change returns "card": null.
 - In consult mode, when you do propose a card, return the WHOLE card, not a fragment.
+- In draft mode, one of "question" or "card" is ALWAYS set. A draft turn that sets neither is
+  not a valid reply: the user has nothing to answer and nothing to accept. If the interview has
+  run its course, set "card".
 No prose outside the JSON. No code fences.`,
   );
 
@@ -270,10 +302,49 @@ export async function consult(
 /**
  * The reply, validated. A turn with neither a question nor a card is legal and means "just
  * talking" — what consult mode returns for a question that needs no change.
+ *
+ * ## Why a prose reply is a turn, not a failure
+ *
+ * Measured: `deepseek-v4-flash` answers the JSON envelope on most turns and, on some,
+ * ignores it and writes the reply as prose — the opening line was *"I'd love to..."* in the
+ * report that produced this. Treating that as an error is wrong twice over. The words are
+ * exactly what the user asked for and were already streamed to their screen, so throwing
+ * them away turns a usable answer into a red box; and the retry cannot help, because the
+ * retry is skipped once anything has streamed, which it always has by then.
+ *
+ * So a reply that will not parse as the envelope is read as the `say` field it plainly is,
+ * with no question and no card. The user gets the consultant's actual words and can keep
+ * talking. The only remaining error is an empty reply, which is a real failure.
  */
 export function parseConsultTurn(text: string): ConsultTurn {
-  const record = asRecord(parseJsonReply<unknown>(text));
-  if (!record) throw new Error('reply was not a JSON object');
+  const trimmed = text.trim();
+  const parsed = tryParse(trimmed);
+
+  if (!parsed.ok) {
+    // Not JSON at all. Two shapes land here and both have a readable `say`:
+    //  - the model answered in prose, ignoring the envelope;
+    //  - the envelope was cut off by the token cap mid-reply, in which case `partialField`
+    //    recovers the `say` text written so far. `say` is required to be the first key, so
+    //    a truncated envelope always has one.
+    // Falling back to the raw text would show the user `{"say": "I'd love…`, which is worse
+    // than either.
+    const say = (partialField(trimmed, 'say') ?? unwrapFencedProse(trimmed)).trim();
+    if (say.length === 0) throw new Error('the model returned no reply.');
+    return { say, question: null, card: null };
+  }
+
+  // A bare JSON string is the model having answered `say` and nothing else.
+  if (typeof parsed.value === 'string') {
+    const say = parsed.value.trim();
+    if (say.length === 0) throw new Error('the model returned no reply.');
+    return { say, question: null, card: null };
+  }
+
+  const record = asRecord(parsed.value);
+  if (!record) {
+    // Valid JSON, but not a shape a turn can be read out of — `null`, a number, an array.
+    throw new Error('the model returned no reply.');
+  }
 
   const say = asString(record.say);
   if (say.trim().length === 0) throw new Error('the model returned no reply.');
@@ -282,6 +353,26 @@ export function parseConsultTurn(text: string): ConsultTurn {
   const card = record.card === null || record.card === undefined ? null : toParsedCard(record.card);
 
   return { say, question, card };
+}
+
+/** The parsed reply, or a flag saying the text is not JSON at all. */
+function tryParse(text: string): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: parseJsonReply<unknown>(text) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/**
+ * A prose reply, with a code fence removed if the model wrapped it in one.
+ *
+ * Models add fences reflexively, and a fenced block that is not JSON is still prose the
+ * reader should see rather than three backticks and the word `json`.
+ */
+function unwrapFencedProse(text: string): string {
+  const fenced = /^```(?:[a-z]*)?\s*\n?([\s\S]*?)\n?```$/i.exec(text);
+  return (fenced ? fenced[1] : text).trim();
 }
 
 function parseQuestion(value: unknown): ConsultTurn['question'] {
@@ -321,8 +412,15 @@ export function toParsedCard(value: unknown): ParsedCard {
   const name = asString(record.name).trim();
   if (name.length === 0) throw new Error('reply had no name');
 
+  const alternateGreetings = asStringArray(record.alternate_greetings);
+  // `nickname` distinguishes three states, and they are all meaningful: absent means the model
+  // did not touch it, `""` means "call them by their name again", and text means a rename.
+  // Collapsing `""` to absent would make clearing a nickname impossible.
+  const hasNickname = 'nickname' in record && typeof record.nickname === 'string';
+
   return {
     name,
+    ...(hasNickname ? { nickname: asString(record.nickname).trim() } : {}),
     description: asString(record.description),
     personality: asString(record.personality),
     scenario: asString(record.scenario),
@@ -330,7 +428,8 @@ export function toParsedCard(value: unknown): ParsedCard {
     mesExample: asString(record.mes_example),
     systemPrompt: asString(record.system_prompt),
     postHistoryInstructions: asString(record.post_history_instructions),
-    alternateGreetings: asStringArray(record.alternate_greetings),
+    alternateGreetings,
+    greetingStates: toGreetingStates(record.greeting_states, alternateGreetings.length + 1),
     creatorNotes: asString(record.creator_notes),
     tags: asStringArray(record.tags),
     characterBook: null,
@@ -340,4 +439,33 @@ export function toParsedCard(value: unknown): ParsedCard {
     avatarHint: null,
     raw: value,
   };
+}
+
+/**
+ * The opening scenes, normalised to exactly one entry per opening — or `undefined` when the
+ * model did not send the field at all.
+ *
+ * The two lists are index-aligned everywhere they are read — chat creation looks up
+ * `greetingStates[greetingIndex]` — so a short list is not merely incomplete, it silently
+ * loses the scene of every later opening, and a long one is dead weight. Padding with `{}`
+ * means "this opening states no scene", which is the honest reading of an omitted entry and
+ * exactly what the editor writes for an opening the reader left blank.
+ *
+ * `undefined` is deliberately not the same as `[]`. A reply that omits the field is a model
+ * that did not touch the scenes, and the caller must keep the ones the card already has —
+ * collapsing it to an empty array would silently wipe every opening's time and place on the
+ * next Apply, which is the worst thing this function could do.
+ */
+function toGreetingStates(value: unknown, count: number): GreetingState[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return Array.from({ length: count }, (_, index) => {
+    const entry = asRecord(value[index]);
+    if (!entry) return {};
+    const state: GreetingState = {};
+    for (const field of ['time', 'location', 'weather'] as const) {
+      const text = asString(entry[field]).trim();
+      if (text.length > 0) state[field] = text;
+    }
+    return state;
+  });
 }

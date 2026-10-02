@@ -80,18 +80,29 @@ export function findSmuggledInstructions(card: ParsedCard): string[] {
  * Wire names (`first_mes`, `mes_example`) on the way out as well as in: the model has
  * seen thousands of cards in that shape, and `asRecord`-reading helpers here would
  * otherwise have to know both spellings.
+ *
+ * `nickname` and `greeting_states` are here for the same reason: the consultant can only
+ * change a field it has been shown. Without them "call her Syd" and "make the second opening
+ * a morning scene" were unanswerable — the model could not see the field it was being asked
+ * about, so it either invented a change somewhere else or claimed it had made one.
  */
 export function cardForPrompt(card: ParsedCard): Record<string, unknown> {
   return {
     name: card.name,
+    ...(card.nickname ? { nickname: card.nickname } : {}),
     description: card.description,
     personality: card.personality,
     scenario: card.scenario,
     first_mes: card.firstMes,
+    alternate_greetings: card.alternateGreetings,
+    // One entry per opening, index-aligned, so the model can name the one it means.
+    greeting_states: (card.greetingStates ?? []).slice(
+      0,
+      card.alternateGreetings.length + 1,
+    ),
     mes_example: card.mesExample,
     system_prompt: card.systemPrompt,
     post_history_instructions: card.postHistoryInstructions,
-    alternate_greetings: card.alternateGreetings,
     creator_notes: card.creatorNotes,
     tags: card.tags,
   };

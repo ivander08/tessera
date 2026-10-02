@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { analyzeTokenCost } from '../../../src/lib/forge/tokenCost';
-import { findSmuggledInstructions } from './smuggle';
+import { cardForPrompt, findSmuggledInstructions } from './smuggle';
 import { parseConsultTurn } from './consult';
 import type { ParsedCard } from '../../../src/lib/cards/types';
 
@@ -237,6 +237,46 @@ describe('findSmuggledInstructions', () => {
     expect(findSmuggledInstructions(card({ description }))).toEqual(first);
   });
 });
+
+describe('cardForPrompt', () => {
+  // The consultant can only change a field it has been shown. These are the two that were
+  // missing, and each one made a plain request unanswerable: "call her Syd" and "make the
+  // second opening a morning scene".
+  test('shows the model the shown name, so a rename is possible', () => {
+    expect(cardForPrompt(card({ nickname: 'Syd' })).nickname).toBe('Syd');
+  });
+
+  test('omits the shown name when there is none, rather than sending an empty one', () => {
+    expect('nickname' in cardForPrompt(card({ nickname: undefined }))).toBe(false);
+  });
+
+  test('shows the model the scene each opening starts in', () => {
+    const prompt = cardForPrompt(
+      card({
+        alternateGreetings: ['Second.', 'Third.'],
+        greetingStates: [
+          { time: 'late evening', location: 'the tavern' },
+          { time: 'dawn' },
+          { location: 'the harbour' },
+        ],
+      }),
+    );
+    expect(prompt.greeting_states).toEqual([
+      { time: 'late evening', location: 'the tavern' },
+      { time: 'dawn' },
+      { location: 'the harbour' },
+    ]);
+  });
+
+  test('trims greeting states to the openings that exist', () => {
+    // A stale extra entry would invite the model to write a scene for an opening that is not
+    // in the card, and the reply would come back longer than the greetings it describes.
+    const prompt = cardForPrompt(
+      card({ alternateGreetings: [], greetingStates: [{ time: 'a' }, { time: 'b' }, { time: 'c' }] }),
+    );
+    expect(prompt.greeting_states).toEqual([{ time: 'a' }]);
+  });
+});
 describe('parseConsultTurn', () => {
   test('reads a turn that asks a question', () => {
     const turn = parseConsultTurn(
@@ -357,5 +397,157 @@ describe('parseConsultTurn', () => {
   test('a fenced reply is still read', () => {
     const turn = parseConsultTurn('```json\n{"say":"Fenced.","question":null,"card":null}\n```');
     expect(turn.say).toBe('Fenced.');
+  });
+
+  // The bug from the report: the model ignored the JSON envelope and answered in prose, and
+  // the turn was thrown away as "the model did not return a usable turn". The words are the
+  // answer — they had already been streamed to the user's screen — so they are the turn.
+  test('a prose reply is a turn, not a failure', () => {
+    const turn = parseConsultTurn(
+      "I'd love to help with that. Before I touch the card, what does she do when the wind dies?",
+    );
+    expect(turn.say).toBe(
+      "I'd love to help with that. Before I touch the card, what does she do when the wind dies?",
+    );
+    expect(turn.question).toBeNull();
+    expect(turn.card).toBeNull();
+  });
+
+  test('a prose reply wrapped in a fence loses the fence', () => {
+    const turn = parseConsultTurn('```\nJust talking here.\n```');
+    expect(turn.say).toBe('Just talking here.');
+  });
+
+  test('a reply cut off mid-envelope keeps the say text written so far', () => {
+    // The token cap can land mid-object. Showing the user `{"say": "I'd love…` is worse than
+    // showing them the words; the raw envelope must never reach the transcript.
+    const turn = parseConsultTurn('{"say": "I\'d love to help with that. What does she want');
+    expect(turn.say).toBe("I'd love to help with that. What does she want");
+    expect(turn.question).toBeNull();
+  });
+
+  test('a bare JSON string is read as the reply', () => {
+    const turn = parseConsultTurn('"Just the words, nothing else."');
+    expect(turn.say).toBe('Just the words, nothing else.');
+  });
+
+  test('valid JSON that carries no reply still throws', () => {
+    // `null`, a number and an array are parseable but say nothing, so they are a real
+    // failure rather than an empty turn.
+    for (const body of ['null', '42', '[1,2]']) {
+      expect(() => parseConsultTurn(body)).toThrow(/returned no reply/);
+    }
+  });
+
+  test('an empty reply throws', () => {
+    expect(() => parseConsultTurn('   ')).toThrow(/returned no reply/);
+  });
+
+  // The forge now states the scene each opening begins in, so a chat created from a drafted
+  // card starts with a time and place instead of inferring them from the opening paragraph.
+  // The two lists are index-aligned everywhere they are read, so the mapping is the part
+  // that has to be exact.
+  test('maps greeting_states onto the openings, index-aligned', () => {
+    const turn = parseConsultTurn(
+      JSON.stringify({
+        say: 'Here is the card.',
+        question: null,
+        card: {
+          name: 'Ada',
+          first_mes: 'Rain on the window.',
+          alternate_greetings: ['A second opening.', 'A third.'],
+          greeting_states: [
+            { time: 'late evening', location: 'the Compass Rose', weather: 'heavy rain' },
+            { time: '', location: 'a cold street', weather: '' },
+            { time: 'dawn', location: '', weather: 'fog' },
+          ],
+        },
+      }),
+    );
+
+    expect(turn.card?.greetingStates).toEqual([
+      { time: 'late evening', location: 'the Compass Rose', weather: 'heavy rain' },
+      { location: 'a cold street' },
+      { time: 'dawn', weather: 'fog' },
+    ]);
+  });
+
+  test('pads a short greeting_states list so no opening loses its slot', () => {
+    // A model that states a scene for the first opening and stops would otherwise leave the
+    // alternates with no entry at all, and chat creation reads by index.
+    const turn = parseConsultTurn(
+      JSON.stringify({
+        say: 'Here.',
+        question: null,
+        card: {
+          name: 'Ada',
+          first_mes: 'One.',
+          alternate_greetings: ['Two.', 'Three.'],
+          greeting_states: [{ location: 'the tavern' }],
+        },
+      }),
+    );
+
+    expect(turn.card?.greetingStates).toEqual([{ location: 'the tavern' }, {}, {}]);
+  });
+
+  test('omits greeting_states entirely when the model sends none', () => {
+    // `undefined`, NOT an empty array. The consultant returns only what it changed, so a reply
+    // that omits the field must leave the card's existing scenes alone — collapsing it to `[]`
+    // would wipe every opening's time and place on the next Apply.
+    const turn = parseConsultTurn(
+      JSON.stringify({
+        say: 'Here.',
+        question: null,
+        card: { name: 'Ada', first_mes: 'One.', alternate_greetings: ['Two.'] },
+      }),
+    );
+
+    expect(turn.card?.greetingStates).toBeUndefined();
+  });
+
+  test('an explicit empty greeting_states array means the scenes were cleared', () => {
+    const turn = parseConsultTurn(
+      JSON.stringify({
+        say: 'Here.',
+        question: null,
+        card: { name: 'Ada', first_mes: 'One.', greeting_states: [] },
+      }),
+    );
+
+    expect(turn.card?.greetingStates).toEqual([{}]);
+  });
+
+  test('omits nickname when the model does not mention it, so a rename is never lost', () => {
+    const turn = parseConsultTurn(
+      JSON.stringify({
+        say: 'Here.',
+        question: null,
+        card: { name: 'Ada', first_mes: 'One.' },
+      }),
+    );
+    expect(turn.card?.nickname).toBeUndefined();
+  });
+
+  test('reads a nickname the model proposes', () => {
+    const turn = parseConsultTurn(
+      JSON.stringify({
+        say: 'Renamed.',
+        question: null,
+        card: { name: 'Sydney', nickname: 'Syd', first_mes: 'One.' },
+      }),
+    );
+    expect(turn.card?.nickname).toBe('Syd');
+  });
+
+  test('an empty nickname clears it rather than reading as an omission', () => {
+    const turn = parseConsultTurn(
+      JSON.stringify({
+        say: 'Cleared.',
+        question: null,
+        card: { name: 'Ada', nickname: '', first_mes: 'One.' },
+      }),
+    );
+    expect(turn.card?.nickname).toBe('');
   });
 });

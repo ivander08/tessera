@@ -3,7 +3,7 @@ import { asRecord, asString, asStringArray } from '../../../src/lib/json';
 import { send } from '../prompt';
 import { consult, type ConsultMessage, type ConsultMode, type ConsultTurn } from './consult';
 import { partialField } from './partial';
-import type { ParsedCard } from '../../../src/lib/cards/types';
+import type { GreetingState, ParsedCard } from '../../../src/lib/cards/types';
 
 /**
  * The consult stream's own protocol, separate from the chat stream's `Frame` union in
@@ -41,6 +41,10 @@ function asCard(value: unknown): ParsedCard | null {
 
   return {
     name,
+    // The client sends these and the consultant is asked to change them, so dropping them
+    // here silently removed two fields from the card the model was shown: it was told to edit
+    // a `greeting_states` that had never arrived, and it reported the array as empty.
+    nickname: asString(record.nickname) || undefined,
     description: asString(record.description),
     personality: asString(record.personality),
     scenario: asString(record.scenario),
@@ -49,6 +53,7 @@ function asCard(value: unknown): ParsedCard | null {
     systemPrompt: asString(record.systemPrompt),
     postHistoryInstructions: asString(record.postHistoryInstructions),
     alternateGreetings: asStringArray(record.alternateGreetings),
+    greetingStates: asGreetingStates(record.greetingStates),
     creatorNotes: asString(record.creatorNotes),
     tags: asStringArray(record.tags),
     characterBook: record.characterBook ?? null,
@@ -56,6 +61,27 @@ function asCard(value: unknown): ParsedCard | null {
     avatarHint: asString(record.avatarHint) || null,
     raw: record.raw ?? null,
   };
+}
+
+/**
+ * The opening scenes as the client sent them, or undefined when it sent none.
+ *
+ * Undefined rather than `[]` matters: an empty array is a card whose openings state no scene,
+ * while an absent field is a client that did not send one. Collapsing the two would make the
+ * consultant think a card with scenes has none — which is exactly the bug this fixes.
+ */
+function asGreetingStates(value: unknown): GreetingState[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.map((entry) => {
+    const record = asRecord(entry);
+    if (!record) return {};
+    const state: GreetingState = {};
+    for (const field of ['time', 'location', 'weather'] as const) {
+      const text = asString(record[field]);
+      if (text.length > 0) state[field] = text;
+    }
+    return state;
+  });
 }
 
 /**
