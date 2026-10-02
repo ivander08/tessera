@@ -14,78 +14,78 @@ import type { Role } from '../../src/lib/prompt/types';
  */
 
 /**
- * Writes the reader's message and returns its id and seq.
+ * The id and seq a reader's message WILL have, without writing it.
  *
- * The id is what the reply will be parented to, so it has to come back: a turn is two
- * rows in a chain, and parenting both to the message before the reader's would leave two
- * active children of one parent — the transcript walk would take the newer and drop the
- * reader's own line from the scene.
+ * A turn needs the row's id before the provider is called — the reply is parented to it —
+ * but writing it that early is what made Stop impossible to implement honestly. A Worker
+ * cannot do database work after the client disconnects: the isolate is torn down, and any
+ * cleanup attempted after an abort dies with "Network connection lost". So the row is
+ * written by the SUCCESS path only, and this hands out the id the reply will point at.
+ *
+ * `seq` is only needed for the prompt's windowing, which happens before the write, so the
+ * caller passes the tail's seq and the real one is assigned by SQLite on insert.
  */
-export async function persistUserMessage(
-  env: Env,
-  chatId: string,
-  content: string,
-  parentId: string | null,
-): Promise<{ id: string; seq: number }> {
-  const now = Date.now();
-  const id = crypto.randomUUID();
-  const row = await env.DB.prepare(
-    `INSERT INTO messages (id, chat_id, parent_id, role, content, content_tokens, created_at)
-     VALUES (?, ?, ?, 'user', ?, ?, ?) RETURNING seq`,
-  )
-    .bind(id, chatId, parentId, content, estimateTokens(content), now)
-    .first<{ seq: number }>();
-  await env.DB.prepare('UPDATE chats SET updated_at = ? WHERE id = ?').bind(now, chatId).run();
-  return { id, seq: row?.seq ?? 0 };
+export function reserveUserMessage(): { id: string } {
+  return { id: crypto.randomUUID() };
 }
 
 /**
- * Writes an assistant row and returns its id.
+ * Writes the reader's message, and the reply that answers it, in one batch.
  *
- * `speaker` names who wrote it, and is null for the chat's own character — which is every
- * row in a single-character scene and every row written before casts existed. A group
- * reply is also null: it contains several speakers and the CONTENT carries the
- * attribution, so a single name on the row would be a half-truth. The column is written
- * only when it is informative, and `includeNames` falls back to the chat's character for
- * the null case.
+ * Both rows land together or neither does, which is what makes Stop mean "the scene is
+ * unchanged" rather than "the scene has my message in it and no answer".
  */
-export async function persistAssistant(
+export async function persistTurn(
   env: Env,
   chatId: string,
-  content: string,
-  usage: NormalizedUsage | null,
-  costUsd: number | null,
-  options: { role?: Role; parentId?: string | null; speaker?: string | null } = {},
-): Promise<string> {
-  const id = crypto.randomUUID();
+  user: { id: string; content: string; parentId: string | null } | null,
+  reply: {
+    content: string;
+    parentId: string | null;
+    role: Role;
+    usage: NormalizedUsage | null;
+    costUsd: number | null;
+    speaker?: string | null;
+  },
+): Promise<{ userId: string | null; replyId: string }> {
   const now = Date.now();
-  // Impersonation writes a USER row: the model produced the text, but the chat has to
-  // advance as though the user had typed it, or the next turn sees two assistant
-  // messages in a row and providers reject it.
-  const role = options.role ?? 'assistant';
+  const replyId = crypto.randomUUID();
+  const statements = [];
 
-  await env.DB.prepare(
-    `INSERT INTO messages
-       (id, chat_id, parent_id, role, content, content_tokens, prompt_tokens,
-        completion_tokens, cached_tokens, cache_write_tokens, cost_usd, speaker, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  )
-    .bind(
-      id,
+  if (user) {
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO messages (id, chat_id, parent_id, role, content, content_tokens, created_at)
+         VALUES (?, ?, ?, 'user', ?, ?, ?)`,
+      ).bind(user.id, chatId, user.parentId, user.content, estimateTokens(user.content), now),
+    );
+  }
+
+  statements.push(
+    env.DB.prepare(
+      `INSERT INTO messages
+         (id, chat_id, parent_id, role, content, content_tokens, prompt_tokens,
+          completion_tokens, cached_tokens, cache_write_tokens, cost_usd, speaker, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      replyId,
       chatId,
-      options.parentId ?? null,
-      role,
-      content,
-      estimateTokens(content),
-      usage?.promptTokens ?? null,
-      usage?.completionTokens ?? null,
-      usage?.cachedTokens ?? null,
-      usage?.cacheWriteTokens ?? null,
-      costUsd,
-      options.speaker ?? null,
+      reply.parentId,
+      reply.role,
+      reply.content,
+      estimateTokens(reply.content),
+      reply.usage?.promptTokens ?? null,
+      reply.usage?.completionTokens ?? null,
+      reply.usage?.cachedTokens ?? null,
+      reply.usage?.cacheWriteTokens ?? null,
+      reply.costUsd,
+      reply.speaker ?? null,
       now,
-    )
-    .run();
-  await env.DB.prepare('UPDATE chats SET updated_at = ? WHERE id = ?').bind(now, chatId).run();
-  return id;
+    ),
+  );
+
+  statements.push(env.DB.prepare('UPDATE chats SET updated_at = ? WHERE id = ?').bind(now, chatId));
+
+  await env.DB.batch(statements);
+  return { userId: user?.id ?? null, replyId };
 }

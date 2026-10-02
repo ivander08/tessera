@@ -9,6 +9,8 @@ import { messageOf, useAsync } from '../lib/hooks';
 import { useToast } from '../components/Toast';
 import { GreetingsEditor, GreetingStateFields } from '../components/GreetingsEditor';
 import { Avatar } from '../components/Avatar';
+import { ConsultDock } from '../components/ConsultDock';
+import { ConsultPanel } from '../components/ConsultPanel';
 import { NamePrompt } from '../components/NamePrompt';
 import { AppBar, BackLink, CrumbSep } from '../components/AppBar';
 
@@ -135,6 +137,9 @@ export default function CharacterEdit() {
   // Whether the fork name sheet is open. The suggested name is read from the form when
   // the sheet renders, so nothing has to be captured when it opens.
   const [forkOpen, setForkOpen] = useState(false);
+  // Whether the consultant sheet is open. Its conversation lives inside `ConsultPanel`,
+  // so opening and closing it deliberately starts a fresh interview.
+  const [consultOpen, setConsultOpen] = useState(false);
   // Validation failures (an empty name, an oversized avatar, a broken lorebook) stay
   // inline, because they point at the field that caused them. Save failures go to a toast.
   const [failure, setFailure] = useState<string | null>(null);
@@ -198,6 +203,48 @@ export default function CharacterEdit() {
     tokensOf(value('postHistoryInstructions')) +
     loreTokens;
 
+  /**
+   * The card as the form currently holds it — the same thing `save()` writes.
+   *
+   * Extracted so the consultant sees exactly what Save would store. A second assembly built
+   * for the panel would drift from this one, and the drift would show up as the consultant
+   * critiquing a card the user cannot see.
+   */
+  function currentCard(): CharacterCardJson | null {
+    if (!card) return null;
+    const name = value('name').trim();
+    const next: CharacterCardJson = { ...card, name };
+    for (const field of FIELDS) {
+      const edited = edits[field.key];
+      // `name` is already applied, trimmed; a blank name is the caller's problem to reject.
+      if (field.key !== 'name' && edited !== undefined) next[field.key] = edited;
+    }
+    next.tags = splitTags(tagsText);
+
+    // Paired BEFORE the empty filter, so dropping a blank alternate drops its scene with
+    // it instead of shifting every later scene onto the wrong opening. This is the
+    // second off-by-one trap in this file.
+    const alternates = greetings
+      .map((content, index) => ({ content: content.trim(), state: greetingStates[index + 1] ?? {} }))
+      .filter((entry) => entry.content.length > 0);
+
+    next.alternateGreetings = alternates.map((entry) => entry.content);
+    // Index 0 is `first_mes`; trimmed, and an all-blank entry stays `{}` so indices hold.
+    next.greetingStates = [greetingStates[0] ?? {}, ...alternates.map((entry) => entry.state)].map(
+      (entry) => {
+        const out: GreetingState = {};
+        for (const field of ['time', 'location', 'weather'] as const) {
+          const value = entry[field]?.trim();
+          if (value) out[field] = value;
+        }
+        return out;
+      },
+    );
+    next.characterBook = parsedBook.value;
+
+    return next;
+  }
+
   async function save() {
     if (!card) return;
     const name = value('name').trim();
@@ -213,34 +260,8 @@ export default function CharacterEdit() {
     setBusy(true);
     setFailure(null);
     try {
-      const next: CharacterCardJson = { ...card, name };
-      for (const field of FIELDS) {
-        const edited = edits[field.key];
-        // `name` is already applied, trimmed; a blank name is rejected above.
-        if (field.key !== 'name' && edited !== undefined) next[field.key] = edited;
-      }
-      next.tags = splitTags(tagsText);
-
-      // Paired BEFORE the empty filter, so dropping a blank alternate drops its scene with
-      // it instead of shifting every later scene onto the wrong opening. This is the
-      // second off-by-one trap in this file.
-      const alternates = greetings
-        .map((content, index) => ({ content: content.trim(), state: greetingStates[index + 1] ?? {} }))
-        .filter((entry) => entry.content.length > 0);
-
-      next.alternateGreetings = alternates.map((entry) => entry.content);
-      // Index 0 is `first_mes`; trimmed, and an all-blank entry stays `{}` so indices hold.
-      next.greetingStates = [greetingStates[0] ?? {}, ...alternates.map((entry) => entry.state)].map(
-        (entry) => {
-          const out: GreetingState = {};
-          for (const field of ['time', 'location', 'weather'] as const) {
-            const value = entry[field]?.trim();
-            if (value) out[field] = value;
-          }
-          return out;
-        },
-      );
-      next.characterBook = parsedBook.value;
+      const next = currentCard();
+      if (!next) return;
 
       await apiJson(`/api/characters/${encodeURIComponent(id)}`, {
         method: 'PATCH',
@@ -261,6 +282,27 @@ export default function CharacterEdit() {
       setBusy(false);
     }
   }
+
+  /**
+   * Writes a proposed card into the form.
+   *
+   * Into the existing state, field by field, rather than replacing it: the greeting scenes,
+   * the avatar and the lorebook are the user's, not the consultant's, and the consultant
+   * never proposes them. Nothing is persisted here — this screen's contract is that Save is
+   * the only thing that writes, so an applied revision is still one undo away.
+   */
+  function applyCard(proposed: CharacterCardJson) {
+    const next: Record<string, string> = {};
+    for (const field of FIELDS) {
+      const value = proposed[field.key];
+      if (typeof value === 'string') next[field.key] = value;
+    }
+    setEdits((current) => ({ ...current, ...next }));
+    setTagsText(proposed.tags.join(', '));
+    setGreetings(proposed.alternateGreetings);
+    setGreetingStates(proposed.greetingStates ?? []);
+  }
+
   async function fork(name: string) {
     if (!card) return;
 
@@ -315,6 +357,8 @@ export default function CharacterEdit() {
         }
       />
 
+      {/* The consultant floats over the form rather than taking a column in it, so the field
+          being asked about stays where it was. `ConsultDock` owns the position. */}
       <main className="sheet">
         {loading && <p className="sheet-sub">Loading…</p>}
         {error && <div className="note danger">{error}</div>}
@@ -565,7 +609,11 @@ export default function CharacterEdit() {
                 used to mean scrolling to the very bottom — which is why the header grew a
                 second Save button that then had to be removed for being the same button
                 twice. Pinning the one row keeps it reachable from anywhere in the form
-                without duplicating it. */}
+                without duplicating it.
+
+                The way back is the AppBar's own back link, so there is no second one here:
+                two exits from one screen, one of them a button in a commit row, was the
+                button twice in a different costume. */}
             <div className="sheet-commit">
               <button
                 type="button"
@@ -575,12 +623,18 @@ export default function CharacterEdit() {
               >
                 {busy ? 'Saving…' : 'Save changes'}
               </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setConsultOpen((open) => !open)}
+                disabled={busy}
+                aria-expanded={consultOpen}
+              >
+                {consultOpen ? 'Close consult' : 'Consult'}
+              </button>
               <button type="button" className="btn" onClick={() => setForkOpen(true)} disabled={busy}>
                 Fork
               </button>
-              <Link to="/characters" className="btn quiet">
-                Back to the library
-              </Link>
             </div>
 
             {forkOpen && (
@@ -595,7 +649,21 @@ export default function CharacterEdit() {
             )}
           </>
         )}
-      </main>
+        </main>
+
+        {data && card && consultOpen && (
+          <ConsultDock>
+            {(dragHandlers) => (
+              <ConsultPanel
+                mode="consult"
+                card={currentCard()}
+                onApply={applyCard}
+                onClose={() => setConsultOpen(false)}
+                dragHandlers={dragHandlers}
+              />
+            )}
+          </ConsultDock>
+        )}
     </>
   );
 }

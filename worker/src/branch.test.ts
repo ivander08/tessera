@@ -48,7 +48,6 @@ function row(
     cached_tokens: null,
     cost_usd: null,
     active,
-    swipe_group: null,
     speaker: null,
     state_json: null,
     deleted: 0,

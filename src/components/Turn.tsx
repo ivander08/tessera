@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { motion, useReducedMotion } from 'motion/react';
 import { Markdown } from './Markdown';
 import { Avatar } from './Avatar';
 import { MessageActions } from './MessageActions';
@@ -111,6 +112,7 @@ export function Turn({
   children,
 }: TurnProps) {
   const isUser = message.role === 'user';
+  const reduced = useReducedMotion();
 
   // Every use of the content below is a display use: the drop cap, the speaker split and
   // the markdown all render what the reader sees. `TurnEditor` deliberately keeps
@@ -191,7 +193,16 @@ export function Turn({
               : segment.text;
             const voice = voiceOf(segment.speaker, cast!, name);
             return (
-              <div className="turn-segment" key={`${index}-${segment.speaker ?? 'narration'}`}>
+              // A three-speaker reply reads as voices arriving in turn rather than as one
+              // block appearing. Capped at index 4: a twelve-segment reply must not take
+              // 720ms to finish appearing.
+              <motion.div
+                className="turn-segment"
+                key={`${index}-${segment.speaker ?? 'narration'}`}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: reduced ? 0 : 0.16, delay: reduced ? 0 : Math.min(index, 4) * 0.06 }}
+              >
                 <div className="turn-head">
                   <span
                     className="turn-speaker"
@@ -211,7 +222,7 @@ export function Turn({
                     )}
                   </div>
                 )}
-              </div>
+              </motion.div>
             );
           })
         ) : (
@@ -220,14 +231,11 @@ export function Turn({
               <span className="turn-speaker">{rowName}</span>
               {actions}
             </div>
-            <div
-              className={`prose${cap}`}
-              onDoubleClick={onEditStart}
-              onClick={(event) => {
-                // A phone has no double-click, so a single tap starts editing there.
-                if (event.detail === 1 && window.matchMedia('(hover: none)').matches) onEditStart?.();
-              }}
-            >
+            {/* Double-click edits on a pointer device. There is deliberately no single-tap
+                handler: on a touch screen it fired on every tap, so reading a message meant
+                accidentally opening the editor for it. The pencil in `MessageActions` is the
+                way in, on every device. */}
+            <div className={`prose${cap}`} onDoubleClick={onEditStart}>
               <Markdown content={display} />
               {streaming && <span className="caret" aria-hidden="true" />}
             </div>

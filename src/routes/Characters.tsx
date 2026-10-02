@@ -153,7 +153,7 @@ export default function Characters() {
             </Link>
             , or{' '}
             <Link to="/forge" className="md-link">
-              let the forge draft one from a premise
+              let the forge interview you and draft one
             </Link>
             .
           </div>

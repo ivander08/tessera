@@ -5,9 +5,8 @@ import { getProvider } from './providers';
 import type { NormalizedUsage, Provider } from './providers/types';
 import { badRequest, notFound, readJson } from './http';
 import { buildPrompt, send } from './prompt';
-import { persistAssistant, persistUserMessage } from './persist';
+import { persistTurn, reserveUserMessage } from './persist';
 import {
-  abandonMessage,
   addAlternativeRow,
   lastActiveMessage,
   loadMessage,
@@ -15,6 +14,7 @@ import {
 } from './messages';
 import { tailId } from './branch';
 import { parseSse } from '../../src/lib/sse';
+import type { Role } from '../../src/lib/prompt/types';
 import { estimateChatTokens } from '../../src/lib/tokenEstimate';
 import { maybeUpdateState } from './scene';
 import { recordSpeakers } from './cast';
@@ -62,7 +62,19 @@ export async function handleTurn(req: Request, env: Env, ctx: ExecutionContext):
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
-        await runTurn(controller, env, ctx, chat, mode, body.content ?? '', body.targetId ?? null);
+        await runTurn(
+          controller,
+          env,
+          ctx,
+          chat,
+          mode,
+          body.content ?? '',
+          body.targetId ?? null,
+          // The client's own abort. Pressing Stop cancels the fetch, which aborts this
+          // signal — and that is the ONLY way the server can tell "the reader pressed Stop"
+          // from "the connection dropped", which want different behaviour. See `pipeStream`.
+          req.signal,
+        );
       } catch (error) {
         try {
           send(controller, { type: 'error', message: messageOf(error), code: 'internal' });
@@ -97,6 +109,8 @@ async function runTurn(
   mode: TurnMode,
   content: string,
   requestedTargetId: string | null,
+  /** Aborted when the client goes away — Stop, or a closed tab. */
+  signal: AbortSignal,
 ): Promise<void> {
   // Preset layered over global settings: a preset exists to override the defaults, so
   // it wins for anything it defines.
@@ -146,61 +160,44 @@ async function runTurn(
   // the chat to become usable again.
   const answeringPendingUser = mode === 'continue' && target?.role === 'user';
 
-  // Where a new row attaches.
+  // The end of the visible path, which is what a step forward attaches to. Resolved for
+  // every mode, not just the ones that use it directly: `resolveAttachment` falls back to it
+  // for a `continue` with no target, and a null there would root a row at the opening.
+  const tail = await tailId(env, chat.id);
+
+  // Where a new row attaches, and where the model's output attaches. Both are decided by
+  // one pure function so the rules can be asserted without a provider.
+  const { parentId, replyParentId } = resolveAttachment(mode, target, tail);
+
+  // The reader's message is NOT written yet. Writing it before the provider was called was
+  // the reason Stop could not be implemented honestly: a Worker cannot do database work
+  // after the client disconnects — the isolate is torn down mid-cleanup and the row is left
+  // on the visible path — so a stopped turn could never remove what it had already written.
   //
-  //  - `send` answers the end of the visible path, which is the newest thing the reader
-  //    can see. Using the newest ROW would be wrong once the chat branches: the newest
-  //    row might be an abandoned branch, and the new turn would vanish into it.
-  //  - `regenerate` and `continue` keep the target's own parent, because they produce
-  //    another version of that position rather than a step after it.
-  const parentId =
-    mode === 'send' ? await tailId(env, chat.id) : (target?.parent_id ?? null);
-
-  // For `send`, the user message is persisted BEFORE the provider is called, so a crash
-  // costs a reply and never the user's own words. The other modes add no user text, so
-  // there is nothing to lose and nothing to persist up front.
+  // Instead the id is reserved now, because the reply is parented to it, and BOTH rows are
+  // written together on the success path. Stop therefore means the scene is byte-identical
+  // to what it was, which is the only reading of the button a reader can trust.
   //
-  // The exception is a `continue` recovering a stopped turn: the reader's row already
-  // exists and is the target, so it is reused. Writing it again would put the same text
-  // on the path twice.
-  const user =
-    mode === 'send'
-      ? await persistUserMessage(env, chat.id, content, parentId)
-      : null;
-  const userSeq = answeringPendingUser ? target!.seq : (user?.seq ?? null);
+  // The exception is a `continue` recovering a stopped turn: that reader row already exists
+  // and is the target, so it is reused rather than reserved.
+  const reserved = mode === 'send' ? reserveUserMessage() : null;
+  const userId = reserved?.id ?? null;
+  const userSeq = answeringPendingUser ? target!.seq : null;
 
-  // Every failure from here on has already written the reader's message. Abandoning it
-  // keeps an unreplied row off the visible path, so the next turn parents to the last real
-  // turn instead of stacking a second user message in front of the model.
-  const userRow = user;
-  async function failAfterPersist(message: string, code: string): Promise<void> {
-    if (userRow) {
-      await abandonMessage(env, chat.id, userRow.id).catch((error: unknown) => {
-        console.warn(`[turn] could not abandon orphan row ${userRow.id}: ${messageOf(error)}`);
-      });
-    }
-    fail(controller, message, code);
-  }
+  // The reply answers the reader's message when there is one, so it is that row's child
+  // rather than the position the reader's message occupies.
+  const outputParentId = userId ?? replyParentId;
 
-  // The reply answers the reader's message when there is one, and otherwise follows the
-  // message it is continuing. Parenting a `send` reply to `parentId` would make it a
-  // sibling of the message it answers: two active children of one parent, and the walk
-  // would show the reply while dropping the reader's own line. Parenting a `continue`
-  // anywhere but the target would splice it into the wrong place in the scene.
-  const replyParentId =
-    mode === 'send'
-      ? (user?.id ?? parentId)
-      : answeringPendingUser
-        ? // Answer the reader's own row, which is what the stopped `send` was going to do.
-          target!.id
-        : mode === 'continue'
-          ? (target?.id ?? parentId)
-          : parentId;
+  // Nothing has been written yet, so a failure has nothing to clean up. `failAfterPersist`
+  // survives only for the recovery-`continue` case, where the reader's row genuinely
+  // pre-exists — but even there it is left alone, because it is the reader's text and the
+  // next Continue answers it.
 
-  // From here on the reader's message is already written, so a throw must abandon it
-  // rather than fall through to the stream handler at the top, which writes nothing and
-  // leaves the row on the visible path. `buildPrompt` is the known thrower — a chat with
-  // no character — but everything below shares the same obligation.
+  // Nothing is written until the reply is complete, so a failure simply reports itself.
+  // The old `failAfterPersist` existed to undo an early write; there is no longer one to
+  // undo, and a Worker cannot reliably do cleanup after a disconnect anyway.
+  const failTurn = (message: string, code: string): void => fail(controller, message, code);
+
   try {
     const prompt = await buildPrompt(env, chat, settings, {
       mode,
@@ -241,12 +238,12 @@ async function runTurn(
     try {
       response = await fetch(request.url, request.init);
     } catch (error) {
-      return await failAfterPersist(messageOf(error), 'network');
+      return failTurn(messageOf(error), 'network');
     }
 
     if (!response.ok || !response.body) {
       const text = await response.text().catch(() => '');
-      return await failAfterPersist(provider.readError(response.status, text), 'provider_http');
+      return failTurn(provider.readError(response.status, text), 'provider_http');
     }
 
     const {
@@ -254,33 +251,49 @@ async function runTurn(
       usage,
       error,
       finishReason,
-    } = await pipeStream(controller, provider, response.body);
+      aborted,
+    } = await pipeStream(controller, provider, response.body, signal);
+
+    // Stop: NOTHING is written. Not the partial reply, and not the reader's own message
+    // either — the scene is exactly as it was before the turn, which is the only reading of
+    // the button a reader can trust. Reporting an error here would be wrong too: pressing
+    // Stop is not a failure.
+    if (aborted) return;
 
     if (assistantText.length === 0) {
-      return await failAfterPersist(error ?? 'The provider returned no content.', 'stream');
+      return failTurn(error ?? 'The provider returned no content.', 'stream');
     }
 
     const costUsd = resolveCost(usage);
 
     // Where the text lands depends on the mode.
     //
-    // `regenerate` extends an existing message's swipe group, so the conversation keeps
-    // exactly one active row per position and swiping back recovers the previous attempt.
-    // When it targets a message that already has a continuation, that continuation is not
-    // touched: the new alternative becomes the active child, the path walk stops at it, and
-    // the old branch drops out of the transcript until you swipe back.
+    // `regenerate` adds a VARIANT of an existing position, so the conversation keeps exactly
+    // one active row per position and swiping back recovers the previous attempt. The
+    // variant has no children, so the scene below it is shorter until it grows its own —
+    // that is the model working as designed, not a defect.
     //
-    // `continue` writes a NEW turn answering the last reply. It used to append to that
-    // reply's own group, which meant the continuation replaced the message instead of
-    // following it — the reader asked for more and watched the previous paragraph vanish.
-    // Two assistant turns in a row is what the gesture means.
+    // Everything else writes a new step in the scene, and the reader's own row lands in the
+    // same batch so the two cannot come apart.
     const messageId =
       mode === 'regenerate'
         ? await addAlternativeRow(env, chat.id, target!.id, assistantText)
-        : await persistAssistant(env, chat.id, assistantText, usage, costUsd, {
-            role: mode === 'impersonate' ? 'user' : 'assistant',
-            parentId: replyParentId,
-          });
+        : (
+            await persistTurn(
+              env,
+              chat.id,
+              // The reader's row, written now rather than up front. Null for the modes that
+              // add no reader text.
+              userId ? { id: userId, content, parentId } : null,
+              {
+                content: assistantText,
+                parentId: outputParentId,
+                role: mode === 'impersonate' ? 'user' : 'assistant',
+                usage,
+                costUsd,
+              },
+            )
+          ).replyId;
 
     send(controller, {
       type: 'done',
@@ -334,7 +347,7 @@ async function runTurn(
       );
     }
   } catch (error) {
-    return await failAfterPersist(messageOf(error), 'internal');
+    return failTurn(messageOf(error), 'internal');
   }
 }
 
@@ -347,6 +360,63 @@ const IMPERSONATE_INSTRUCTION =
   'Write the next message from the perspective of the other participant in this scene. ' +
   'Write only their words and actions, in the same style as their previous messages. ' +
   'Do not narrate for anyone else.';
+
+/**
+ * Where a turn's rows attach, as a pure function so the rules can be asserted directly.
+ *
+ * This is the decision that broke a real chat. Two different questions live here, and
+ * conflating them put a reader's own line at the top of their scene:
+ *
+ *  - **Where does the reader's message go?** `send` and `impersonate` both produce the NEXT
+ *    message in the scene, so their parent is the end of the visible path. `impersonate` is
+ *    the model writing the reader's next line — a step forward like any other. Parenting it
+ *    to the target's parent made it a SIBLING of the message it was meant to follow.
+ *    Measured on a real chat: an impersonated line landed with `parent_id = NULL`, an
+ *    alternative OPENING, so the path walk was `ROOT → that line` and the entire scene
+ *    disappeared from view.
+ *
+ *    `regenerate` produces another VARIANT of one position, so its parent is the target's
+ *    own parent. A variant is not a replacement: the original keeps its children, so a new
+ *    variant shows a shorter scene until it grows its own continuation. That is the model
+ *    working as designed, not a defect.
+ *
+ *  - **Where does the model's output go?** `send` answers the reader's message, so the reply
+ *    is that row's child — parenting it to the reader's parent instead would make it a
+ *    sibling of the message it answers, and the walk would show the reply while dropping the
+ *    reader's own line. `continue` extends the message it was pointed at, so it is that
+ *    message's child; reusing the target's parent made a continuation a VARIANT of the reply
+ *    it was continuing, so asking for more turned the previous paragraph into a swipe.
+ *    `impersonate` writes the reader's next line, which IS the new tail.
+ */
+export function resolveAttachment(
+  mode: TurnMode,
+  target: { id: string; parent_id: string | null; role: Role } | null,
+  tail: string | null,
+): { parentId: string | null; replyParentId: string | null } {
+  // A variant sits beside its siblings; a continuation extends its target; everything else
+  // is a step forward from the end of the path.
+  //
+  // Every branch is total: `parentId` is never left null for a mode that has a target, so
+  // the fallback in `replyParentId` below cannot quietly root a row at the opening.
+  const parentId =
+    mode === 'regenerate'
+      ? (target?.parent_id ?? null)
+      : mode === 'continue'
+        ? (target?.id ?? tail)
+        : tail;
+
+  const answeringPendingUser = mode === 'continue' && target?.role === 'user';
+  const replyParentId = answeringPendingUser
+    ? // Answer the reader's own row, which is what the stopped `send` was going to do.
+      target!.id
+    : mode === 'regenerate'
+      ? parentId
+      : mode === 'send'
+        ? parentId
+        : (target?.id ?? parentId);
+
+  return { parentId, replyParentId };
+}
 
 const CONTINUE_INSTRUCTION =
   'Write the next message in this scene, continuing directly from where the last one ' +
@@ -365,11 +435,24 @@ async function pipeStream(
   controller: ReadableStreamDefaultController<Uint8Array>,
   provider: Provider,
   body: ReadableStream<Uint8Array>,
+  signal: AbortSignal,
 ): Promise<{
   text: string;
   usage: NormalizedUsage | null;
   error: string | null;
   finishReason: string | null;
+  /**
+   * The reader pressed Stop. Whatever text arrived is DISCARDED and nothing is written.
+   *
+   * Stop has to mean the scene is untouched, or the button cannot be trusted: a reader who
+   * stops an unwanted generation must not then have to delete the fragment it left behind.
+   * The alternative — keeping the partial and marking it stopped — leaves debris in the
+   * scene every time someone changes their mind mid-reply.
+   *
+   * Distinguished from a dropped connection, which is NOT an abort: a reader whose wifi
+   * blinked should keep the paragraph that arrived. Only an explicit client abort discards.
+   */
+  aborted: boolean;
 }> {
   let text = '';
   let usage: NormalizedUsage | null = null;
@@ -377,10 +460,15 @@ async function pipeStream(
 
   try {
     for await (const event of parseSse(body)) {
+      // Stop, checked per frame rather than only when the stream throws: a provider that
+      // has gone quiet sends nothing to throw on, and the reader would wait out the rest of
+      // a reply they already cancelled.
+      if (signal.aborted) return { text, usage, error: null, finishReason, aborted: true };
+
       if (event.data === '[DONE]') break;
       const frame = provider.parseFrame(event.data);
       if (!frame) continue;
-      if (frame.error) return { text, usage, error: frame.error, finishReason };
+      if (frame.error) return { text, usage, error: frame.error, finishReason, aborted: false };
       if (frame.text) {
         text += frame.text;
         send(controller, { type: 'delta', text: frame.text });
@@ -389,11 +477,19 @@ async function pipeStream(
       if (frame.finishReason) finishReason = frame.finishReason;
     }
   } catch (error) {
-    // A client disconnect lands here too. Whatever text arrived is still a reply.
-    return { text, usage, error: messageOf(error), finishReason };
+    // A write to a closed controller throws, which is how a client disconnect surfaces
+    // here. An abort at that moment is the reader pressing Stop; anything else is the
+    // connection failing, and the text that arrived is still a reply.
+    return {
+      text,
+      usage,
+      error: messageOf(error),
+      finishReason,
+      aborted: signal.aborted,
+    };
   }
 
-  return { text, usage, error: null, finishReason };
+  return { text, usage, error: null, finishReason, aborted: signal.aborted };
 }
 
 /**

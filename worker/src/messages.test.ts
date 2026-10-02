@@ -2,18 +2,16 @@ import { Database } from 'bun:sqlite';
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'bun:test';
 
-import { abandonMessage, deleteMessage, loadMessage } from './messages';
-import { loadPath, tailId } from './branch';
-import { persistUserMessage } from './persist';
+import { deleteMessage, editMessage } from './messages';
+import { loadPath } from './branch';
 
 /**
  * The row-scoped half of the message lifecycle, against the real migrations.
  *
- * `abandonMessage` exists for one situation: a turn failed after the reader's message was
- * already written. The text must survive — it is theirs — but an unreplied row on the
- * visible path becomes the parent of the next turn, and the prompt then carries two `user`
- * messages in a row. These tests drive the real walk and the real tail query, because the
- * property that matters is structural: what the NEXT turn attaches to.
+ * These drive the real walk and the real tail query, because the property that matters is
+ * structural: which rows end up on the visible path, and what the next turn attaches to.
+ * A handler that reports `ok: true` while leaving the tree in a shape the walk cannot
+ * traverse is exactly the class of bug this file exists to catch.
  */
 
 function migrationSql(name: string): string {
@@ -120,78 +118,18 @@ function seedRow(
   return { id, seq: row?.seq ?? 0 };
 }
 
+/** A JSON POST body, the shape every handler in this module takes. */
+function post(body: unknown): Request {
+  return new Request('http://x/api/message', {
+    method: 'POST',
+    body: JSON.stringify(body),
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
 function activeOf(db: Database, id: string): number {
   return one<{ active: number }>(db, 'SELECT active FROM messages WHERE id = ?', id)?.active ?? -1;
 }
-
-describe('abandonMessage', () => {
-  test('deactivates exactly the named row and leaves the rest of the chain alone', async () => {
-    const { env, db } = makeEnv();
-    const chatId = seedChat(db);
-    const opening = seedRow(db, chatId, null, 'assistant', 'Hello.');
-    const orphan = seedRow(db, chatId, opening.id, 'user', 'Are you there?');
-
-    await abandonMessage(env, chatId, orphan.id);
-
-    expect(activeOf(db, orphan.id)).toBe(0);
-    expect(activeOf(db, opening.id)).toBe(1);
-    // Deactivated, not deleted: the reader's words are still in the table.
-    expect(await loadMessage(env, chatId, orphan.id)).not.toBeNull();
-  });
-
-  test('takes the row off the path, so the tail falls back to the row before it', async () => {
-    const { env, db } = makeEnv();
-    const chatId = seedChat(db);
-    const opening = seedRow(db, chatId, null, 'assistant', 'Hello.');
-    const reply = seedRow(db, chatId, opening.id, 'assistant', 'You were saying?');
-    const orphan = seedRow(db, chatId, reply.id, 'user', 'Never mind.');
-
-    await abandonMessage(env, chatId, orphan.id);
-
-    const path = await loadPath(env, chatId);
-    expect(path.map((row) => row.id)).toEqual([opening.id, reply.id]);
-    expect(await tailId(env, chatId)).toBe(reply.id);
-  });
-
-  test('the next user message lands after the last real turn, not after the orphan', async () => {
-    const { env, db } = makeEnv();
-    const chatId = seedChat(db);
-    const opening = seedRow(db, chatId, null, 'assistant', 'Hello.');
-    const reply = seedRow(db, chatId, opening.id, 'assistant', 'You were saying?');
-    const orphan = seedRow(db, chatId, reply.id, 'user', 'Never mind.');
-
-    await abandonMessage(env, chatId, orphan.id);
-    await persistUserMessage(env, chatId, 'Try again.', await tailId(env, chatId));
-
-    const roles = (await loadPath(env, chatId)).map((row) => row.role);
-    // The failure this guards: without the abandon, the new row parents to the orphan and
-    // the walk carries two adjacent `user` messages into the prompt.
-    expect(roles.slice(-2)).toEqual(['assistant', 'user']);
-  });
-
-  test('an unknown id is a no-op rather than an error', async () => {
-    const { env, db } = makeEnv();
-    const chatId = seedChat(db);
-    const opening = seedRow(db, chatId, null, 'assistant', 'Hello.');
-
-    await abandonMessage(env, chatId, 'no-such-row');
-
-    expect(activeOf(db, opening.id)).toBe(1);
-    expect((await loadPath(env, chatId)).length).toBe(1);
-  });
-
-  test('does not reach into another chat', async () => {
-    const { env, db } = makeEnv();
-    const chatId = seedChat(db, 'chat-1');
-    const otherId = seedChat(db, 'chat-2');
-    const row = seedRow(db, chatId, null, 'assistant', 'Hello.');
-    seedRow(db, otherId, null, 'assistant', 'Elsewhere.');
-
-    await abandonMessage(env, otherId, row.id);
-
-    expect(activeOf(db, row.id)).toBe(1);
-  });
-});
 
 /**
  * `deleteMessage` removes ONE version, not the position.
@@ -314,5 +252,77 @@ describe('deleteMessage', () => {
     // reader's first deletion undid itself.
     expect((await loadPath(env, chatId)).map((row) => row.id)).toEqual([opening.id, user.id]);
     for (const version of versions) expect(activeOf(db, version.id)).toBe(0);
+  });
+});
+
+/**
+ * An edit rewrites its row. It must not create a version, and it must not move anything.
+ *
+ * This is the difference between "fix a typo" and "branch the conversation", and getting it
+ * wrong made a corrected word silently turn the message swipeable ("2/2" on a turn that had
+ * one text) while reparenting everything below it.
+ */
+describe('editMessage', () => {
+  test('rewrites the row in place — same id, same parent, no sibling', async () => {
+    const { env, db } = makeEnv();
+    const chatId = seedChat(db);
+    const opening = seedRow(db, chatId, null, 'assistant', 'Opening.');
+    const mine = seedRow(db, chatId, opening.id, 'user', 'teh typo');
+
+    const res = await editMessage(env, post({ chatId, id: mine.id, content: 'the typo' }));
+    expect(res.status).toBe(200);
+    expect((await res.json()) as { ok: boolean; id: string }).toEqual({ ok: true, id: mine.id });
+
+    const row = one<{ content: string; parent_id: string; active: number }>(
+      db,
+      'SELECT content, parent_id, active FROM messages WHERE id = ?',
+      mine.id,
+    );
+    expect(row?.content).toBe('the typo');
+    expect(row?.parent_id).toBe(opening.id);
+    expect(row?.active).toBe(1);
+
+    // The whole point: no second row at this position.
+    const siblings = one<{ n: number }>(
+      db,
+      'SELECT COUNT(*) AS n FROM messages WHERE parent_id = ?',
+      opening.id,
+    );
+    expect(siblings?.n).toBe(1);
+  });
+
+  test('the children stay attached to the row that was edited', async () => {
+    const { env, db } = makeEnv();
+    const chatId = seedChat(db);
+    const opening = seedRow(db, chatId, null, 'assistant', 'Opening.');
+    const mine = seedRow(db, chatId, opening.id, 'user', 'teh typo');
+    const reply = seedRow(db, chatId, mine.id, 'assistant', 'A reply.');
+
+    await editMessage(env, post({ chatId, id: mine.id, content: 'the typo' }));
+
+    // Editing used to reparent this, and a reparent is what made the reply vanish when the
+    // edit landed on a row the walk could no longer reach.
+    const child = one<{ parent_id: string }>(
+      db,
+      'SELECT parent_id FROM messages WHERE id = ?',
+      reply.id,
+    );
+    expect(child?.parent_id).toBe(mine.id);
+
+    const path = await loadPath(env, chatId);
+    expect(path.map((row) => row.content)).toEqual(['Opening.', 'the typo', 'A reply.']);
+  });
+
+  test('rejects an empty edit rather than blanking the message', async () => {
+    const { env, db } = makeEnv();
+    const chatId = seedChat(db);
+    const opening = seedRow(db, chatId, null, 'assistant', 'Opening.');
+    const mine = seedRow(db, chatId, opening.id, 'user', 'text');
+
+    const res = await editMessage(env, post({ chatId, id: mine.id, content: '   ' }));
+    expect(res.status).toBe(400);
+
+    const row = one<{ content: string }>(db, 'SELECT content FROM messages WHERE id = ?', mine.id);
+    expect(row?.content).toBe('text');
   });
 });

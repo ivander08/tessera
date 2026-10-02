@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 
 /**
  * The titlebar, and the app's only navigation.
@@ -50,6 +51,7 @@ export function AppBar({
   // One way back. A screen with its own back link keeps that one and shows a plain title.
   const href = titleHref !== undefined ? titleHref : lead ? null : '/';
   const [open, setOpen] = useState(false);
+  const reduced = useReducedMotion();
   const wrap = useRef<HTMLDivElement | null>(null);
   const location = useLocation();
 
@@ -113,45 +115,61 @@ export function AppBar({
           </svg>
         </button>
 
-        {open && (
-          <div className="menu" role="menu" onClick={(event) => {
-            // The menu is a list of things to do, and most of them change what is on
-            // screen — a link navigates, an action writes a setting. Leaving it open over
-            // the result is the "menu that will not go away" feel.
-            //
-            // Entries that open a SHEET opt out with `data-menu-keep`: the sheet is owned
-            // by this subtree, so closing the menu would unmount it before it paints.
-            const target = event.target as HTMLElement;
-            // A sheet opened from this menu is portaled out of `wrap`; its clicks are not
-            // menu clicks, and closing here would unmount the sheet before it can act.
-            if (target.closest('.sheet-backdrop')) return;
-            if (target.closest('[data-menu-keep]')) return;
-            if (target.closest('button, a')) setOpen(false);
-          }}>
-            {scoped && (
-              <>
-                {scoped}
-                <div className="menu-sep" />
-              </>
-            )}
+        <AnimatePresence>
+          {open && (
+            <motion.div
+              className="menu"
+              role="menu"
+              initial={{ opacity: 0, y: -4, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              // `pointerEvents` rides in the exit variant rather than in a `style` driven
+              // by a closing flag: AnimatePresence only starts the exit once the child is
+              // removed from the tree, so a flag that keeps it rendered deadlocks the
+              // animation and the menu never leaves.
+              exit={{ opacity: 0, y: -4, scale: 0.98, pointerEvents: 'none' }}
+              transition={{ duration: reduced ? 0 : 0.12, ease: [0.22, 0.68, 0.36, 1] }}
+              // It unfurls from the button that opened it rather than from its own centre.
+              style={{ transformOrigin: 'top right' }}
+              onClick={(event) => {
+                // The menu is a list of things to do, and most of them change what is on
+                // screen — a link navigates, an action writes a setting. Leaving it open over
+                // the result is the "menu that will not go away" feel.
+                //
+                // Entries that open a SHEET opt out with `data-menu-keep`: the sheet is owned
+                // by this subtree, so closing the menu would unmount it before it paints.
+                const target = event.target as HTMLElement;
+                // A sheet opened from this menu is portaled out of `wrap`; its clicks are not
+                // menu clicks, and closing here would unmount the sheet before it can act.
+                if (target.closest('.sheet-backdrop')) return;
+                if (target.closest('[data-menu-keep]')) return;
+                if (target.closest('button, a')) setOpen(false);
+              }}
+            >
+              {scoped && (
+                <>
+                  {scoped}
+                  <div className="menu-sep" />
+                </>
+              )}
 
-            {/* The way home goes first. Everything else in this menu is a destination,
-                and the one you need most often is the one you came from. */}
-            <MenuLink to="/" label="All chats" />
-            <MenuLink to="/settings" label="Settings" />
+              {/* The way home goes first. Everything else in this menu is a destination,
+                  and the one you need most often is the one you came from. */}
+              <MenuLink to="/" label="All chats" />
+              <MenuLink to="/settings" label="Settings" />
 
-            <div className="menu-sep" />
-            <div className="menu-label">Library</div>
-            <MenuLink to="/characters" label="Characters" />
-            <MenuLink to="/personas" label="Personas" />
-            <MenuLink to="/presets" label="Presets" />
+              <div className="menu-sep" />
+              <div className="menu-label">Library</div>
+              <MenuLink to="/characters" label="Characters" />
+              <MenuLink to="/personas" label="Personas" />
+              <MenuLink to="/presets" label="Presets" />
 
-            <div className="menu-sep" />
-            <div className="menu-label">Make</div>
-            <MenuLink to="/forge" label="Forge a character" />
-            <MenuLink to="/characters/new" label="Import a card" />
-          </div>
-        )}
+              <div className="menu-sep" />
+              <div className="menu-label">Make</div>
+              <MenuLink to="/forge" label="Forge a character" />
+              <MenuLink to="/characters/new" label="Import a card" />
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </header>
   );

@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { apiFetch, apiJson, streamChat, type TurnMode } from '../lib/api';
 import type { MessageRow, Transcript } from '../lib/apiTypes';
 import type { WorldState } from '../lib/state/schema';
@@ -99,6 +100,9 @@ export default function Chat() {
   // Drives the jump-to-latest control. A ref is enough for the auto-follow logic, but the
   // button has to render, so the same fact is mirrored into state on the scroll handler.
   const [atBottom, setAtBottom] = useState(true);
+  // CSS cannot reach inside motion's inline styles, so the library has to be told about
+  // the reader's preference separately.
+  const reduced = useReducedMotion();
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Whether the reader is at the live end of the transcript. Only then does new text
@@ -448,19 +452,29 @@ export default function Chat() {
       } finally {
         abortRef.current = null;
         setBusy(false);
-        // Held, not cleared: the refetch below replaces the transcript with the stored
-        // version, and clearing first would flash the pre-turn text back on screen.
-        setPending((current) => (current ? { ...current, settling: true } : current));
-        reload();
-        // The state engine runs after a completed turn, so the scene bar is stale the
-        // moment the reply lands. Held in a ref because the callback identity changes
-        // every render and putting it in the deps would rebuild `run` continuously.
-        stateReload.current();
-        // Same reason: the reply may have introduced a speaker, so the cast is stale too.
-        castReload.current();
-        // A refetch that returns the same transcript never trips the settle check, so the
-        // overlay would stay up forever. The timeout is the guarantee that it comes down.
-        window.setTimeout(() => setPending((current) => (current?.settling ? null : current)), 6000);
+        setPending(null);
+
+        // Stop leaves the scene untouched — the server discards the partial — so there is
+        // nothing to refetch and no state to settle. Reloading here was what made the
+        // discarded text reappear a moment after Stop was pressed.
+        if (!controller.signal.aborted) {
+          // Held, not cleared: the refetch below replaces the transcript with the stored
+          // version, and clearing first would flash the pre-turn text back on screen.
+          setPending((current) => (current ? { ...current, settling: true } : current));
+          reload();
+          // The state engine runs after a completed turn, so the scene bar is stale the
+          // moment the reply lands. Held in a ref because the callback identity changes
+          // every render and putting it in the deps would rebuild `run` continuously.
+          stateReload.current();
+          // Same reason: the reply may have introduced a speaker, so the cast is stale too.
+          castReload.current();
+          // A refetch that returns the same transcript never trips the settle check, so the
+          // overlay would stay up forever. The timeout is the guarantee that it comes down.
+          window.setTimeout(
+            () => setPending((current) => (current?.settling ? null : current)),
+            6000,
+          );
+        }
       }
     },
     [id, reload],
@@ -809,20 +823,29 @@ export default function Chat() {
 
         {/* Only when there is somewhere to go. A permanently visible control would sit on
             top of the last line of prose, which is the one line the reader is reading. */}
-        {!atBottom && (
-          <button
-            type="button"
-            className="jump-latest"
-            onClick={() => {
-              pinnedToBottom.current = true;
-              setAtBottom(true);
-              scrollToBottom();
-            }}
-            aria-label="Jump to the latest turn"
-          >
-            Latest
-          </button>
-        )}
+        <AnimatePresence>
+          {!atBottom && (
+            <motion.button
+              type="button"
+              className="jump-latest"
+              onClick={() => {
+                pinnedToBottom.current = true;
+                setAtBottom(true);
+                scrollToBottom();
+              }}
+              aria-label="Jump to the latest turn"
+              // The pill is centred by a transform, which motion owns — so the centring
+              // moves into `x` here and out of the CSS rule. Dropping it drifts the pill
+              // to the left edge.
+              initial={{ opacity: 0, y: 6, x: '-50%' }}
+              animate={{ opacity: 1, y: 0, x: '-50%' }}
+              exit={{ opacity: 0, y: 6, x: '-50%' }}
+              transition={{ duration: reduced ? 0 : 0.16, ease: [0.22, 0.68, 0.36, 1] }}
+            >
+              Latest
+            </motion.button>
+          )}
+        </AnimatePresence>
 
       </div>
 
@@ -936,7 +959,7 @@ export default function Chat() {
               busy
                 ? 'Streaming…'
                 : draft.length === 0 && lastAssistant
-                  ? `Send empty to continue ${characterName}`
+                  ? 'Send empty to continue'
                   : `Write as ${userName}`
             }
             disabled={busy}

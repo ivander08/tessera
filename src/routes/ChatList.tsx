@@ -71,7 +71,7 @@ export default function ChatList() {
             <p className="form-hint" style={{ marginTop: 16 }}>
               or{' '}
               <Link to="/forge" className="md-link">
-                forge one from a premise
+                forge one in an interview
               </Link>
             </p>
           </div>

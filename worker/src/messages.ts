@@ -8,9 +8,17 @@ import { BRANCH_COLUMNS } from './branch';
 /**
  * Message lifecycle: swipes, edit, delete, regenerate, impersonate, continue.
  *
- * The invariant every one of these preserves: `messages` stays append-only, and a
- * mutation never rewrites a row's text — it deactivates the old version and appends the
- * new one.
+ * Two different kinds of operation, and conflating them was the source of several bugs:
+ *
+ *  - **In-place** — `edit` rewrites a row's text. It is a correction, not a branch, so the
+ *    row keeps its id, its parent and its children. Nothing downstream moves.
+ *  - **Versioned** — `regenerate` adds another VARIANT of one position, which is a sibling
+ *    of the version it replaces. A variant is not a replacement: the original keeps its
+ *    children, so a new variant shows a shorter scene until it grows its own continuation.
+ *    That is the model, not a defect.
+ *
+ * The invariant every one of these preserves: a mutation never rewrites a row's text
+ * *except* an edit, which is the one operation whose whole meaning is rewriting it.
  *
  * ## Positions are parents, not groups
  *
@@ -100,21 +108,6 @@ function deactivatePosition(env: Env, chatId: string, parentId: string | null) {
     `UPDATE messages SET active = 0
       WHERE chat_id = ?1 AND parent_id IS ?2 AND active = 1`,
   ).bind(chatId, parentId);
-}
-
-/**
- * Takes one row out of the transcript without deleting it.
- *
- * Used when a turn fails after the reader's message is already written: the text is theirs
- * and must survive, but an unreplied row on the visible path becomes the parent of the next
- * turn, which puts two `user` messages in a row in front of the model.
- *
- * Deactivated, never removed — the same reasoning as every other lifecycle operation here.
- */
-async function abandonMessage(env: Env, chatId: string, id: string): Promise<void> {
-  await env.DB.prepare('UPDATE messages SET active = 0 WHERE id = ? AND chat_id = ?')
-    .bind(id, chatId)
-    .run();
 }
 
 /**
@@ -217,25 +210,23 @@ export async function editMessage(env: Env, req: Request): Promise<Response> {
   const message = await loadMessage(env, body.chatId, body.id);
   if (!message) return notFound('message not found');
 
-  // An edit is a new version of the same position, not a rewrite. The old text stays
-  // swipable, which is what makes an accidental edit recoverable.
-  const id = await addVersion(env, body.chatId, message.parent_id ?? null, message.role, body.content.trim());
-
-  // Everything that answered the OLD row now answers the new one. Without this the edit
-  // deactivates the row its continuation was parented to, the walk cannot reach past it,
-  // and the reply the reader was reading vanishes — which is exactly what a reader sees
-  // as "editing my line deleted the character's answer".
+  // An edit REWRITES the row. It does not create a version of the position.
   //
-  // The children are reparented, not copied: a continuation is a fact about the position,
-  // not about the version of the text that happened to sit there. The old row is left
-  // inactive and childless, still swipable back to.
+  // Editing the text you already sent is a correction, not a branch. Making it a version
+  // meant a reader who fixed a typo found their message had silently become swipeable —
+  // "2/2" appeared on a turn that had one text — and the scene below it had moved to a
+  // sibling. Nothing about correcting a word should change the shape of the conversation.
+  //
+  // The children need no reparenting, which is the point: they already answer this row, and
+  // this row is still the one on the path.
+  const content = body.content.trim();
   await env.DB.prepare(
-    'UPDATE messages SET parent_id = ? WHERE chat_id = ? AND parent_id = ?',
+    'UPDATE messages SET content = ?, content_tokens = ? WHERE id = ? AND chat_id = ?',
   )
-    .bind(id, body.chatId, message.id)
+    .bind(content, estimate(content), message.id, body.chatId)
     .run();
 
-  return json({ ok: true, id });
+  return json({ ok: true, id: message.id });
 }
 
 interface DeleteBody {
@@ -388,5 +379,5 @@ export async function lastActiveMessage(env: Env, chatId: string): Promise<Messa
   return await loadMessage(env, chatId, tail.id);
 }
 
-export { loadMessage, abandonMessage };
+export { loadMessage };
 export type { MessageRow };

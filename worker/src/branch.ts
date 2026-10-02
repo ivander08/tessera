@@ -48,7 +48,6 @@ export interface BranchRow {
   cached_tokens: number | null;
   cost_usd: number | null;
   active: number;
-  swipe_group: string | null;
   /** Who wrote this assistant row; null means the chat's own character. */
   speaker: string | null;
   /** The world state as of this turn, as stored JSON, or null. */
@@ -73,7 +72,7 @@ export interface BranchRow {
  * qualify each column because the CTE holds the same names.
  */
 export const BRANCH_COLUMNS = `seq, id, parent_id, role, content, content_tokens, active,
-                               swipe_group, prompt_tokens, completion_tokens, cached_tokens,
+                               prompt_tokens, completion_tokens, cached_tokens,
                                cost_usd, speaker, state_json, deleted, created_at`;
 
 /**
@@ -177,7 +176,7 @@ const TAIL = `
     )
     UNION ALL
     SELECT p.seq, p.id, p.parent_id, p.role, p.content, p.content_tokens, p.active,
-           p.swipe_group, p.prompt_tokens, p.completion_tokens, p.cached_tokens,
+           p.prompt_tokens, p.completion_tokens, p.cached_tokens,
            p.cost_usd, p.speaker, p.state_json, p.deleted, p.created_at, up.n + 1
       FROM up JOIN messages p ON p.id = up.parent_id
      WHERE p.chat_id = ?1 AND p.active = 1 AND up.n + 1 < ?3

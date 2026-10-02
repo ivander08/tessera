@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-label="Tessera">
+  <!--
+    The README hero: the mark above the wordmark on the app's own ground.
+
+    The ground is the app's own `ground` token (#16130F) and the lit tile is its brass
+    lightened (#E0BE7E), so the banner is the app's own palette rather than a marketing
+    one. The glow is a radial gradient behind the tile and nothing else — a lit tile in a
+    dark room, which is what the name means.
+
+    The wordmark is a real `<text>` element in the app's serif stack, not outlined paths,
+    so the letterforms are the reader's own Georgia and the file stays small. GitHub
+    sanitises SVG but renders text, so this is safe there; if a viewer renders it badly,
+    the README sets the same wordmark as an `<h1>` beside the mark instead.
+  -->
+  <defs>
+    <radialGradient id="lamp" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#E0BE7E" stop-opacity="0.22" />
+      <stop offset="55%" stop-color="#E0BE7E" stop-opacity="0.06" />
+      <stop offset="100%" stop-color="#E0BE7E" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F0DCB6" />
+      <stop offset="1" stop-color="#C39A63" />
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="420" fill="#16130F" />
+
+  <!-- The lamp: a wide, faint bloom under the mark, so the tile sits in a room. -->
+  <ellipse cx="600" cy="146" rx="420" ry="200" fill="url(#lamp)" />
+
+  <!-- The mark, at 2x its favicon size: one lit tile among four dimmed neighbours. -->
+  <g transform="translate(536 66) scale(2)">
+    <g fill="#B9AE9E" opacity="0.34">
+      <rect x="2" y="2" width="14" height="14" rx="2.5" />
+      <rect x="48" y="2" width="14" height="14" rx="2.5" />
+      <rect x="2" y="48" width="14" height="14" rx="2.5" />
+      <rect x="48" y="48" width="14" height="14" rx="2.5" />
+    </g>
+    <rect x="18" y="18" width="28" height="28" rx="5.5" fill="url(#tile)" />
+    <rect
+      x="21.5"
+      y="21.5"
+      width="21"
+      height="21"
+      rx="3.5"
+      fill="none"
+      stroke="#1A1610"
+      stroke-opacity="0.45"
+      stroke-width="1.7"
+    />
+  </g>
+
+  <text
+    x="600"
+    y="300"
+    text-anchor="middle"
+    font-family="Georgia, 'Iowan Old Style', 'Palatino Linotype', Palatino, serif"
+    font-size="82"
+    letter-spacing="6"
+    fill="#E9E2D7"
+  >Tessera</text>
+
+  <text
+    x="600"
+    y="350"
+    text-anchor="middle"
+    font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+    font-size="15"
+    letter-spacing="7.5"
+    fill="#9A8F82"
+  >A ROLEPLAY CLIENT THAT KEEPS ITS PROMPT CACHEABLE</text>
+</svg>

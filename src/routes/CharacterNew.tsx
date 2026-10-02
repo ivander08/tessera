@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { CardParseError, parseCardFile } from '../lib/cards/import';
 import { CARD_FIELD_ROWS } from '../lib/cards/fields';
 import type { GreetingState, ParsedCard } from '../lib/cards/types';
@@ -7,6 +7,9 @@ import { loadTokenCounter } from '../lib/tokenizerClient';
 import { apiJson } from '../lib/api';
 import { messageOf } from '../lib/hooks';
 import { AppBar, BackLink } from '../components/AppBar';
+import { Avatar } from '../components/Avatar';
+import { ConsultDock } from '../components/ConsultDock';
+import { ConsultPanel } from '../components/ConsultPanel';
 import { GreetingStateFields, GreetingsEditor } from '../components/GreetingsEditor';
 import { useToast } from '../components/Toast';
 
@@ -106,8 +109,14 @@ export default function CharacterNew() {
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Whether the consultant sheet is open. Its conversation lives inside `ConsultPanel`,
+  // so closing it deliberately starts a fresh interview.
+  const [consultOpen, setConsultOpen] = useState(false);
   const toast = useToast();
   const [avatar, setAvatar] = useState<{ contentType: string; dataBase64: string } | null>(null);
+  // Why the card's portrait was not kept, when it was not. Null means it was, or that the
+  // card never carried one.
+  const [avatarNote, setAvatarNote] = useState<string | null>(null);
   const [count, setCount] = useState<((text: string) => number) | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
@@ -136,6 +145,7 @@ export default function CharacterNew() {
     clearBlankParam();
     setError(null);
     setAvatar(null);
+    setAvatarNote(null);
     try {
       const parsed = await parseCardFile(file);
       setCard(parsed);
@@ -143,7 +153,14 @@ export default function CharacterNew() {
       // extension, so a card named `.card` or `.json` that is really a PNG reports the
       // wrong mime and would silently lose its avatar — while `parseCardFile` reads the
       // same file correctly by magic bytes. Two answers for one file is the bug.
-      setAvatar(await extractAvatar(await file.arrayBuffer(), parsed.avatarHint));
+      const outcome = await extractAvatar(await file.arrayBuffer(), parsed.avatarHint);
+      if (outcome.ok) {
+        setAvatar(outcome.avatar);
+      } else {
+        // Said out loud rather than swallowed. A card that lost its portrait used to look
+        // exactly like a card that never had one, and the reason is actionable.
+        setAvatarNote(outcome.reason);
+      }
     } catch (cause) {
       setCard(null);
       setError(cause instanceof CardParseError ? cause.message : messageOf(cause));
@@ -158,6 +175,7 @@ export default function CharacterNew() {
   function startFromFile() {
     setCard(null);
     setAvatar(null);
+    setAvatarNote(null);
     setError(null);
     clearBlankParam();
   }
@@ -327,25 +345,88 @@ export default function CharacterNew() {
               ) : (
                 <>
                   source format <span className="data">{card.sourceFormat}</span> · avatar{' '}
-                  {avatar ? 'extracted from the card' : 'none'}
+                  {avatar ? 'extracted from the card' : avatarNote ? 'not kept' : 'none'}
                 </>
               )}
             </p>
           </div>
-          <div className="row-actions" style={{ gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-            <button type="button" className="btn quiet" onClick={startFromFile}>
-              {authored ? 'Start from a file instead' : 'Choose another file'}
-            </button>
+          {/* No actions here. This screen commits in the row at its foot, exactly like the
+              edit screen — a Save up here was the same button twice with a screen of form
+              between them, which is the duplication the edit screen already removed. */}
+        </div>
+
+        {consultOpen && (
+          <ConsultDock>
+            {(dragHandlers) => (
+              <ConsultPanel
+                mode="consult"
+                card={card}
+                onClose={() => setConsultOpen(false)}
+                dragHandlers={dragHandlers}
+                onApply={(proposed) =>
+                  // Same contract as the edit screen: the proposal lands in the form and Save
+                  // is still the only thing that writes.
+                  setCard((current) =>
+                    current
+                      ? {
+                          ...current,
+                          ...proposed,
+                          // The card's own provenance and book are not the consultant's to
+                          // change, so they survive the merge.
+                          characterBook: current.characterBook,
+                          raw: current.raw,
+                          avatarHint: current.avatarHint,
+                          sourceFormat: current.sourceFormat,
+                        }
+                      : current,
+                  )
+                }
+              />
+            )}
+          </ConsultDock>
+        )}
+
+        {/* The portrait, which this screen used to extract, upload and never show. A card
+            imported from a PNG carries its picture in the file, and the only feedback was
+            the word "extracted" in the subtitle — so a card that failed the size guard
+            looked identical to one that worked. */}
+        {avatar ? (
+          <div
+            className="panel panel-pad"
+            style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}
+          >
+            <Avatar
+              src={`data:${avatar.contentType};base64,${avatar.dataBase64}`}
+              name={value('name') || '?'}
+              className="chip"
+              style={{ width: 64, height: 64, fontSize: 'var(--text-lg)' }}
+              zoomable
+            />
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div className="eyebrow">Portrait</div>
+              <p className="form-hint" style={{ marginTop: 6 }}>
+                extracted from the card file — stored with the character when you save
+              </p>
+            </div>
             <button
               type="button"
-              onClick={() => void save()}
-              disabled={saving || card.name.trim().length === 0}
-              className="btn primary"
+              className="btn quiet"
+              onClick={() => {
+                setAvatar(null);
+                setAvatarNote('you removed it');
+              }}
+              title="Save without the portrait"
             >
-              {saving ? 'Saving…' : 'Save character'}
+              Remove
             </button>
           </div>
-        </div>
+        ) : (
+          avatarNote && (
+            <div className="note" style={{ marginBottom: 14 }}>
+              No portrait kept: {avatarNote}. You can add one on the edit screen.
+            </div>
+          )
+        )}
 
         <div className="panel panel-pad">
           <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>
@@ -496,18 +577,33 @@ export default function CharacterNew() {
           </div>
         )}
 
-        <div className="row-actions" style={{ marginTop: 22 }}>
+        {/* The same commit row the edit screen has, in the same place, with the same order.
+            This screen used to commit from its header instead, which meant the same button
+            twice and a Save that scrolled out of reach on a long form. */}
+        <div className="sheet-commit">
           <button
             type="button"
+            className="btn primary"
             onClick={() => void save()}
             disabled={saving || card.name.trim().length === 0}
-            className="btn primary"
           >
             {saving ? 'Saving…' : 'Save character'}
           </button>
-          <Link to="/characters" className="btn quiet">
-            Back to the library
-          </Link>
+          {/* Consult needs a card to talk about, and a card with no name cannot be filed —
+              the Worker rejects the request outright. Same gate as Save. */}
+          <button
+            type="button"
+            className="btn"
+            onClick={() => setConsultOpen((open) => !open)}
+            disabled={saving || card.name.trim().length === 0}
+            aria-expanded={consultOpen}
+            title={card.name.trim().length === 0 ? 'Give the character a name first' : undefined}
+          >
+            {consultOpen ? 'Close consult' : 'Consult'}
+          </button>
+          <button type="button" className="btn" onClick={startFromFile} disabled={saving}>
+            {authored ? 'Start from a file instead' : 'Choose another file'}
+          </button>
         </div>
       </main>
     </>
@@ -539,40 +635,55 @@ function Field({
   );
 }
 
+/** Why a card's portrait was not kept, when it was not. */
+export type AvatarOutcome =
+  | { ok: true; avatar: { contentType: string; dataBase64: string } }
+  | { ok: false; reason: string };
+
 /**
- * The card's own PNG carries the avatar. Sending it as base64 in the create body
- * keeps one round trip, and the Worker stores it in `character_assets` rather than
- * in the `characters` row — a base64 data URL would push a large card past D1's
- * 2 MB per-row limit.
+ * The card's own PNG carries the portrait.
+ *
+ * Sending it as base64 in the create body keeps one round trip, and the Worker stores it in
+ * `character_assets` rather than in the `characters` row — a base64 data URL would push a
+ * large card past D1's 2 MB per-row limit.
+ *
+ * Returns WHY when it cannot, rather than a bare null. A 1024x1024 card PNG is about 4 MB,
+ * which is past the point where base64 fits that limit — and silently importing such a card
+ * with no portrait is indistinguishable from a card that never had one. The caller shows
+ * the reason.
  */
-async function extractAvatar(
+export async function extractAvatar(
   buffer: ArrayBuffer,
   hint: string | null,
-): Promise<{ contentType: string; dataBase64: string } | null> {
+): Promise<AvatarOutcome> {
   const bytes = new Uint8Array(buffer);
 
-  // Only ship the image when it is comfortably under D1's 2 MB row limit. A large card
-  // keeps its data in the card itself; the avatar is a nicety, not worth failing the
-  // import over.
-  if (bytes.length > 1_500_000) return null;
-
-  // A card's own `avatar` field is a URL, not bytes, and is usually remote. Storing the
-  // URL means the app fetches from a third party on every render, so it is only used
-  // when it is a data URL we can decode inline.
+  // The card's own `avatar` field first, when it is a data URL we can decode inline. It is
+  // usually a remote URL instead, and storing that would make the app fetch from a third
+  // party on every render.
   if (hint && hint.startsWith('data:')) {
     const match = /^data:([^;,]+);base64,(.*)$/s.exec(hint);
-    if (match) return { contentType: match[1], dataBase64: match[2] };
+    if (match) return { ok: true, avatar: { contentType: match[1], dataBase64: match[2] } };
   }
 
-  // Otherwise use the PNG we were handed, which for a card file is the portrait.
-  if (!isPng(bytes)) return null;
+  if (!isPng(bytes)) return { ok: false, reason: 'this card is not a PNG, so it has no portrait' };
+
+  // Base64 inflates by a third, and D1 caps a row at 2 MB. The limit is on the FILE
+  // because for a PNG card the file IS the image — there is no separate picture to strip.
+  if (bytes.length > 1_500_000) {
+    const mb = (bytes.length / 1_048_576).toFixed(1);
+    return {
+      ok: false,
+      reason: `the card is ${mb} MB, past the ${1.5} MB limit for a stored portrait — the card itself imported fine`,
+    };
+  }
 
   let binary = '';
   const chunk = 0x8000;
   for (let i = 0; i < bytes.length; i += chunk) {
     binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
   }
-  return { contentType: 'image/png', dataBase64: btoa(binary) };
+  return { ok: true, avatar: { contentType: 'image/png', dataBase64: btoa(binary) } };
 }
 
 function isPng(bytes: Uint8Array): boolean {

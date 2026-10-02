@@ -42,14 +42,7 @@ import { loadAlternatives, loadPathTail } from './branch';
 import { substituteHead } from '../../src/lib/prompt/macros';
 import { EMPTY_STATE, validatePatch } from '../../src/lib/state/schema';
 import type { WorldState } from '../../src/lib/state/schema';
-import {
-  forgeCards,
-  forgeCritique,
-  forgeDraft,
-  forgeSmuggle,
-  forgeSuggest,
-  forgeTokens,
-} from './forge/api';
+import { forgeConsult } from './forge/api';
 import {
   createPersona,
   deletePersona,
@@ -322,12 +315,7 @@ async function route(req: Request, env: Env, url: URL, ctx: ExecutionContext): P
     return getChatPreset(env, decodeURIComponent(chatPresetMatch[1]));
   }
 
-  if (path === '/api/forge/cards' && method === 'GET') return forgeCards(env);
-  if (path === '/api/forge/draft' && method === 'POST') return forgeDraft(env, req);
-  if (path === '/api/forge/critique' && method === 'POST') return forgeCritique(env, req);
-  if (path === '/api/forge/smuggle' && method === 'POST') return forgeSmuggle(env, req);
-  if (path === '/api/forge/tokens' && method === 'POST') return forgeTokens(env, req);
-  if (path === '/api/forge/suggest' && method === 'POST') return forgeSuggest(env, req);
+  if (path === '/api/forge/consult' && method === 'POST') return forgeConsult(env, req);
 
   if (path === '/api/chat' && method === 'POST') return handleChat(req, env, ctx);
 

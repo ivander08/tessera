@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="88" height="88" viewBox="0 0 64 64" role="img" aria-label="Tessera">
+  <!--
+    The mark, for the README.
+
+    Same geometry as `public/favicon.svg` and `app-icon.svg` — one lit tile among four
+    dimmed neighbours. This third copy exists because the favicon carries a
+    `prefers-color-scheme` media query and a README renderer does not honour one: GitHub
+    shows the file as-is on its own background, which can be either. Baking the
+    dark-theme values in is what keeps the mark from appearing as the light-theme palette
+    on a dark page, or vice versa.
+
+    No background: the README supplies one, exactly as a browser tab bar does.
+  -->
+  <g fill="#B9AE9E" opacity="0.5">
+    <rect x="2" y="2" width="14" height="14" rx="2.5" />
+    <rect x="48" y="2" width="14" height="14" rx="2.5" />
+    <rect x="2" y="48" width="14" height="14" rx="2.5" />
+    <rect x="48" y="48" width="14" height="14" rx="2.5" />
+  </g>
+
+  <rect x="18" y="18" width="28" height="28" rx="5.5" fill="#E0BE7E" />
+
+  <rect
+    x="21.5"
+    y="21.5"
+    width="21"
+    height="21"
+    rx="3.5"
+    fill="none"
+    stroke="#1A1610"
+    stroke-opacity="0.45"
+    stroke-width="1.7"
+  />
+</svg>

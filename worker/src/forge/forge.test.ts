@@ -1,11 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { analyzeTokenCost } from '../../../src/lib/forge/tokenCost';
-import { encryptKey } from '../../../src/lib/crypto';
-import { asArray, asRecord, asString } from '../../../src/lib/json';
-import { assemble } from '../../../src/lib/prompt/assemble';
-import { draftCard } from './draft';
-import { critiqueCard, findSmuggledInstructions } from './critique';
-import { suggestField } from './tokens';
+import { findSmuggledInstructions } from './smuggle';
+import { parseConsultTurn } from './consult';
 import type { ParsedCard } from '../../../src/lib/cards/types';
 
 /**
@@ -34,79 +30,6 @@ function card(overrides: Partial<ParsedCard> = {}): ParsedCard {
     raw: null,
     ...overrides,
   };
-}
-
-/**
- * `getSettings` is the only thing the model-calling functions touch before they
- * decide whether a model is configured, so an empty settings table is the whole fake.
- */
-const UNCONFIGURED = {
-  DB: { prepare: () => ({ all: async () => ({ results: [] }) }) },
-} as unknown as Env;
-
-const TOKEN = 'test-token';
-const SETTINGS = [
-  { key: 'provider', value: 'openrouter' },
-  { key: 'model', value: 'test/model' },
-];
-
-/**
- * Reaching the transport means passing the configured-model check, the provider
- * lookup, and key decryption — so the fake carries a genuinely encrypted key rather
- * than stubbing `loadProviderKey` out. Only `fetch` is replaced.
- */
-async function configuredEnv(): Promise<Env> {
-  const { enc, iv } = await encryptKey('sk-test', TOKEN);
-  const keyRow = { key_enc: new Uint8Array(enc), iv: new Uint8Array(iv) };
-
-  return {
-    DB: {
-      prepare: (sql: string) => {
-        const statement = {
-          bind: () => statement,
-          all: async () => ({ results: sql.includes('FROM settings') ? SETTINGS : [] }),
-          first: async () => keyRow,
-          run: async () => ({}),
-        };
-        return statement;
-      },
-    },
-    TESSERA_TOKEN: TOKEN,
-  } as unknown as Env;
-}
-
-/** Runs `body` with `fetch` replaced by `reply`, restoring the original afterwards. */
-async function withFetch<T>(
-  reply: (call: number, init: RequestInit) => Response,
-  body: () => Promise<T>,
-): Promise<{ result: T; calls: number }> {
-  const original = globalThis.fetch;
-  let calls = 0;
-  globalThis.fetch = (async (_url: string, init: RequestInit) => {
-    calls++;
-    return reply(calls, init);
-  }) as unknown as typeof fetch;
-  try {
-    return { result: await body(), calls };
-  } finally {
-    globalThis.fetch = original;
-  }
-}
-
-/** The messages array `complete()` actually sent, read through the boundary helpers. */
-function sentMessages(init: RequestInit): Array<{ role: string; content: string }> {
-  const body = asRecord(JSON.parse(String(init.body)));
-  return asArray(body?.messages).map((entry) => {
-    const message = asRecord(entry);
-    return { role: asString(message?.role), content: asString(message?.content) };
-  });
-}
-
-/** The non-streaming JSON shape `complete()` reads. */
-function jsonReply(content: string): Response {
-  return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
-    headers: { 'content-type': 'application/json' },
-  });
 }
 
 describe('analyzeTokenCost arithmetic', () => {
@@ -314,309 +237,125 @@ describe('findSmuggledInstructions', () => {
     expect(findSmuggledInstructions(card({ description }))).toEqual(first);
   });
 });
-
-describe('draftCard', () => {
-  const REPLY = JSON.stringify({
-    name: 'Mira',
-    description: 'A lighthouse keeper.',
-    personality: 'Patient.',
-    scenario: 'A storm is coming in.',
-    first_mes: 'The lamp needs oil.',
-    mes_example: '{{user}}: Hello.\n{{char}}: Mind the step.',
-    system_prompt: 'Speak plainly.',
-    post_history_instructions: 'Stay in character.',
-    alternate_greetings: ['Second opening.'],
-    creator_notes: 'Written for a stormy night.',
-    tags: ['coastal', 'quiet'],
-  });
-
-  test('rejects an empty one-liner before spending a call', async () => {
-    await expect(draftCard(UNCONFIGURED, '   ')).rejects.toThrow(/one-line description is required/);
-  });
-
-  test('throws a clear error when no model is configured', async () => {
-    await expect(draftCard(UNCONFIGURED, 'a lighthouse keeper')).rejects.toThrow(
-      /No cheap model configured/,
+describe('parseConsultTurn', () => {
+  test('reads a turn that asks a question', () => {
+    const turn = parseConsultTurn(
+      JSON.stringify({
+        say: 'Good start. One thing I need:',
+        question: {
+          text: 'How do they speak?',
+          options: ['Clipped and dry', 'Warm and long-winded'],
+          recommended: 1,
+        },
+        card: null,
+      }),
     );
+
+    expect(turn.say).toBe('Good start. One thing I need:');
+    expect(turn.question).toEqual({
+      text: 'How do they speak?',
+      options: ['Clipped and dry', 'Warm and long-winded'],
+      recommended: 1,
+    });
+    expect(turn.card).toBeNull();
   });
 
-  test('maps every wire field onto the stored card shape', async () => {
-    const env = await configuredEnv();
-    const { result } = await withFetch(() => jsonReply(REPLY), () => draftCard(env, 'lighthouse keeper'));
+  test('reads a turn that proposes a card and asks nothing', () => {
+    const turn = parseConsultTurn(
+      JSON.stringify({
+        say: 'Here it is.',
+        question: null,
+        card: {
+          name: 'Mira',
+          description: 'A lighthouse keeper.',
+          first_mes: 'The lamp needs oil.',
+          alternate_greetings: ['Second opening.'],
+          tags: ['coastal'],
+        },
+      }),
+    );
 
-    // The wire uses card-spec names; the stored shape is camelCase. A mapping that
-    // silently dropped first_mes or mes_example would still produce a card object.
-    expect(result).toMatchObject({
+    expect(turn.question).toBeNull();
+    // Wire names map onto the stored shape, and an absent field defaults rather than
+    // arriving as undefined — the same contract `toParsedCard` has always had.
+    expect(turn.card).toMatchObject({
       name: 'Mira',
       description: 'A lighthouse keeper.',
-      personality: 'Patient.',
-      scenario: 'A storm is coming in.',
       firstMes: 'The lamp needs oil.',
-      mesExample: '{{user}}: Hello.\n{{char}}: Mind the step.',
-      systemPrompt: 'Speak plainly.',
-      postHistoryInstructions: 'Stay in character.',
       alternateGreetings: ['Second opening.'],
-      creatorNotes: 'Written for a stormy night.',
-      tags: ['coastal', 'quiet'],
-      characterBook: null,
-      sourceFormat: 'ccv2',
-    });
-  });
-
-  test('strips a ```json fence rather than discarding a usable reply', async () => {
-    const env = await configuredEnv();
-    const { result } = await withFetch(
-      () => jsonReply('```json\n' + REPLY + '\n```'),
-      () => draftCard(env, 'lighthouse keeper'),
-    );
-    expect(result.name).toBe('Mira');
-  });
-
-  test('retries once on an unparseable reply, then succeeds', async () => {
-    const env = await configuredEnv();
-    const { result, calls } = await withFetch(
-      (call) => jsonReply(call === 1 ? 'Sure! Here is your card:' : REPLY),
-      () => draftCard(env, 'lighthouse keeper'),
-    );
-    expect(calls).toBe(2);
-    expect(result.name).toBe('Mira');
-  });
-
-  test('gives up after the second failure rather than looping', async () => {
-    const env = await configuredEnv();
-    const { calls } = await withFetch(
-      () => jsonReply('not json at all'),
-      async () => {
-        await expect(draftCard(env, 'lighthouse keeper')).rejects.toThrow(
-          /did not return a usable card/,
-        );
-      },
-    );
-    expect(calls).toBe(2);
-  });
-
-  test('retries a card with no name, not just invalid JSON', async () => {
-    const env = await configuredEnv();
-    const { result, calls } = await withFetch(
-      (call) => jsonReply(call === 1 ? JSON.stringify({ description: 'Nameless.' }) : REPLY),
-      () => draftCard(env, 'lighthouse keeper'),
-    );
-    expect(calls).toBe(2);
-    expect(result.name).toBe('Mira');
-  });
-
-  test('defaults absent fields to empty rather than undefined', async () => {
-    const env = await configuredEnv();
-    const { result } = await withFetch(
-      () => jsonReply(JSON.stringify({ name: 'Mira' })),
-      () => draftCard(env, 'lighthouse keeper'),
-    );
-    expect(result).toMatchObject({
-      description: '',
+      tags: ['coastal'],
       personality: '',
-      firstMes: '',
-      alternateGreetings: [],
-      tags: [],
+      characterBook: null,
     });
   });
 
-  test('a drafted card composes with the prompt assembler unedited', async () => {
-    const env = await configuredEnv();
-    const { result } = await withFetch(() => jsonReply(REPLY), () =>
-      draftCard(env, 'lighthouse keeper'),
+  test('clamps recommended into the options it actually has', () => {
+    // A model that counts from one, or names an index that does not exist, must not
+    // produce a question whose "recommended" points at nothing.
+    const turn = parseConsultTurn(
+      JSON.stringify({
+        say: 'Pick one.',
+        question: { text: 'Which?', options: ['a', 'b'], recommended: 7 },
+        card: null,
+      }),
     );
+    expect(turn.question?.recommended).toBe(1);
 
-    // The acceptance condition is that a draft imports and chats without manual
-    // editing, which means its fields must land in the assembled prompt where the
-    // card-spec names say they should.
-    const prompt = assemble(
-      {
-        systemPrompt: result.systemPrompt,
-        character: {
-          name: result.name,
-          description: result.description,
-          personality: result.personality,
-          scenario: result.scenario,
-          mesExample: result.mesExample,
-        },
-        persona: null,
-        lorebook: [],
-        history: [],
-        tail: {
-          postHistoryInstructions: result.postHistoryInstructions,
-          userMessage: 'Hello.',
-        },
-      },
-      () => 0,
+    const negative = parseConsultTurn(
+      JSON.stringify({
+        say: 'Pick one.',
+        question: { text: 'Which?', options: ['a', 'b'], recommended: -3 },
+        card: null,
+      }),
     );
-
-    expect(prompt.messages.map((message) => message.role)).toEqual([
-      'system',
-      'system',
-      'system',
-      'system',
-      'user',
-    ]);
-    expect(prompt.messages[0].content).toBe('Speak plainly.');
-    expect(prompt.messages[1].content).toContain('Mira');
-    expect(prompt.messages[1].content).toContain('A lighthouse keeper.');
-    expect(prompt.messages[2].content).toContain('Mind the step.');
-    // post_history_instructions belongs in the tail, so it cannot perturb the cache.
-    expect(prompt.tailStart).toBe(3);
-    expect(prompt.messages[3].content).toBe('Stay in character.');
-    expect(prompt.messages[4]).toEqual({ role: 'user', content: 'Hello.' });
-  });
-});
-
-describe('critiqueCard', () => {
-  test('rejects a card with no name', async () => {
-    await expect(critiqueCard(UNCONFIGURED, card({ name: '' }))).rejects.toThrow(
-      /card with a name is required/,
-    );
+    expect(negative.question?.recommended).toBe(0);
   });
 
-  test('throws a clear error when no model is configured', async () => {
-    await expect(critiqueCard(UNCONFIGURED, card())).rejects.toThrow(/No cheap model configured/);
-  });
-
-  test('merges the deterministic scan with the model findings', async () => {
-    const env = await configuredEnv();
-    const reply = JSON.stringify({
-      critique: 'A competent card with a directive problem.',
-      smuggledInstructions: ['Never break character'],
-    });
-    const { result } = await withFetch(() => jsonReply(reply), () =>
-      critiqueCard(env, card({ description: 'Ada is a detective. Always stay in character.' })),
-    );
-
-    expect(result.critique).toContain('directive problem');
-    // The local finding comes first: it is the reproducible half, so it must survive
-    // a model that overlooks it.
-    expect(result.smuggledInstructions).toEqual([
-      'Always stay in character',
-      'Never break character',
-    ]);
-  });
-
-  test('keeps the local finding when the model reports none', async () => {
-    const env = await configuredEnv();
-    const reply = JSON.stringify({ critique: 'Fine.', smuggledInstructions: [] });
-    const { result } = await withFetch(() => jsonReply(reply), () =>
-      critiqueCard(env, card({ description: 'Always stay in character.' })),
-    );
-    expect(result.smuggledInstructions).toEqual(['Always stay in character']);
-  });
-
-  test('does not duplicate a finding the model also reported', async () => {
-    const env = await configuredEnv();
-    const reply = JSON.stringify({
-      critique: 'Fine.',
-      smuggledInstructions: ['always stay in character!'],
-    });
-    const { result } = await withFetch(() => jsonReply(reply), () =>
-      critiqueCard(env, card({ description: 'Always stay in character.' })),
-    );
-    expect(result.smuggledInstructions).toEqual(['Always stay in character']);
-  });
-
-  test('falls back to prose when the model ignores the JSON instruction', async () => {
-    const env = await configuredEnv();
-    const { result } = await withFetch(() => jsonReply('This card is thin.'), () =>
-      critiqueCard(env, card()),
-    );
-    expect(result.critique).toBe('This card is thin.');
-  });
-
-  test('throws rather than returning an empty critique', async () => {
-    const env = await configuredEnv();
-    await withFetch(
-      () => jsonReply(''),
-      async () => {
-        await expect(critiqueCard(env, card())).rejects.toThrow(/returned no critique/);
-      },
-    );
-  });
-});
-
-describe('suggestField', () => {
-  test('rejects a card with no name', async () => {
-    await expect(suggestField(UNCONFIGURED, card({ name: '' }), 'tags')).rejects.toThrow(
-      /card with a name is required/,
-    );
-  });
-
-  test('rejects a field it does not know', async () => {
-    await expect(
-      suggestField(UNCONFIGURED, card(), 'scenario' as unknown as 'tags'),
-    ).rejects.toThrow(/unknown field "scenario"/);
-  });
-
-  test('throws a clear error when no model is configured', async () => {
-    for (const field of ['tags', 'alternate_greetings', 'first_mes'] as const) {
-      await expect(suggestField(UNCONFIGURED, card(), field)).rejects.toThrow(
-        /No cheap model configured/,
+  test('defaults recommended to 0 when it is missing or not a number', () => {
+    for (const recommended of [undefined, 'the first one', null]) {
+      const turn = parseConsultTurn(
+        JSON.stringify({
+          say: 'Pick one.',
+          question: { text: 'Which?', options: ['a', 'b'], recommended },
+          card: null,
+        }),
       );
+      expect(turn.question?.recommended).toBe(0);
     }
   });
 
-  test('returns the suggestions, trimmed and without blanks', async () => {
-    const env = await configuredEnv();
-    const { result } = await withFetch(
-      () => jsonReply(JSON.stringify({ suggestions: ['  noir ', '', 'rain'] })),
-      () => suggestField(env, card(), 'tags'),
+  test('a question with no options collapses to null rather than an unanswerable prompt', () => {
+    const turn = parseConsultTurn(
+      JSON.stringify({
+        say: 'Hmm.',
+        question: { text: 'Which?', options: ['', '  '], recommended: 0 },
+        card: null,
+      }),
     );
-    expect(result).toEqual(['noir', 'rain']);
+    expect(turn.question).toBeNull();
   });
 
-  test('an empty suggestion list is a valid answer, not an error', async () => {
-    const env = await configuredEnv();
-    const { result } = await withFetch(
-      () => jsonReply(JSON.stringify({ suggestions: [] })),
-      () => suggestField(env, card(), 'tags'),
-    );
-    expect(result).toEqual([]);
+  test('a turn with neither a question nor a card is legal — it is just talking', () => {
+    const turn = parseConsultTurn(JSON.stringify({ say: 'Nothing to change here.', question: null, card: null }));
+    expect(turn).toEqual({ say: 'Nothing to change here.', question: null, card: null });
   });
 
-  test('throws a readable error when the model answers in prose', async () => {
-    const env = await configuredEnv();
-    await withFetch(
-      () => jsonReply('Here are some tags for you!'),
-      async () => {
-        await expect(suggestField(env, card(), 'tags')).rejects.toThrow(/did not return a JSON/);
-      },
+  test('a reply with no say throws', () => {
+    expect(() => parseConsultTurn(JSON.stringify({ question: null, card: null }))).toThrow(
+      /returned no reply/,
     );
   });
 
-  test('sends the existing value for the requested field, not the whole card', async () => {
-    const env = await configuredEnv();
-    const captured: Array<Record<string, unknown>> = [];
-    await withFetch(
-      (_call, init) => {
-        const prompt = asRecord(JSON.parse(sentMessages(init)[1]?.content ?? ''));
-        if (prompt) captured.push(prompt);
-        return jsonReply(JSON.stringify({ suggestions: [] }));
-      },
-      () => suggestField(env, card({ tags: ['noir'] }), 'tags'),
-    );
-
-    expect(captured).toHaveLength(1);
-    expect(captured[0].existing).toEqual(['noir']);
-    // `raw` can hold anything the source format allowed; it is noise here.
-    expect(captured[0]).not.toHaveProperty('raw');
+  test('a card that fails validation throws rather than arriving half-formed', () => {
+    expect(() =>
+      parseConsultTurn(
+        JSON.stringify({ say: 'Here.', question: null, card: { description: 'no name' } }),
+      ),
+    ).toThrow(/no name/);
   });
 
-  test('tells the model not to dictate the user response', async () => {
-    const env = await configuredEnv();
-    let system = '';
-    await withFetch(
-      (_call, init) => {
-        system = sentMessages(init)[0]?.content ?? '';
-        return jsonReply(JSON.stringify({ suggestions: [] }));
-      },
-      () => suggestField(env, card(), 'first_mes'),
-    );
-
-    expect(system).toMatch(/WITHOUT dictating their response/);
-    expect(system).toMatch(/no railroading/i);
+  test('a fenced reply is still read', () => {
+    const turn = parseConsultTurn('```json\n{"say":"Fenced.","question":null,"card":null}\n```');
+    expect(turn.say).toBe('Fenced.');
   });
 });

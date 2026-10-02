@@ -23,9 +23,16 @@ import type { Role } from '../../src/lib/prompt/types';
 
 export { type Frame };
 
-export function send(
+/**
+ * One SSE event. `data: <json>\n\n`, the only shape either stream writes.
+ *
+ * Generic over the frame rather than fixed to `Frame`: the chat stream and the consult
+ * stream are different protocols, and neither one's union belongs in the other's file. All
+ * this needs is a tagged object to serialize.
+ */
+export function send<F extends { type: string }>(
   controller: ReadableStreamDefaultController<Uint8Array>,
-  frame: Frame,
+  frame: F,
 ): void {
   controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(frame)}\n\n`));
 }

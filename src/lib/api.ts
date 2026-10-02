@@ -115,12 +115,53 @@ export interface NormalizedUsage {
 }
 
 /**
- * Streams a turn. Frames are the Worker's normalized protocol; the client never
- * sees a provider quirk.
+ * The forge consultant's stream. Separate from `streamChat` rather than a generalisation of
+ * it: `streamChat` hard-codes the path and the `{chatId, content, mode, targetId}` body, and
+ * the two have no field in common.
  */
+export type ConsultFrame =
+  | { type: 'delta'; text: string }
+  | { type: 'turn'; turn: unknown }
+  | { type: 'error'; message: string; code: string };
+
+export async function streamConsult(
+  body: {
+    mode: 'draft' | 'consult';
+    messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+    card?: unknown;
+  },
+  onFrame: (frame: ConsultFrame) => void,
+  options: { signal?: AbortSignal } = {},
+): Promise<void> {
+  const res = await apiFetch('/api/forge/consult', {
+    method: 'POST',
+    body: JSON.stringify(body),
+    signal: options.signal,
+  });
+
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`${res.status}: ${text.slice(0, 300)}`);
+  }
+
+  for await (const event of parseSse(res.body)) {
+    let frame: ConsultFrame;
+    try {
+      frame = JSON.parse(event.data) as ConsultFrame;
+    } catch {
+      continue;
+    }
+    onFrame(frame);
+  }
+}
+
 /** The four ways a turn can be produced. See `worker/src/turn.ts`. */
 export type TurnMode = 'send' | 'regenerate' | 'impersonate' | 'continue';
 
+/**
+ * Streams a turn. Frames are the Worker's normalized protocol; the client never
+ * sees a provider quirk.
+ */
 export async function streamChat(
   chatId: string,
   content: string,
