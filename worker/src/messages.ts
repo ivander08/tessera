@@ -252,10 +252,16 @@ interface DeleteBody {
  *
  * So:
  *
- *  - Other versions remain -> mark this one deleted, hand the continuation to the newest
- *    survivor, and the reader swipes on. The turn stays.
+ *  - Other versions remain -> mark this one deleted, promote the newest survivor in its
+ *    place, and the reader swipes on. The turn stays.
  *  - This was the last version -> mark it deleted, which empties the position and takes the
  *    turn out of the transcript with everything after it.
+ *
+ * The turns written after this one leave the scene with it, and they are not re-parented
+ * onto the promoted version. They were written in answer to THIS version, so they belong
+ * to it; the promoted version brings back its own continuation, which the walk already
+ * follows. Re-parenting grafted one version's prose onto another version's reply — the
+ * reader saw their own follow-up answered by text they had never been shown.
  *
  * Nothing is removed from the table either way. A hard DELETE would fire the FTS delete
  * trigger, so recall would lose the message, and it would leave a hole in `seq` that the
@@ -304,11 +310,6 @@ export async function deleteMessage(env: Env, req: Request): Promise<Response> {
       .bind(message.id, body.chatId),
     env.DB.prepare('UPDATE messages SET active = 1 WHERE id = ? AND chat_id = ?')
       .bind(successor.id, body.chatId),
-    // The continuation followed the row that just left, so it follows the one that
-    // replaced it. Without this the reply the reader was reading drops off the walk —
-    // the same failure an edit had, reached by a different door.
-    env.DB.prepare('UPDATE messages SET parent_id = ? WHERE chat_id = ? AND parent_id = ?')
-      .bind(successor.id, body.chatId, message.id),
   ]);
 
   // Not empty: the turn is still on screen, showing a different version.

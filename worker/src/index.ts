@@ -352,20 +352,34 @@ async function listChats(env: Env): Promise<Response> {
   // written. `ORDER BY seq DESC` would show a reply from an abandoned branch — text that
   // is not on screen — which is exactly the confusion branching exists to avoid.
   //
-  // This is a correlated subquery per chat, and it is bounded by the index on
-  // (chat_id, parent_id, seq): the tail of a chat is the one active row with no active
-  // child, which is a lookup rather than a walk.
+  // "Last row with no active child" is not the same thing: after a swipe back, the
+  // abandoned continuation keeps `active = 1` on its rows, so its leaf is still an active
+  // row with no active child and it would win. The walk below is the same walk the
+  // transcript uses — down from the active root, newest active child at each step — and
+  // the preview is its last row.
   const { results } = await env.DB.prepare(
-    `SELECT c.id, c.title, c.updated_at, c.character_id,
+    `WITH RECURSIVE path(chat_id, seq, id, parent_id, content, depth) AS (
+       SELECT c.id, m.seq, m.id, m.parent_id, m.content, 0
+         FROM chats c
+         JOIN messages m
+           ON m.chat_id = c.id AND m.parent_id IS NULL AND m.active = 1 AND m.deleted = 0
+       UNION ALL
+       SELECT path.chat_id, m.seq, m.id, m.parent_id, m.content, path.depth + 1
+         FROM path
+         JOIN messages m ON m.chat_id = path.chat_id AND m.parent_id = path.id
+        WHERE m.active = 1
+          AND m.deleted = 0
+          AND m.seq = (
+            SELECT MAX(c2.seq) FROM messages c2
+             WHERE c2.chat_id = path.chat_id AND c2.parent_id = path.id
+               AND c2.active = 1 AND c2.deleted = 0
+          )
+     )
+     SELECT c.id, c.title, c.updated_at, c.character_id,
             ch.name AS character_name, ch.avatar AS character_avatar,
-            (SELECT substr(m.content, 1, 140) FROM messages m
-              WHERE m.chat_id = c.id
-                AND m.active = 1
-                AND NOT EXISTS (
-                  SELECT 1 FROM messages k
-                   WHERE k.chat_id = m.chat_id AND k.parent_id = m.id AND k.active = 1
-                )
-              ORDER BY m.seq DESC LIMIT 1) AS preview
+            (SELECT substr(p.content, 1, 140) FROM path p
+              WHERE p.chat_id = c.id
+              ORDER BY p.depth DESC LIMIT 1) AS preview
        FROM chats c
        LEFT JOIN characters ch ON ch.id = c.character_id
       ORDER BY c.updated_at DESC`,

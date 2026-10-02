@@ -238,7 +238,7 @@ describe('buildPrompt reads a bounded window', () => {
     // and a test that pins the arithmetic would fail every time that reservation is
     // retuned. What matters is that the read is BOUNDED and that its bound is the walk's
     // own parameter.
-    const tail = calls.find((call) => call.sql.includes('WITH RECURSIVE up'));
+    const tail = calls.find((call) => call.sql.includes('WITH RECURSIVE tail_path'));
     expect(tail).toBeDefined();
     const limit = tail!.params[2] as number;
     expect(limit).toBeGreaterThan(0);
@@ -296,7 +296,7 @@ describe('buildPrompt reads a bounded window', () => {
 
     // The floor keeps a short chat whole: there is nothing below the tail to miss.
     expect(bodyOf(prompt)).toHaveLength(12);
-    const tail = calls.find((call) => call.sql.includes('WITH RECURSIVE up'));
+    const tail = calls.find((call) => call.sql.includes('WITH RECURSIVE tail_path'));
     expect(tail!.rows).toBe(12);
   });
 
@@ -318,7 +318,7 @@ describe('buildPrompt reads a bounded window', () => {
       tailExtra: '',
     });
 
-    const tails = calls.filter((call) => call.sql.includes('WITH RECURSIVE up'));
+    const tails = calls.filter((call) => call.sql.includes('WITH RECURSIVE tail_path'));
     // Two reads: the first, then one doubled retry. Not a loop.
     expect(tails).toHaveLength(2);
     const first = tails[0].params[2] as number;
@@ -368,7 +368,7 @@ describe('buildPrompt reads a bounded window', () => {
 
     // 1,500 messages must not mean 1,500 rows read: the walk is capped at 400 and the
     // stable window start sits inside that, so one read answers the turn.
-    const tails = calls.filter((call) => call.sql.includes('WITH RECURSIVE up'));
+    const tails = calls.filter((call) => call.sql.includes('WITH RECURSIVE tail_path'));
     expect(tails).toHaveLength(1);
     expect(tails[0].params[2]).toBe(400);
     expect(tails[0].rows).toBe(400);

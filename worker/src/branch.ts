@@ -119,14 +119,12 @@ export async function loadPath(env: Env, chatId: string): Promise<BranchRow[]> {
 /**
  * The visible transcript, bounded to `limit` rows, oldest-first.
  *
- * Walks UP from the end of the path rather than down from the opening. A forward walk
- * cannot be bounded by a LIMIT: the recursion runs to completion before the LIMIT is
- * applied, so cost grows with the whole conversation. Starting at the tail and climbing
- * stops as soon as the count is reached.
- *
- * `cursor` is the id of the oldest row the caller already holds. Omit it for the newest
- * window; pass `rows[0].id` to page backwards. The cursor row itself is NOT returned
- * again — the walk starts at its parent.
+ * Walks the visible path in the database — the same walk as `WALK` — and returns its
+ * newest `limit` rows. `cursor` is the id of the oldest row the caller already holds.
+ * Omit it for the newest window; pass `rows[0].id` to page backwards. The cursor row
+ * itself is NOT returned again. A cursor that is no longer on the path matches no depth
+ * and returns nothing, which is the honest answer: the page it names cannot be reached
+ * from the visible transcript.
  */
 export async function loadPathTail(
   env: Env,
@@ -134,8 +132,8 @@ export async function loadPathTail(
   limit: number,
   cursor?: string | null,
 ): Promise<BranchRow[]> {
-  // The SQL alone returns one row for `limit 0` — the seed always produces a row and the
-  // recursive term is what is bounded — so the empty case has to be handled here.
+  // `LIMIT 0` already returns nothing, so this is a contract rather than a correction: a
+  // caller asking for no rows gets no rows, and never a walk it did not ask for.
   if (limit <= 0) return [];
 
   const { results } = await env.DB.prepare(TAIL)
@@ -145,43 +143,53 @@ export async function loadPathTail(
 }
 
 /**
- * The bounded backward walk.
+ * The bounded forward walk.
  *
- * Three details are load-bearing, each found by getting it wrong:
+ * Walks DOWN from the active root — the same walk as `WALK` — and keeps the newest `limit`
+ * rows of it. The previous version seeded itself on "an active row with no active child"
+ * and climbed `parent_id`: that seed matches the leaf of any abandoned continuation, not
+ * the end of the visible path, so swiping back to an earlier version returned the turns
+ * hanging off the version that was left. Measured on a real chat: the window was the two
+ * rows under an inactive reply, and the opening, greeting and first exchange were gone
+ * from the screen.
  *
- *  1. The seed's `ORDER BY`/`LIMIT` must be wrapped in a subquery — SQLite rejects
- *     `ORDER BY` before `UNION ALL`.
- *  2. The seed anchors on an ID, not a seq. `m.seq < ?2` would only ever find a row with
- *     no active child, which is true of the tail and false of every mid-path row, so
- *     paging backwards returned nothing. With a cursor the seed resolves the cursor's
- *     parent instead, which is the next row up the path.
- *  3. Every column in the recursive term is qualified with `p.`, because `up` holds the
- *     same names. `SELECT *` there would pick up `n` from the wrong side.
+ * The depth bound is applied after the recursion, not inside it. A `LIMIT` inside the
+ * recursive term would stop the walk at an arbitrary row rather than at the end of the
+ * path, and the cursor is an id on the path — it only means something once every depth is
+ * known.
+ *
+ * The CTE is named `tail_path` rather than `path`: it is the same walk as `WALK`, but a
+ * different query, and the callers that inspect statements need to tell them apart.
  */
 const TAIL = `
-  WITH RECURSIVE up(${BRANCH_COLUMNS}, n) AS (
-    SELECT * FROM (
-      SELECT ${BRANCH_COLUMNS}, 0 AS n
-        FROM messages m
-       WHERE m.chat_id = ?1 AND m.active = 1 AND m.deleted = 0
-         AND (
-           (?2 IS NULL AND NOT EXISTS (
-              SELECT 1 FROM messages c
-               WHERE c.parent_id = m.id AND c.chat_id = ?1 AND c.active = 1 AND c.deleted = 0))
-           OR
-           (?2 IS NOT NULL AND m.id = (
-              SELECT p.parent_id FROM messages p WHERE p.id = ?2 AND p.chat_id = ?1))
-         )
-       ORDER BY m.seq DESC LIMIT 1
-    )
+  WITH RECURSIVE tail_path(${BRANCH_COLUMNS}, depth) AS (
+    SELECT ${BRANCH_COLUMNS}, 0
+      FROM messages
+     WHERE chat_id = ?1
+       AND id = (
+         SELECT id FROM messages
+          WHERE chat_id = ?1 AND parent_id IS NULL AND active = 1 AND deleted = 0
+          ORDER BY seq DESC LIMIT 1
+       )
     UNION ALL
-    SELECT p.seq, p.id, p.parent_id, p.role, p.content, p.content_tokens, p.active,
-           p.prompt_tokens, p.completion_tokens, p.cached_tokens,
-           p.cost_usd, p.speaker, p.state_json, p.deleted, p.created_at, up.n + 1
-      FROM up JOIN messages p ON p.id = up.parent_id
-     WHERE p.chat_id = ?1 AND p.active = 1 AND up.n + 1 < ?3
+    SELECT ${BRANCH_COLUMNS.split(',').map((column) => `m.${column.trim()}`).join(', ')}, tail_path.depth + 1
+      FROM tail_path
+      JOIN messages m ON m.parent_id = tail_path.id
+     WHERE m.chat_id = ?1
+       AND m.active = 1
+       AND m.deleted = 0
+       AND m.seq = (
+         SELECT MAX(c.seq) FROM messages c
+          WHERE c.chat_id = ?1 AND c.parent_id = tail_path.id AND c.active = 1 AND c.deleted = 0
+       )
   )
-  SELECT ${BRANCH_COLUMNS} FROM up ORDER BY n DESC
+  SELECT ${BRANCH_COLUMNS} FROM (
+    SELECT ${BRANCH_COLUMNS}, depth FROM tail_path
+     WHERE ?2 IS NULL OR depth < (SELECT depth FROM tail_path p2 WHERE p2.id = ?2)
+     ORDER BY depth DESC
+     LIMIT ?3
+  )
+  ORDER BY depth
 `;
 
 /**
@@ -260,24 +268,15 @@ export async function loadAlternatives(
 /**
  * The row a new message written right now would answer: the end of the visible path.
  *
- * A row with no active child. One query rather than a walk — the tail is the only position
- * that has nothing after it, which is a property of the row itself.
+ * Delegates to the same bounded walk the transcript uses. The previous version picked the
+ * newest active row with no active child, which is the leaf of an abandoned continuation as
+ * often as it is the tail — on a real chat it returned a row that the walk could not reach,
+ * so a `send` wrote the reader's message and its reply to a parent the transcript never
+ * visits. Both rows were persisted and neither was ever visible again.
  */
 export async function tailId(env: Env, chatId: string): Promise<string | null> {
-  const row = await env.DB.prepare(
-    `SELECT m.id FROM messages m
-      WHERE m.chat_id = ?1
-        AND m.active = 1
-        AND m.deleted = 0
-        AND NOT EXISTS (
-          SELECT 1 FROM messages c
-           WHERE c.chat_id = m.chat_id AND c.parent_id = m.id AND c.active = 1 AND c.deleted = 0
-        )
-      ORDER BY m.seq DESC LIMIT 1`,
-  )
-    .bind(chatId)
-    .first<{ id: string }>();
-  return row?.id ?? null;
+  const rows = await loadPathTail(env, chatId, 1);
+  return rows[rows.length - 1]?.id ?? null;
 }
 
 /**

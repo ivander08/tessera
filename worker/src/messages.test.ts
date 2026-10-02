@@ -152,14 +152,17 @@ describe('deleteMessage', () => {
     return versions;
   }
 
-  test('deleting the active version promotes a survivor and keeps the continuation', async () => {
+  test('deleting the active version promotes a survivor, and the survivor brings its own continuation', async () => {
     const { env, db } = makeEnv();
     const chatId = seedChat(db);
     const opening = seedRow(db, chatId, null, 'assistant', 'Opening.');
     const user = seedRow(db, chatId, opening.id, 'user', 'Hmm. Alright.');
     const versions = seedVersions(db, chatId, user.id, 3);
+    // The turns written under the version that is about to leave, and the ones the
+    // promoted version answers for itself.
     const after = seedRow(db, chatId, versions[2].id, 'user', 'Later, at 8.30.');
     const last = seedRow(db, chatId, after.id, 'assistant', 'The court lights were on.');
+    const earlierTurn = seedRow(db, chatId, versions[1].id, 'user', 'Or maybe not.');
 
     const res = await deleteMessage(
       env,
@@ -172,9 +175,21 @@ describe('deleteMessage', () => {
     expect(await res.json()).toMatchObject({ ok: true, groupEmpty: false });
     expect(activeOf(db, versions[2].id)).toBe(0);
     expect(activeOf(db, versions[1].id)).toBe(1);
-    // The whole point: the turns after the deleted version are still on the path.
+    // The version that leaves takes the turns written in answer to IT. The promoted
+    // version's own continuation is what comes back — not the departed version's prose
+    // grafted onto it, which is what re-parenting did.
     const path = (await loadPath(env, chatId)).map((row) => row.id);
-    expect(path).toEqual([opening.id, user.id, versions[1].id, after.id, last.id]);
+    expect(path).toEqual([opening.id, user.id, versions[1].id, earlierTurn.id]);
+    // Nothing was removed from the table: the departed version's turns are still there,
+    // they are simply not reachable from the visible path any more.
+    expect(
+      one<{ n: number }>(
+        db,
+        'SELECT COUNT(*) AS n FROM messages WHERE id IN (?, ?) AND deleted = 0',
+        after.id,
+        last.id,
+      )?.n,
+    ).toBe(2);
   });
 
   test('deleting the last version empties the position and takes the continuation with it', async () => {

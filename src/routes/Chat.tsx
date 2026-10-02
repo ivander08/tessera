@@ -11,6 +11,7 @@ import { PersonaMenu } from '../components/PersonaMenu';
 import { Turn, type CastVoice, type TurnView } from '../components/Turn';
 import { MessageActions } from '../components/MessageActions';
 import { Modal } from '../components/Modal';
+import { ConfirmPrompt } from '../components/ConfirmPrompt';
 import { useToast } from '../components/Toast';
 import { SceneBar } from '../components/SceneBar';
 import { CastPanel } from '../components/CastPanel';
@@ -43,12 +44,34 @@ const JUMP_PAGE_CAP = 10;
  *
  * Called after a frame so the new rows have been laid out — the height read in the same
  * tick as the state update is the height BEFORE the reply was appended, which is why an
- * immediate scroll lands short.
+ * immediate scroll lands short. A second frame follows the first: the first lands on the
+ * height before the browser has laid out what changed size in the same commit, which
+ * leaves the last line under the composer.
  */
 function scrollToBottom(): void {
-  requestAnimationFrame(() => {
+  const toBottom = () =>
     window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'auto' });
+  requestAnimationFrame(() => {
+    toBottom();
+    requestAnimationFrame(toBottom);
   });
+}
+
+/**
+ * What removing a turn costs, in one sentence.
+ *
+ * `after` is the number of turns written after it, counted from the window the reader is
+ * looking at. A version at the position is not a loss — it is already in the database and
+ * takes the turn's place — so the sentence only warns about what leaves the scene.
+ */
+function deleteWarning(after: number, hasVersions: boolean): string {
+  const leaving =
+    after === 1
+      ? 'the turn written after it leaves the scene'
+      : `the ${after} turns written after it leave the scene`;
+  return hasVersions
+    ? `Another version of this reply takes its place, and ${leaving}.`
+    : `${leaving[0].toUpperCase()}${leaving.slice(1)}. Nothing brings them back.`;
 }
 
 function MemoryGlyph() {
@@ -89,6 +112,12 @@ export default function Chat() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  // The turn the reader asked to remove when turns after it would leave the scene with it.
+  // `after` is the count of rows that go, computed from the window — the window ends at the
+  // tail of the path, so every row after this one in it is a row that leaves.
+  const [confirmDelete, setConfirmDelete] = useState<
+    { id: string; after: number; isUser: boolean; hasVersions: boolean } | null
+  >(null);
   const toast = useToast();
   // The id of the reply that hit the provider's output cap, so its own turn can say so.
   // Cleared when the next turn starts: the marker belongs to one reply, not to the chat.
@@ -109,6 +138,10 @@ export default function Chat() {
   // pull the view down; someone who scrolled back to reread a paragraph must not be
   // yanked forward by every token.
   const pinnedToBottom = useRef(true);
+  // The row to bring back into view once the refetch lands, for the two actions that do not
+  // append. Swiping swaps which row is on the path and deleting promotes a version, so the
+  // id to hold is the one the server returns, not the one the reader clicked.
+  const keepInView = useRef<string | null>(null);
 
   const messages = useMemo(() => data?.messages ?? [], [data]);
 
@@ -342,9 +375,8 @@ export default function Chat() {
   // who was reading near the bottom all the way down every time they asked for more of
   // the scene. Appending a turn is the only thing that grows the end.
   //
-  // A redo streams into the slot it replaces, which is usually above the fold — pulling
-  // the view down to the end of the page on every token would drag the reader away from
-  // the text they are watching. Only turns that append get followed.
+  // A redo streams into the slot it replaces, which is the last row of the truncated
+  // path, so following it lands on the new text.
   //
   // Scrolled by measuring the document rather than `scrollIntoView` on the sentinel: the
   // transcript's bottom padding sits below the sentinel, and `block: 'end'` aligns the
@@ -353,9 +385,8 @@ export default function Chat() {
   // bottom.
   useEffect(() => {
     if (!pinnedToBottom.current) return;
-    if (replaceTarget) return;
     scrollToBottom();
-  }, [messages.length, pending?.text, replaceTarget]);
+  }, [messages.length, pending?.text]);
 
   // A turn ends and the composer is where the reader looks next, so the view is brought
   // to the end even if they had scrolled away while reading back through the scene. The
@@ -369,6 +400,50 @@ export default function Chat() {
     if (busy) return;
     scrollToBottom();
   }, [busy]);
+
+  // Content that changes size after the scroll — reflowed markdown, the settle swap that
+  // replaces the streaming overlay with the stored row — would otherwise land below the
+  // fold. Re-pinning while the reader is at the bottom is the same follow rule the stream
+  // uses; someone who scrolled back has `pinnedToBottom` false and is left alone.
+  //
+  // Keyed on `data`, not on nothing: the first render has no transcript to observe — the
+  // screen is still the loading placeholder — so an effect that runs once at mount would
+  // find no node and never attach. Every reload re-attaches to the same element, which is
+  // a disconnect and an observe, not a leak.
+  useEffect(() => {
+    const node = document.querySelector('.transcript');
+    if (!node) return;
+    const observer = new ResizeObserver(() => {
+      if (pinnedToBottom.current) scrollToBottom();
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [data]);
+
+  // `block: 'nearest'` rather than `'center'`: the row is usually already on screen, and the
+  // reader asked for a different version of it, not for a jump. The ref is cleared either
+  // way, so a later reload never applies a stale scroll.
+  //
+  // Bringing the row into view also stops the follow: the reader's attention is on that
+  // row, not on the end of the scene, and the `ResizeObserver` above runs before the
+  // scroll handler can notice the new offset — without this it would immediately re-pin to
+  // the bottom and undo the scroll it just made. A row that is already fully visible
+  // changes nothing, which is the common case for a swipe near the bottom.
+  useEffect(() => {
+    const id = keepInView.current;
+    if (!id || !data) return;
+    keepInView.current = null;
+    const node = document.querySelector(`[data-message-id="${CSS.escape(id)}"]`);
+    if (!node) return;
+
+    const rect = node.getBoundingClientRect();
+    const visible = rect.top >= 0 && rect.bottom <= window.innerHeight;
+    if (visible) return;
+
+    node.scrollIntoView({ block: 'nearest' });
+    pinnedToBottom.current = false;
+    setAtBottom(false);
+  }, [data]);
 
   useEffect(() => {
     function onScroll() {
@@ -428,6 +503,10 @@ export default function Chat() {
 
       const controller = new AbortController();
       abortRef.current = controller;
+      // Whether the turn produced nothing to wait for. The settle overlay exists to hold
+      // the streamed text on screen until the stored copy arrives; a turn that failed or
+      // was stopped has no stored copy coming, so it must not hold one.
+      let failed = false;
 
       try {
         await streamChat(
@@ -439,6 +518,7 @@ export default function Chat() {
                 current ? { ...current, text: current.text + frame.text } : current,
               );
             } else if (frame.type === 'error') {
+              failed = true;
               setSendError(frame.message);
             } else if (frame.type === 'done' && frame.truncated) {
               setTruncatedId(frame.messageId);
@@ -448,19 +528,24 @@ export default function Chat() {
         );
       } catch (cause) {
         // An abort is the user pressing stop, not a failure.
-        if (!controller.signal.aborted) setSendError(messageOf(cause));
+        if (!controller.signal.aborted) {
+          failed = true;
+          setSendError(messageOf(cause));
+        }
       } finally {
         abortRef.current = null;
         setBusy(false);
-        setPending(null);
 
+        // A failed or stopped turn has nothing stored to wait for, so the overlay goes now.
         // Stop leaves the scene untouched — the server discards the partial — so there is
         // nothing to refetch and no state to settle. Reloading here was what made the
         // discarded text reappear a moment after Stop was pressed.
-        if (!controller.signal.aborted) {
+        if (controller.signal.aborted || failed) {
+          setPending(null);
+        } else {
           // Held, not cleared: the refetch below replaces the transcript with the stored
           // version, and clearing first would flash the pre-turn text back on screen.
-          setPending((current) => (current ? { ...current, settling: true } : current));
+          setPending((current) => (current ? { ...current, settling: true } : null));
           reload();
           // The state engine runs after a completed turn, so the scene bar is stale the
           // moment the reply lands. Held in a ref because the callback identity changes
@@ -513,10 +598,13 @@ export default function Chat() {
 
   async function swipe(messageId: string, direction: 'prev' | 'next') {
     try {
-      await apiJson('/api/message/swipe', {
+      const result = await apiJson<{ id?: string }>('/api/message/swipe', {
         method: 'POST',
         body: JSON.stringify({ chatId: id, id: messageId, direction }),
       });
+      // The version that is now on the path, which is not the row the reader clicked:
+      // holding the clicked id would scroll to a row that just left the scene.
+      keepInView.current = result?.id ?? messageId;
       reload();
     } catch (cause) {
       setSendError(messageOf(cause));
@@ -539,12 +627,21 @@ export default function Chat() {
     }
   }
 
-  async function remove(messageId: string) {
+  /**
+   * Removes one version of a turn.
+   *
+   * `holdId` is where to leave the view when the server names no successor — the position
+   * emptied, so the turn is gone and the row above it is the one the reader is looking at.
+   * The server's own `id` wins when it has one: deleting the active version promotes a
+   * survivor, and that is the row now on the path.
+   */
+  async function remove(messageId: string, holdId: string | null) {
     try {
-      await apiJson('/api/message/delete', {
+      const result = await apiJson<{ id?: string }>('/api/message/delete', {
         method: 'POST',
         body: JSON.stringify({ chatId: id, id: messageId }),
       });
+      keepInView.current = result?.id ?? holdId;
       reload();
     } catch (cause) {
       setSendError(messageOf(cause));
@@ -766,7 +863,22 @@ export default function Chat() {
                         onSwipe={(direction) => void swipe(message.id, direction)}
                         onCopy={() => message.content}
                         onEdit={() => setEditingId(message.id)}
-                        onDelete={() => void remove(message.id)}
+                        onDelete={() => {
+                          // Rows after this one are exactly the turns that go with it: the
+                          // window ends at the tail of the path, so nothing that follows is
+                          // missing from it.
+                          const after = path.length - 1 - index;
+                          if (after === 0) {
+                            void remove(message.id, null);
+                            return;
+                          }
+                          setConfirmDelete({
+                            id: message.id,
+                            after,
+                            isUser,
+                            hasVersions: (message.swipes?.length ?? 1) > 1,
+                          });
+                        }}
                         onRegenerate={
                           // Offered on every reply, not only the newest. Regenerating an
                           // earlier one is a branch: the new version takes that position
@@ -897,6 +1009,21 @@ export default function Chat() {
           )}
           {panel === 'appearance' && <AppearancePanel onClose={() => setPanel(null)} />}
         </Modal>
+      )}
+
+      {confirmDelete && (
+        <ConfirmPrompt
+          title={confirmDelete.isUser ? 'Delete your message' : 'Delete this reply'}
+          message={deleteWarning(confirmDelete.after, confirmDelete.hasVersions)}
+          confirmLabel="Delete"
+          danger
+          onCancel={() => setConfirmDelete(null)}
+          onConfirm={() => {
+            const target = confirmDelete;
+            setConfirmDelete(null);
+            void remove(target.id, null);
+          }}
+        />
       )}
 
       {sendError && (

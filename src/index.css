@@ -1679,12 +1679,25 @@ html[data-layout="bubble"] .turn-segment:not(:first-child) {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  overflow: hidden;
   color: var(--ink-faint);
   font-size: var(--text-xs);
   font-style: italic;
 }
 
+/* The sentence is its own box. `text-overflow` only ellipsises a block or inline-block
+   container's own text, never the anonymous text of a flex parent — which is why the
+   strip used to stop mid-word ("st completed turn") instead of trailing off. */
+.scene-bar-empty-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .scene-bar-empty > svg {
+  flex-shrink: 0;
   color: var(--ink-faint);
   opacity: 0.6;
 }

@@ -47,7 +47,9 @@ export function SceneBar({ state, onOpen }: { state: WorldState | undefined; onO
       {empty ? (
         <span className="scene-bar-empty">
           <ClockGlyph />
-          No scene recorded yet — the narrator fills this in after the first completed turn
+          <span className="scene-bar-empty-text">
+            No scene recorded yet — the narrator fills this in after the first completed turn
+          </span>
         </span>
       ) : (
         <>

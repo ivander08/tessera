@@ -315,11 +315,14 @@ describe('the walk as SQL', () => {
   test('tailId is the end of the visible path, not the newest row', async () => {
     const { db, env } = makeDb();
     const chatId = seedChat(db);
-    seed(db, chatId, 'a1', null, 0);
+    seed(db, chatId, 'a1', null);
     seed(db, chatId, 'u1', 'a1');
     seed(db, chatId, 'a2', 'u1');
-    // A newer row on an abandoned branch. `ORDER BY seq DESC` would pick this one.
-    seed(db, chatId, 'orphan', 'a1', 0);
+    // A newer row on an abandoned branch: the reader regenerated the opening and wrote a
+    // turn under the version they then swiped away from. Its rows keep `active = 1`, so
+    // "newest active row with no active child" picks `u1b` — a row the walk cannot reach.
+    seed(db, chatId, 'a1b', null, 0);
+    seed(db, chatId, 'u1b', 'a1b');
 
     expect(await tailId(env, chatId)).toBe('a2');
   });
@@ -452,12 +455,13 @@ describe('the walk as SQL', () => {
   });
 
   /**
-   * The bounded backward walk.
+   * The bounded window over the visible path.
    *
-   * The whole point of `loadPathTail` is that its cost does not grow with the
-   * conversation, and the only way that stays true is if the bound is real. These tests
-   * pin the bound and the paging contract, because a cursor that is off by one row is
-   * invisible until a reader pages a long scene and sees a turn twice.
+   * The window is what the transcript, the prompt and the attach point for a new turn all
+   * read, so its bound and its paging contract are the two things that must not drift: a
+   * cursor that is off by one row is invisible until a reader pages a long scene and sees
+   * a turn twice. These tests pin both, and they pin the walk itself — the window must be
+   * the visible path, not the chain hanging off a version the reader swiped away from.
    */
   describe('loadPathTail', () => {
     /**
@@ -539,8 +543,8 @@ describe('the walk as SQL', () => {
     });
 
     test('limit 0 returns nothing, not the tail row', async () => {
-      // The SQL alone returns one row for `limit 0`: the seed always produces a row and
-      // it is the recursive term that is bounded.
+      // A caller asking for no rows gets no rows. The SQL agrees, but the guard is the
+      // contract rather than a correction of the query.
       const { db, env } = makeDb();
       const chatId = chain(db, 5);
       expect(await loadPathTail(env, chatId, 0)).toEqual([]);
@@ -601,6 +605,54 @@ describe('the walk as SQL', () => {
       expect(rows.map((row) => row.id)).toEqual(['a2b', 'u2']);
       const older = await loadPathTail(env, chatId, 2, rows[0].id);
       expect(older.map((row) => row.id)).toEqual(['a1', 'u1']);
+    });
+
+    test('a swipe back does not return the turns under the version that was left', async () => {
+      // The reader's chat, reproduced: a reply is regenerated, the reader writes two turns
+      // under the second version, then swipes back to the first. The abandoned
+      // continuation keeps `active = 1` on its rows — swiping only flips the row it moves —
+      // so a seed of "active row with no active child" picks the abandoned leaf and returns
+      // the wrong window. The transcript must be the visible path, not that leaf's chain.
+      const { db, env } = makeDb();
+      const chatId = seedChat(db);
+      seed(db, chatId, 'opening', null);
+      seed(db, chatId, 'hello', 'opening');
+      seed(db, chatId, 'reply1', 'hello', 1);
+      seed(db, chatId, 'reply2', 'hello', 0);
+      seed(db, chatId, 'alright', 'reply2');
+      seed(db, chatId, 'answer', 'alright');
+
+      const rows = await loadPathTail(env, chatId, 60);
+      expect(rows.map((row) => row.id)).toEqual(['opening', 'hello', 'reply1']);
+    });
+
+    test('tailId is the end of the visible path, not an abandoned leaf', async () => {
+      const { db, env } = makeDb();
+      const chatId = seedChat(db);
+      seed(db, chatId, 'opening', null);
+      seed(db, chatId, 'hello', 'opening');
+      seed(db, chatId, 'reply1', 'hello', 1);
+      seed(db, chatId, 'reply2', 'hello', 0);
+      seed(db, chatId, 'alright', 'reply2');
+      seed(db, chatId, 'answer', 'alright');
+
+      expect(await tailId(env, chatId)).toBe('reply1');
+    });
+
+    test('paging back from a swiped position collects the visible path', async () => {
+      const { db, env } = makeDb();
+      const chatId = seedChat(db);
+      seed(db, chatId, 'opening', null);
+      seed(db, chatId, 'hello', 'opening');
+      seed(db, chatId, 'reply1', 'hello', 1);
+      seed(db, chatId, 'reply2', 'hello', 0);
+      seed(db, chatId, 'alright', 'reply2');
+      seed(db, chatId, 'answer', 'alright');
+
+      const newest = await loadPathTail(env, chatId, 2);
+      expect(newest.map((row) => row.id)).toEqual(['hello', 'reply1']);
+      const older = await loadPathTail(env, chatId, 2, newest[0].id);
+      expect(older.map((row) => row.id)).toEqual(['opening']);
     });
   });
 });
