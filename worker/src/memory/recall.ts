@@ -1,4 +1,5 @@
 import { buildMatchQuery } from './fts';
+import { VISIBLE_PATH_SEQ_CTE } from '../branch';
 
 export type { RecallHit, RecallKind } from '../../../src/lib/memoryTypes';
 import type { RecallHit } from '../../../src/lib/memoryTypes';
@@ -31,12 +32,24 @@ interface PinnedRow {
  *
  * Pinned facts lead the result unconditionally: that is what pinning means. `limit`
  * bounds only the ranked matches.
+ *
+ * `beforeSeq` bounds the two SOURCED sources — message hits and summary hits — to the part
+ * of the story that already happened at that point. A regenerate re-rolls an earlier turn,
+ * and without this a summary covering a later turn is recalled and injected, telling the
+ * model how the scene turned out. `null` means "now", which is what every forward turn
+ * passes and is the behaviour that predates this parameter.
+ *
+ * Facts are deliberately NOT bounded: a fact is a timeless statement about the world
+ * ("Ink has drawn the coast for eleven years"), not an event at a position in the
+ * transcript, and it carries no seq to bound by. Bounding them would be meaningless rather
+ * than conservative.
  */
 export async function recall(
   env: Env,
   chatId: string,
   query: string,
   limit: number,
+  beforeSeq: number | null = null,
 ): Promise<RecallHit[]> {
   const match = buildMatchQuery(query);
   // `MATCH ''` is an fts5 syntax error, not an empty result. An empty query also has
@@ -47,15 +60,22 @@ export async function recall(
     env.DB.prepare(
       // FTS5 stores only a rowid, so the base table must be joined back to filter by
       // chat — otherwise recall returns matches from every chat in the database.
-      `SELECT messages_fts.rowid AS rowid, bm25(messages_fts) AS score,
+      //
+      // The path join is what keeps a recalled message on the VISIBLE transcript: a
+      // regenerated-away or deleted version is still in `messages` and still in the FTS
+      // index, so without it recall quotes text the reader removed.
+      `${VISIBLE_PATH_SEQ_CTE}
+       SELECT messages_fts.rowid AS rowid, bm25(messages_fts) AS score,
               m.content AS text, m.id AS ref_id
          FROM messages_fts
          JOIN messages m ON m.seq = messages_fts.rowid
-        WHERE messages_fts MATCH ? AND m.chat_id = ?
+         JOIN path ON path.seq = m.seq
+        WHERE messages_fts MATCH ?2 AND m.chat_id = ?1
+          AND (?4 IS NULL OR m.seq < ?4)
         ORDER BY score
-        LIMIT ?`,
+        LIMIT ?3`,
     )
-      .bind(match, chatId, limit)
+      .bind(chatId, match, limit, beforeSeq)
       .all<FtsRow>(),
 
     env.DB.prepare(
@@ -74,13 +94,18 @@ export async function recall(
       .all<FtsRow>(),
 
     env.DB.prepare(
-      `SELECT id AS ref_id, content AS text, covers_to
+      // Same two bounds as the prompt's summary read: not from a later turn, and its range
+      // still on the visible path. See the note in `buildMemoryBlock`.
+      `${VISIBLE_PATH_SEQ_CTE}
+       SELECT id AS ref_id, content AS text, covers_to
          FROM summaries
-        WHERE chat_id = ? AND content LIKE ? ESCAPE '\\'
+        WHERE chat_id = ?1 AND content LIKE ?2 ESCAPE '\\'
+          AND (?4 IS NULL OR covers_to < ?4)
+          AND EXISTS (SELECT 1 FROM path WHERE path.seq = summaries.covers_to)
         ORDER BY covers_to DESC
-        LIMIT ?`,
+        LIMIT ?3`,
     )
-      .bind(chatId, likePattern(query), limit)
+      .bind(chatId, likePattern(query), limit, beforeSeq)
       .all<FtsRow>(),
 
     env.DB.prepare(

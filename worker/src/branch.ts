@@ -311,6 +311,42 @@ export async function pathSeqsAfter(
   return results.map((row) => row.seq);
 }
 
+/**
+ * The visible path, as seqs only, for callers that need to test membership.
+ *
+ * A `WITH RECURSIVE` prefix rather than a complete query, so a caller can append its own
+ * `SELECT`. It exists because "is this seq still in the scene?" is asked from two places
+ * that have nothing else in common — the summary reader and full-text recall — and a third
+ * copy of a fifteen-line walk is how one of them silently drifts.
+ *
+ * `seq` is the only column: the callers join against it, and dragging message bodies
+ * through a recursive CTE to answer a yes/no question would cost the read it is meant to
+ * save.
+ */
+export const VISIBLE_PATH_SEQ_CTE = `
+  WITH RECURSIVE path(seq, id, depth) AS (
+    SELECT seq, id, 0
+      FROM messages
+     WHERE chat_id = ?1
+       AND id = (
+         SELECT id FROM messages
+          WHERE chat_id = ?1 AND parent_id IS NULL AND active = 1 AND deleted = 0
+          ORDER BY seq DESC LIMIT 1
+       )
+    UNION ALL
+    SELECT m.seq, m.id, path.depth + 1
+      FROM path
+      JOIN messages m ON m.parent_id = path.id
+     WHERE m.chat_id = ?1
+       AND m.active = 1
+       AND m.deleted = 0
+       AND m.seq = (
+         SELECT MAX(c.seq) FROM messages c
+          WHERE c.chat_id = ?1 AND c.parent_id = path.id AND c.active = 1 AND c.deleted = 0
+       )
+  )
+`;
+
 /** The same walk as `WALK`, narrowed to the seqs a summary still needs to cover. */
 const PATH_SEQS_AFTER = `
   WITH RECURSIVE path(seq, id, depth) AS (

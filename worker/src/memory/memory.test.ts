@@ -154,7 +154,29 @@ function seedMessage(db: Database, chatId: string, content: string): number {
   return row?.seq ?? 0;
 }
 
+/**
+ * A scene summary covering `from`..`to`.
+ *
+ * The messages in that range are seeded first when they are missing. A summary is only
+ * valid when the turns it claims to cover are ON THE VISIBLE PATH — the reader and the
+ * prompt both resolve it that way — so a fixture that writes `covers_to = 3` into a chat
+ * holding one message describes a state the database cannot reach. Seeding the range keeps
+ * these tests honest about what a real summary looks like, and it is what the path filter
+ * in `recall` and `buildMemoryBlock` now asserts.
+ */
 function seedScene(db: Database, chatId: string, from: number, to: number, content: string): void {
+  // Seed by SEQ, not by count: `seq` is a global insert counter, so the two are not the
+  // same number once any other test's rows have been written.
+  let maxSeq = one<{ max: number | null }>(
+    db,
+    `SELECT MAX(seq) AS max FROM messages WHERE chat_id = ?`,
+    chatId,
+  )?.max ?? 0;
+  let guard = 0;
+  while (maxSeq < to && guard < 200) {
+    maxSeq = seedMessage(db, chatId, `turn ${maxSeq + 1}`);
+    guard += 1;
+  }
   exec(
     db,
     `INSERT INTO summaries (id, chat_id, tier, covers_from, covers_to, content, tokens, created_at)
@@ -287,9 +309,13 @@ describe('recall', () => {
 
     const messageQuery = calls.find((call) => call.sql.includes('messages_fts MATCH'));
     expect(messageQuery).toBeDefined();
-    expect(messageQuery?.params).toEqual(['"Ada" OR "room"', chatId, 5]);
+    // Bound as chatId first: the path CTE numbers its parameter `?1`, so the positional
+    // order is the CTE's, not the SELECT's.
+    expect(messageQuery?.params).toEqual([chatId, '"Ada" OR "room"', 5, null]);
     // FTS5 stores only a rowid; without this join there is no way to filter by chat.
     expect(messageQuery?.sql).toContain('JOIN messages m ON m.seq = messages_fts.rowid');
+    // And the path join keeps a recalled message on the visible transcript.
+    expect(messageQuery?.sql).toContain('JOIN path ON path.seq = m.seq');
     expect(messageQuery?.sql).toContain('bm25(messages_fts)');
 
     const factQuery = calls.find((call) => call.sql.includes('facts_fts MATCH'));

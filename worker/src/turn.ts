@@ -165,17 +165,9 @@ async function runTurn(
   // for a `continue` with no target, and a null there would root a row at the opening.
   const tail = await tailId(env, chat.id);
 
-  // The world state this turn is written against.
-  //
-  // A `regenerate` re-rolls a reply that already happened, so it must be written against the
-  // state BEFORE that reply — the live document knows how the scene turned out, and feeding
-  // it to a re-roll is what walked a character back into a room she had already left. The
-  // snapshot on a row is the state that row's own turn produced, so `loadStateAt` reads
-  // strictly before this seq.
-  //
-  // Every other mode is a step forward and takes the live state, which `null` means. That is
-  // the same value the prompt used before this existed, so nothing but the re-roll changes.
-  const stateSeq = mode === 'regenerate' ? (target?.seq ?? null) : null;
+  // The world state this turn is written against. See `stateSeqFor` for the rule and why a
+  // regenerate is the only mode that differs.
+  const stateSeq = stateSeqFor(mode, target);
 
   // Where a new row attaches, and where the model's output attaches. Both are decided by
   // one pure function so the rules can be asserted without a provider.
@@ -402,6 +394,29 @@ const IMPERSONATE_INSTRUCTION =
  *    it was continuing, so asking for more turned the previous paragraph into a swipe.
  *    `impersonate` writes the reader's next line, which IS the new tail.
  */
+/**
+ * The transcript point a turn's world state must be read from.
+ *
+ * `null` means "now" — the live document — and is what every forward turn wants. A
+ * `regenerate` instead names the row it is re-rolling, and the state is read from BEFORE it.
+ *
+ * Why strictly before: the snapshot on a row is the state that row's own turn PRODUCED
+ * (`updateState` attaches it to the reply it just wrote), so reading "at or before" the
+ * target would hand the model the outcome of the very reply being rewritten. The reported
+ * failure was a character walking back INTO a room she had already left, because the state
+ * said she was elsewhere — and that fact came from the turn being re-rolled.
+ *
+ * A pure function so the rule can be asserted without a provider, the same shape
+ * `resolveAttachment` uses beside it. The bug it prevents was a correct-looking helper
+ * called with the wrong argument, which a test of the helper alone cannot catch.
+ */
+export function stateSeqFor(
+  mode: TurnMode,
+  target: { seq: number } | null,
+): number | null {
+  return mode === 'regenerate' ? (target?.seq ?? null) : null;
+}
+
 export function resolveAttachment(
   mode: TurnMode,
   target: { id: string; parent_id: string | null; role: Role } | null,

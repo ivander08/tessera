@@ -15,7 +15,7 @@ import { renderCraftBlock, renderContentPolicy, renderVocalisation } from '../..
 import { recall } from './memory/recall';
 import { loadStateAt } from './state/update';
 import { loadSceneSetup } from './scene';
-import { loadPathTail, type BranchRow } from './branch';
+import { loadPathTail, VISIBLE_PATH_SEQ_CTE, type BranchRow } from './branch';
 import { loadCast, type CastRow } from './cast';
 import { asNumber } from '../../src/lib/json';
 import type { Frame } from './frame';
@@ -200,7 +200,7 @@ export async function buildPrompt(
   // Both blocks go in the TAIL. Recalled content and world state change as the scene
   // moves; putting either in the head would rewrite the cached prefix every turn.
   const [memoryBlock, stateBlock] = await Promise.all([
-    buildMemoryBlock(env, chat.id, recallQuery, calibration),
+    buildMemoryBlock(env, chat.id, recallQuery, calibration, options.stateSeq),
     buildStateBlock(env, chat.id, calibration, options.stateSeq, {
       bonds: setup.craft.bonds,
       threads: setup.craft.threads,
@@ -526,15 +526,32 @@ async function buildMemoryBlock(
   chatId: string,
   query: string,
   calibration: number,
+  beforeSeq: number | null,
 ): Promise<string> {
   try {
     const [hits, summaries] = await Promise.all([
-      recall(env, chatId, query, 8),
+      recall(env, chatId, query, 8, beforeSeq),
       env.DB.prepare(
-        `SELECT id, content FROM summaries WHERE chat_id = ?
+        // Two bounds, for two different ways a summary can be wrong here.
+        //
+        // `covers_to < ?2` excludes a summary of a LATER turn: a regenerate re-rolls an
+        // earlier one, and a summary covering what has not happened yet describes the
+        // future. This is the leak that made a re-roll of #3 aware of #9.
+        //
+        // The `EXISTS` excludes a summary whose range is no longer on the VISIBLE PATH.
+        // Deleting the last version of a turn removes everything written after it, but the
+        // summaries that covered those rows are in a side table and survive the delete.
+        // Without this they keep being injected, describing a scene the reader removed.
+        // `covers_to` is tested against the path rather than merely against `?2` because a
+        // deleted turn's rows are still in the table with their old seqs.
+        `${VISIBLE_PATH_SEQ_CTE}
+         SELECT id, content FROM summaries
+          WHERE chat_id = ?1
+            AND (?2 IS NULL OR covers_to < ?2)
+            AND EXISTS (SELECT 1 FROM path WHERE path.seq = summaries.covers_to)
           ORDER BY covers_to DESC LIMIT 3`,
       )
-        .bind(chatId)
+        .bind(chatId, beforeSeq)
         .all<{ id: string; content: string }>(),
     ]);
 
