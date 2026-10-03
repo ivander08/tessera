@@ -100,6 +100,9 @@ const TIME_KEY: Record<SceneSetup['timePace'], string> = {
     '                    only a scene that CLEARLY moves on — a walk across campus, a meal, a',
     '                    stated skip — goes to 10-20 minutes, and a night\'s sleep is the next',
     '                    morning. Without a stated time, never add more than 5 minutes.',
+    '                ALWAYS write it in exactly this format: "Weekday, Month D, YYYY, HH:MM"',
+    '                with a 24-hour clock — e.g. "Friday, April 11, 2025, 22:12". Never',
+    '                shorten it, never drop the year or the weekday, never use am/pm.',
     '                Do not invent a fantasy calendar.',
   ].join('\n'),
   manual: [
