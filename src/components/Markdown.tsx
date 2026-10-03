@@ -77,7 +77,16 @@ function renderBlock(token: Token, key: string): ReactNode | null {
         <li key={`${key}-${index}`}>{renderBlocks(item.tokens ?? [], `${key}-${index}`)}</li>
       ));
       return list.ordered ? (
-        <ol key={key} className="md-list">
+        <ol
+          key={key}
+          className="md-list"
+          /* marked records the number the list started at, and it is not always 1: a model
+             that splits one list across two sections (numbers 1-3 under a header, 4-5 under
+             the next) writes `4.` on the first item of the second block. Dropping `start`
+             renumbered that block from 1, so the reader saw two separate lists both
+             beginning at one — the numbering the model wrote was not the numbering shown. */
+          start={typeof list.start === 'number' && list.start !== 1 ? list.start : undefined}
+        >
           {items}
         </ol>
       ) : (

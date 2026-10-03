@@ -1235,10 +1235,33 @@ html[data-layout="bubble"] .turn-segment:not(:first-child) {
 .md-list {
   margin: 0.7em 0;
   padding-left: 1.4em;
+  /* Tailwind's preflight sets `list-style: none` on every `ol`/`ul`, which silently
+     removed the numbers from every numbered list the narrator or the consultant wrote —
+     the markers were gone while the padding that reserves room for them remained. Set
+     per-element rather than with the `list-style` shorthand so the type is what is
+     restored and no reset can swallow it. */
 }
 
 .md-list li {
   margin-top: 0.2em;
+}
+
+ol.md-list {
+  list-style-type: decimal;
+}
+
+ul.md-list {
+  list-style-type: disc;
+}
+
+/* A nested list keeps its own markers rather than inheriting the parent's, so a
+   sub-point under a numbered item is distinguishable from the item itself. */
+.md-list ol {
+  list-style-type: lower-alpha;
+}
+
+.md-list ul {
+  list-style-type: circle;
 }
 
 .md-code,
