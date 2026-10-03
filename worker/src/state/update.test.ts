@@ -154,7 +154,7 @@ const setupWith = (pace: SceneSetup['timePace']): SceneSetup => ({
 });
 
 describe('updateState: the pace rule', () => {
-  test('the managed pace tells the model to count elapsed minutes, not do clock arithmetic', async () => {
+  test('the managed pace tells the model to write the clock on every reply', async () => {
     const { env, sent } = makeEnv();
     stubProvider(sent, '{}');
 
@@ -162,15 +162,13 @@ describe('updateState: the pace rule', () => {
 
     expect(sent).toHaveLength(1);
     const system = sent[0].system;
-    // The key the model fills, and the fact that it is the count rather than the clock.
-    expect(system).toContain('"elapsed"');
-    expect(system).toContain('ALWAYS emitted');
-    expect(system).toContain('added to the stored clock for you');
-    // The clock itself is still described, for the absolute-time case.
-    expect(system).toContain('"time"');
+    expect(system).toContain('ALWAYS emit this key');
+    // The vague-time-of-day case, which is what a free-text stored clock needs.
+    expect(system).toContain('late evening');
     // And the schema is unchanged by the pace rule: the same allowed keys are described.
     expect(system).toContain('"outfits"');
     expect(system).toContain('"conditions"');
+    expect(system).not.toContain('"elapsed"');
   });
 
   test('the manual prompt never tells the model to record or advance a clock', async () => {
@@ -263,23 +261,14 @@ describe('updateState: the pace rule', () => {
 });
 
 /**
- * The reported bug: the clock did not move. The model is now asked only to count the
- * minutes the exchange covers, and the arithmetic is done here — so these are the tests
- * that pin the behaviour the reader actually sees.
+ * The reported bug: the clock did not move. The model now writes the whole clock itself
+ * and is told to emit `time` on EVERY reply, so a quiet exchange and a vague stored value
+ * both advance. These pin what the reader sees.
  */
 describe('updateState: the clock advances', () => {
-  const withClock = (db: Database, time: string): void => {
-    db.run(
-      `INSERT INTO state (chat_id, json, updated_at) VALUES ('chat-1', ?, 0)
-       ON CONFLICT(chat_id) DO UPDATE SET json = excluded.json`,
-      [JSON.stringify({ time })] as never[],
-    );
-  };
-
-  test('a stated duration is added to the stored clock', async () => {
-    const { env, db, sent } = makeEnv();
-    withClock(db, 'Friday, April 11, 2025, 22:02');
-    stubProvider(sent, '{"elapsed":10}');
+  test('a stated duration moves the clock, and it is stored', async () => {
+    const { env, sent } = makeEnv();
+    stubProvider(sent, '{"time":"Friday, April 11, 2025, 22:12"}');
 
     await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
 
@@ -287,87 +276,66 @@ describe('updateState: the clock advances', () => {
   });
 
   test('a quiet exchange still moves the clock', async () => {
-    // The measured defect: "You good now?" / "Both." left the clock at 22:02 for several
-    // turns, so the reader saw eight messages pass in one minute. Any positive count moves
-    // it now, which is the whole point of separating the count from the arithmetic.
-    const { env, db, sent } = makeEnv();
-    withClock(db, 'Friday, April 11, 2025, 22:02');
-    stubProvider(sent, '{"elapsed":1}');
+    // The measured defect: "You good now?" / "Both." left the clock unchanged for eight
+    // messages, so a whole conversation took a minute.
+    const { env, sent } = makeEnv();
+    stubProvider(sent, '{"time":"Friday, April 11, 2025, 22:05"}');
 
     await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
 
-    expect((await loadState(env, 'chat-1')).time).toBe('Friday, April 11, 2025, 22:03');
+    expect((await loadState(env, 'chat-1')).time).toBe('Friday, April 11, 2025, 22:05');
   });
 
-  test('an absolute time in the patch wins over the elapsed count', async () => {
-    // "at eight o'clock" is a fact, not a duration. Adding elapsed minutes to it would be
-    // wrong, so the stated clock replaces the stored one and `elapsed` is ignored.
+  test('a free-text stored clock is normalised, not left stuck', async () => {
+    // The edge that made the earlier design wrong: a stored value with no clock in it
+    // ("late evening") had nothing for the arithmetic to add to, so it stayed un-advanceable
+    // forever. The model reads it and writes a concrete reading instead.
     const { env, db, sent } = makeEnv();
-    withClock(db, 'Friday, April 11, 2025, 22:02');
-    stubProvider(sent, '{"time":"Friday, April 11, 2025, 20:00","elapsed":598}');
+    db.run(
+      `INSERT INTO state (chat_id, json, updated_at) VALUES ('chat-1', ?, 0)
+       ON CONFLICT(chat_id) DO UPDATE SET json = excluded.json`,
+      [JSON.stringify({ time: 'late evening' })] as never[],
+    );
+    stubProvider(sent, '{"time":"Friday, April 11, 2025, 21:00"}');
 
     await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
 
-    expect((await loadState(env, 'chat-1')).time).toBe('Friday, April 11, 2025, 20:00');
+    expect((await loadState(env, 'chat-1')).time).toBe('Friday, April 11, 2025, 21:00');
   });
 
-  test('elapsed is never stored as a state key', async () => {
-    const { env, db, sent } = makeEnv();
-    withClock(db, 'Friday, April 11, 2025, 22:02');
-    stubProvider(sent, '{"elapsed":10,"location":"the lantern room"}');
-
-    const result = await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
-
-    expect(result.applied).toBe(true);
-    expect(await loadState(env, 'chat-1')).toEqual({
-      time: 'Friday, April 11, 2025, 22:12',
-      location: 'the lantern room',
-    });
-  });
-
-  test('an absurd elapsed count is clamped, not applied', async () => {
-    // A model that misreads a number must not throw the calendar a year forward.
-    const { env, db, sent } = makeEnv();
-    withClock(db, 'Friday, April 11, 2025, 22:02');
-    stubProvider(sent, '{"elapsed":999999}');
-
-    await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
-
-    // Capped at a week rather than at the number the model wrote.
-    expect((await loadState(env, 'chat-1')).time).toBe('Friday, April 18, 2025, 22:02');
-  });
-
-  test('an unparseable stored clock is left alone rather than replaced', async () => {
-    const { env, db, sent } = makeEnv();
-    withClock(db, 'late evening');
-    stubProvider(sent, '{"elapsed":10}');
-
-    await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
-
-    expect((await loadState(env, 'chat-1')).time).toBe('late evening');
-  });
-
-  test('manual never advances the clock, even if the model sends elapsed', async () => {
-    // The instruction says not to send `elapsed` under manual; this is the second guard,
-    // because the reader owning the clock is the one thing the pace setting promises.
-    const { env, db, sent } = makeEnv();
-    withClock(db, 'Friday, April 11, 2025, 22:02');
-    stubProvider(sent, '{"elapsed":10}');
+  test('manual never advances the clock', async () => {
+    // The reader owning the clock is the one thing the pace setting promises, so the
+    // manual prompt forbids moving it.
+    const { env, sent } = makeEnv();
+    stubProvider(sent, '{}');
 
     await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('manual'));
 
-    expect((await loadState(env, 'chat-1')).time).toBe('Friday, April 11, 2025, 22:02');
+    expect(sent[0].system).toContain('Never change');
+    expect((await loadState(env, 'chat-1')).time).toBeUndefined();
   });
 
-  test('an exchange with no clock yet and no absolute time leaves time unset', async () => {
-    const { env, sent } = makeEnv();
-    stubProvider(sent, '{"elapsed":10,"location":"the lantern room"}');
+  test('the token budget leaves room for a reasoning model to answer', async () => {
+    // The bug that actually froze the clock on prod, and that a prompt fix alone would not
+    // have caught: the configured cheap model (gpt-oss-120b) spends its allowance thinking,
+    // so at 400 tokens `content` came back EMPTY with finish_reason "length" and the whole
+    // state update failed — silently, since a failed update is only a warning. The clock
+    // then never moved no matter what the prompt said.
+    const { env } = makeEnv();
+    let maxTokens = 0;
+    globalThis.fetch = (async (_url: unknown, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { max_tokens?: number };
+      maxTokens = body.max_tokens ?? 0;
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: '{}' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1 } }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    }) as unknown as typeof fetch;
 
-    const result = await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
+    await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
 
-    // The location change still lands; there is simply no clock to advance.
-    expect(result.applied).toBe(true);
-    expect(await loadState(env, 'chat-1')).toEqual({ location: 'the lantern room' });
+    // Comfortably above what a reasoning model needs to think and still emit the patch.
+    expect(maxTokens).toBeGreaterThanOrEqual(1024);
   });
 });
 

@@ -675,14 +675,15 @@ last in the head (`assemble.ts`), the latter replaces the built-in instruction o
 from `PresetConfig`, the defaults, and the editor — a control that does nothing is worse
 than no control.
 
-### 🐛 The clock did not move — fixed by taking the arithmetic away from the model
+### 🐛 The clock did not move — two causes, not one
 
-Reported: the reader wrote *"10 minutes pass"* and the scene clock stayed at `22:02`,
-while the world-state panel showed `22:03`; and a plain exchange left the clock unchanged
-for eight messages, so an entire conversation took one minute.
+Reported: the reader wrote *"10 minutes pass"* and the scene clock stayed at `22:02`
+while the world-state panel showed `22:03`; a plain exchange left the clock unchanged
+for eight messages, so an entire conversation took one minute; and a free-text stored
+value like `"late evening"` never advanced at all.
 
-**Measured against the live cheap model (`gpt-oss-120b`), on the exact exchange from the
-report**, with the pre-fix prompt:
+**Measured against the live cheap model (`gpt-oss-120b`) on the exact exchange from the
+report**, pre-fix:
 
 | Exchange | Clock after one turn |
 |---|---|
@@ -690,35 +691,45 @@ report**, with the pre-fix prompt:
 | `"Oh.. okay, thanks."` / `"She snorts."` | **unchanged** in 1 of 3 |
 | `"10 minutes pass"` (on the `minute` pace) | **unchanged or +1**, never +10 |
 
-The cause was the division of labour. The model was asked to *compute a new clock string*
-each turn — read the old one, decide how far the scene moved, and rewrite the date. A
-language model cannot reliably do date arithmetic, and asking it to decide **whether**
-time moved at all is worse: a conversation is minutes, and it kept returning the value it
-was shown.
+#### Cause 1: the state update was failing outright
 
-**The fix removes the arithmetic from the model entirely.** It now emits one new key,
-`elapsed` — an integer count of the minutes the exchange covers — and
-`src/lib/state/time.ts` adds that to the stored clock. That is deterministic and testable.
-`elapsed` is consumed before validation and never stored: it is an instruction about the
-clock, not a fact about the scene. An absolute time the reader wrote ("at eight o'clock")
-still wins outright and replaces the stored clock.
+The per-turn update asked for `max_tokens: 400`. The configured cheap model reasons
+before it answers, and on some exchanges the entire allowance went to the reasoning trace:
+`content` came back empty with `finish_reason: "length"`, and the call was reported as
+a failure. Measured: **6 of 6 turns failed this way**. Because a failed update is only a
+`console.warn`, the scene simply stopped moving and nothing surfaced it. Raising the
+budget to 2048 fixed it — the same exchange then answered in 16 characters.
+
+#### Cause 2: the model was asked to do clock arithmetic
+
+The model had to *compute a new clock string* each turn — read the old one, decide how far
+the scene moved, rewrite the date. It cannot do that reliably, and asking it to decide
+**whether** time moved is worse: a conversation is minutes, and it kept returning the value
+it was shown. A free-text stored value (`"late evening"`) made it permanently stuck,
+since there was no clock to add to.
+
+**The fix is simpler than the first attempt.** An earlier revision split the job — the
+model reported only elapsed minutes and `src/lib/state/time.ts` did the addition. That
+was more machinery than the problem needs. The model now writes the whole clock itself and
+is told to emit `time` on **every** reply, including turning a vague time of day into a
+concrete reading (`"late evening"` -> `21:00`, `"night"` -> `23:00`,
+`"dawn"` -> `06:00`). No arithmetic module, no extra key.
+
+Measured after the fix, same model, same exchanges: **44/48 turns correct**, including
+`"10 minutes pass"` -> `22:12` (4/4), a quiet exchange -> `+3` minutes (4/4),
+`"three hours later"` -> `+3` hours (4/4), and the free-text case ->
+`21:05` (4/4). The one residual: a bare `"at eight o'clock"` on an evening scene is
+read as `08:00` instead of `20:00` in about 1 run in 4, so the prompt now spells out
+that am/pm comes from the scene.
 
 The pace selector collapsed with it. `auto` / `minute` / `hour` / `scene` were all the
-same instruction with a different multiplier, and all four drifted; the reader is no
-longer asked to pick a dial that does not work. `timePace` is now `'auto' | 'manual'` —
-managed for you, or the reader keeps the clock. Stored rows naming a removed member
-degrade to the default per field, which `parseSceneSetup` already did.
+same instruction with a different multiplier, and all four drifted; the reader is no longer
+asked to pick a dial that does not work. `timePace` is now `'auto' | 'manual'` — managed
+for you, or the reader keeps the clock. Stored rows naming a removed member degrade to the
+default per field, which `parseSceneSetup` already did.
 
-Measured after the fix, same model, same exchanges: **48/48 turns advanced**, and
-**0/36 omitted `elapsed`**. A stated duration lands on the right minute
-(`"10 minutes pass"` -> `22:12`), a vague one still moves (`"minutes pass"` -> `22:07`),
-a quiet exchange moves by a minute, and a night's sleep moves by eight hours. The
-regression tests are in `worker/src/state/update.test.ts` (the turn-level behaviour) and
-`src/lib/state/time.test.ts` (the arithmetic).
-
-The one remaining soft edge: a reader's own free-text clock (`"late evening"`) has no
-parseable time in it, so nothing is advanced and the value is left as written rather than
-replaced with a guess.
+Regression tests are in `worker/src/state/update.test.ts`: the token budget, the
+every-turn emission, the free-text normalisation, and manual's refusal to move the clock.
 
 ---
 
