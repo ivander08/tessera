@@ -131,13 +131,22 @@ export async function loadPathTail(
   chatId: string,
   limit: number,
   cursor?: string | null,
+  /**
+   * Only rows whose `seq` is below this. Used by a `regenerate`, which must read the target's
+   * ANCESTRY: the newest `limit` rows of the path are the end of the story, and filtering
+   * those afterwards would leave an early re-roll with no history at all.
+   *
+   * A plain `seq <` is correct rather than a depth comparison, because a child is always
+   * inserted after its parent — so on any single path, seq increases from root to leaf.
+   */
+  beforeSeq?: number | null,
 ): Promise<BranchRow[]> {
   // `LIMIT 0` already returns nothing, so this is a contract rather than a correction: a
   // caller asking for no rows gets no rows, and never a walk it did not ask for.
   if (limit <= 0) return [];
 
   const { results } = await env.DB.prepare(TAIL)
-    .bind(chatId, cursor ?? null, limit)
+    .bind(chatId, cursor ?? null, limit, beforeSeq ?? null)
     .all<BranchRow>();
   return results;
 }
@@ -185,7 +194,8 @@ const TAIL = `
   )
   SELECT ${BRANCH_COLUMNS} FROM (
     SELECT ${BRANCH_COLUMNS}, depth FROM tail_path
-     WHERE ?2 IS NULL OR depth < (SELECT depth FROM tail_path p2 WHERE p2.id = ?2)
+     WHERE (?2 IS NULL OR depth < (SELECT depth FROM tail_path p2 WHERE p2.id = ?2))
+       AND (?4 IS NULL OR seq < ?4)
      ORDER BY depth DESC
      LIMIT ?3
   )

@@ -156,8 +156,13 @@ export async function buildPrompt(
     }));
   };
 
+  // The load is bounded by the cutoff, not filtered after it. `loadPathTail` returns the
+  // NEWEST rows of the path, so loading first and filtering afterwards would leave an early
+  // `regenerate` with no history at all: on a 500-message chat, re-rolling turn 3 would read
+  // the newest 400 rows, drop every one of them for being past the target, and send a prompt
+  // with no scene in it.
   let limit = promptWindowLimit(historyBudget, calibration);
-  let loaded = await loadPathTail(env, chat.id, limit, null);
+  let loaded = await loadPathTail(env, chat.id, limit, null, cutoff);
   let results = readWindow(loaded);
 
   const entries = (rows: typeof results) =>
@@ -166,7 +171,18 @@ export async function buildPrompt(
       tokens: applyCalibration(row.content_tokens ?? estimateTokens(row.content), calibration),
     }));
 
-  let windowStart = computeWindowStart(entries(results), chat.window_start_seq, historyBudget);
+  // The persisted window start describes the END of the path, because that is where the
+  // budget is spent. It cannot be applied to a turn that stops early: `computeWindowStart`
+  // treats its argument as the oldest row to INCLUDE, while a cutoff is an exclusive UPPER
+  // bound, so flooring at the cutoff would exclude every row — the same empty-history
+  // failure in a different place. With a cutoff the budget alone decides, working from the
+  // loaded ancestry.
+  //
+  // The window start is still WRITTEN back below, from the full-path calculation, so the
+  // chat's caching is unaffected by this turn's narrower read.
+  const floor = cutoff === null ? chat.window_start_seq : 0;
+
+  let windowStart = computeWindowStart(entries(results), floor, historyBudget);
 
   // The window wants rows older than the oldest one loaded, which means the load was too
   // small. Doubling ONCE is enough in every case the invariant above allows, and a loop
@@ -175,9 +191,9 @@ export async function buildPrompt(
   // "that is the whole chat".
   if (windowStart < (results[0]?.seq ?? Infinity) && loaded.length === limit) {
     limit *= 2;
-    loaded = await loadPathTail(env, chat.id, limit, null);
+    loaded = await loadPathTail(env, chat.id, limit, null, cutoff);
     results = readWindow(loaded);
-    windowStart = computeWindowStart(entries(results), chat.window_start_seq, historyBudget);
+    windowStart = computeWindowStart(entries(results), floor, historyBudget);
     if (windowStart < (results[0]?.seq ?? Infinity) && loaded.length === limit) {
       // Still short. The prompt is still correct — it is windowed to what was loaded —
       // but the window start is older than the data, which means the budget arithmetic
@@ -192,9 +208,16 @@ export async function buildPrompt(
 
   if (windowStart !== chat.window_start_seq) {
     // Persisted once per re-anchor, not per turn — the sawtooth is the point.
-    await env.DB.prepare('UPDATE chats SET window_start_seq = ? WHERE id = ?')
-      .bind(windowStart, chat.id)
-      .run();
+    //
+    // NEVER written when the window was floored by a cutoff. A `regenerate` computes its
+    // window from a truncated view, so persisting that value would record a window start
+    // derived from the re-roll and shrink the chat's context for every later turn. The
+    // persisted start belongs to the full path, which only a forward turn sees.
+    if (cutoff === null) {
+      await env.DB.prepare('UPDATE chats SET window_start_seq = ? WHERE id = ?')
+        .bind(windowStart, chat.id)
+        .run();
+    }
   }
 
   // The cast, loaded once and used for two things: the tail block below, and the

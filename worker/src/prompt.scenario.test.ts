@@ -740,9 +740,89 @@ describe('scenario: a regenerate does not read the turns it replaces', () => {
     expect(text).toContain('turn 9 of the scene');
   });
 
+  test('an early regenerate on a long chat still gets its history', async () => {
+    // The regression this fixture caught, and the 9-turn one above could not: on a chat
+    // whose window has re-anchored, `window_start_seq` sits near the END of the path. A
+    // regenerate loads the target's ANCESTRY, so loading the newest rows and filtering them
+    // afterwards left the prompt with no scene at all — and applying the persisted window
+    // start to a turn that stops before it excluded every remaining row as well.
+    const { db, env } = makeEnv();
+    const chat = seedChat(db);
+    const rows = seedConversation(db, 60);
+    // The window has re-anchored to turn 40, which is what a long chat looks like.
+    exec(db, 'UPDATE chats SET window_start_seq = ? WHERE id = ?', rows[39].seq, CHAT_ID);
+    chat.window_start_seq = rows[39].seq;
+
+    const prompt = await buildPrompt(env, chat, settings(40000), {
+      mode: 'regenerate',
+      historyCutoff: rows[2].seq,
+      stateSeq: rows[2].seq,
+      userContent: '',
+      tailExtra: '',
+    });
+
+    const text = promptText(prompt);
+    // The ancestry is present. Before the fix this was empty.
+    expect(text).toContain('turn 1 of the scene');
+    expect(text).toContain('turn 2 of the scene');
+    // And nothing from the target or beyond.
+    expect(text).not.toContain('turn 4 of the scene');
+    expect(text).not.toContain('turn 60 of the scene');
+  });
+
+  test('a regenerate never rewrites the persisted window start', async () => {
+    // The window is computed from a truncated view, so persisting it would shrink the
+    // chat's context for every later turn. Only a forward turn may re-anchor.
+    const { db, env } = makeEnv();
+    const chat = seedChat(db);
+    const rows = seedConversation(db, 60);
+    const anchor = rows[39].seq;
+    exec(db, 'UPDATE chats SET window_start_seq = ? WHERE id = ?', anchor, CHAT_ID);
+    chat.window_start_seq = anchor;
+
+    await buildPrompt(env, chat, settings(40000), {
+      mode: 'regenerate',
+      historyCutoff: rows[2].seq,
+      stateSeq: rows[2].seq,
+      userContent: '',
+      tailExtra: '',
+    });
+
+    const stored = one<{ window_start_seq: number }>(
+      db,
+      'SELECT window_start_seq FROM chats WHERE id = ?',
+      CHAT_ID,
+    );
+    expect(stored?.window_start_seq).toBe(anchor);
+  });
+
+  test('a forward turn still re-anchors the window', async () => {
+    // The guard must not disable re-anchoring generally. The chat has to be long enough to
+    // exceed `MIN_HISTORY_BUDGET` (2048), which floors the budget whatever the context
+    // setting says — 200 turns at 20 tokens each is 4,000.
+    const { db, env } = makeEnv();
+    const chat = seedChat(db);
+    const rows = seedConversation(db, 200);
+    exec(db, 'UPDATE chats SET window_start_seq = ? WHERE id = ?', rows[0].seq, CHAT_ID);
+    chat.window_start_seq = rows[0].seq;
+
+    await buildPrompt(env, chat, settings(2500), {
+      mode: 'send',
+      historyCutoff: null,
+      stateSeq: null,
+      userContent: 'next',
+      tailExtra: '',
+    });
+
+    const stored = one<{ window_start_seq: number }>(
+      db,
+      'SELECT window_start_seq FROM chats WHERE id = ?',
+      CHAT_ID,
+    );
+    expect(stored!.window_start_seq).toBeGreaterThan(rows[0].seq);
+  });
+
   test('only regenerate and a recovery continue cut the window', () => {
-    // The wiring, not the helper: `buildPrompt` only ever receives the result, so a test
-    // that drives it alone keeps passing if `turn.ts` computes the wrong value.
     const target = { seq: 42 };
 
     expect(historyCutoffFor('regenerate', target, false)).toBe(42);
