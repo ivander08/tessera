@@ -19,9 +19,12 @@ summaries and facts from the abandoned branch stop being in the prompt.
 (`migrations/0005_branching.sql`) plus `walkPath`/`loadPath` (`worker/src/branch.ts:109`,
 `:340`) already resolve exactly the scene on screen, and `messages.state_json`
 (`migrations/0011_message_state.sql`) is already a per-row snapshot rather than a
-per-chat document. Only the memory tables are still chat-scoped: `summaries` is keyed by
+per-chat document. The only memory table still chat-scoped is `summaries`: it is keyed by
 `covers_from`/`covers_to` seq with no notion of which branch it covered
-(`migrations/0001_memory.sql`), and `facts` has no parent link at all.
+(`migrations/0001_memory.sql`). `facts` no longer has this gap — migrations 0014/0015 gave
+it `learned_at_seq`/`superseded_at_seq` provenance and `factIsTrueSql`
+(`worker/src/memory/facts.ts:31`) already enforces the ancestry predicate — so the
+remaining gap is `summaries` only.
 
 **Concrete change.** Record the tail id each summary/fact was derived from, then filter
 `recall` (`worker/src/memory/recall.ts:35`) by "derived from a row that is an ancestor of the
@@ -207,6 +210,49 @@ Small, high-frequency wins found while reading this codebase.
   `persona: null` for exactly this case.
 
 ---
+
+## 7. Assessed external memory designs (2026-10-04)
+
+Three SillyTavern memory extensions were assessed as candidates for tessera's memory
+design. Verdicts below; the steals are ideas, not commitments.
+
+**recall** (lathlearns/recall, MIT) — model rejected: a single manually-triggered rolling
+summary is weaker than tessera's auto tiers plus the derive-from-original rule
+(`worker/src/memory/summarize.ts` re-reads the original messages of the covered range for
+every summary, so errors stay local instead of compounding). Three steals, ranked:
+
+- **Staleness detection.** Hash the covered message range per summary and mark the
+  summary stale when an edit lands inside it. Today `editMessage`
+  (`worker/src/messages.ts:224`) rewrites `content` and the covered summary keeps being
+  injected unchanged — no hash, no flag. Facts already have the precedent: migrations
+  0014/0015 gave them per-row read-time coordinates (`learned_at_seq`,
+  `superseded_at_seq`); a summary's covered range is the same family of coordinate, but
+  an edit does not disturb it.
+- **One-off steering.** A text the writer passes into the next summarize/extract job
+  payload — recorded once, never replayed.
+- **Pressure-triggered cadence.** Summarize at ~70% of the window instead of a fixed
+  `SUMMARY_EVERY = 20` (`worker/src/memory/schedule.ts:23`); `docs/research/05-memory.md`
+  §(e) already argues this.
+
+**VectFox** (KritBlade/VectFox, AGPL) — architecture interesting, adoption scoped down.
+The one steal worth building soon is **agent-lite query expansion**: a cheap model
+rewrites the recall query into 2–4 lexical variants before `recall()`
+(`worker/src/memory/recall.ts`) runs. **EventBase-style event-granular extraction** is a
+medium-effort option that first needs a fact/event boundary decision. Dense vectors
+rejected: D1 has no vector type, so they would mean adding Vectorize or Qdrant plus an
+embedding provider — for one user.
+
+**Summaryception** (Lodactio/Extension-Summaryception, AGPL) — rejected outright:
+recursive re-summarization of summaries contradicts product principle #4 ("derive, don't
+trust") and the fixed-depth argument in `worker/src/memory/consolidate.ts`; its motivating
+problem (hard truncation of long chats) does not exist in tessera.
+
+Only recall is MIT; the other two are AGPL — irrelevant for ideas, relevant if code is
+ever copied.
+
+Every steal renders into the tail only — `memoryBlock` is a tail segment
+(`src/lib/prompt/assemble.ts:66`) — so all are cache-safe; staleness corrections ride on
+the prefix misses that message edits already cause (`worker/src/messages.ts:38`).
 
 ## The caching rule
 
