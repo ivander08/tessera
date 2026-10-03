@@ -16,6 +16,19 @@ export function enterMakesNewline(): boolean {
 }
 
 /**
+ * Whether the composer should take focus back after a send.
+ *
+ * Desktop only. On a touch device, re-focusing the textarea raises the soft keyboard again
+ * immediately after the reader dismissed it by pressing Send — the opposite of what they
+ * asked for, so focus is deliberately NOT restored there. The signal is the pointer, not the
+ * viewport: a narrow desktop window still has a hardware keyboard, and a tablet with a
+ * keyboard case is coarse-pointer but has one.
+ */
+export function refocusesAfterSend(): boolean {
+  return !window.matchMedia('(pointer: coarse)').matches;
+}
+
+/**
  * The composer's keydown rule, shared by the chat and consult boxes so the two cannot drift.
  *
  * Returns true when the event was consumed (the message was sent). The caller supplies `send`

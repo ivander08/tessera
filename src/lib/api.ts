@@ -114,18 +114,31 @@ export interface NormalizedUsage {
   costUsd: number | null;
 }
 
+/** Which part of the reply the stream has reached. Mirrors `ConsultPhase` in the worker. */
+export type ConsultPhase = 'say' | 'question' | 'card';
+
+/**
+ * The consult stream's protocol. Shared by BOTH consultants — the card consultant and the
+ * chat consultant — because it is one problem: a streamed turn with a progress phase.
+ * Separate from the chat stream's `ChatFrame` union above; the two share only the
+ * `data: <json>\n\n` envelope.
+ *
+ * Generic over the turn, defaulting to `unknown`: the card consultant's turn is a card and
+ * the chat consultant's is advice about a scene, and the two payloads have no field in
+ * common. Each caller names its own type at the point it reads the frame.
+ */
+export type ConsultFrame<T = unknown> =
+  | { type: 'delta'; text: string }
+  /** Which part of the reply is being written. Progress, not content. */
+  | { type: 'phase'; phase: ConsultPhase }
+  | { type: 'turn'; turn: T }
+  | { type: 'error'; message: string; code: string };
+
 /**
  * The forge consultant's stream. Separate from `streamChat` rather than a generalisation of
  * it: `streamChat` hard-codes the path and the `{chatId, content, mode, targetId}` body, and
  * the two have no field in common.
  */
-export type ConsultFrame =
-  | { type: 'delta'; text: string }
-  /** Which part of the reply is being written. Progress, not content. */
-  | { type: 'phase'; phase: 'say' | 'question' | 'card' }
-  | { type: 'turn'; turn: unknown }
-  | { type: 'error'; message: string; code: string };
-
 export async function streamConsult(
   body: {
     mode: 'draft' | 'consult';
@@ -150,6 +163,38 @@ export async function streamConsult(
     let frame: ConsultFrame;
     try {
       frame = JSON.parse(event.data) as ConsultFrame;
+    } catch {
+      continue;
+    }
+    onFrame(frame);
+  }
+}
+
+/**
+ * The chat consultant's stream: the same frame protocol as the card consultant's, over a
+ * chat's own context rather than a card.
+ */
+export async function streamChatConsult<T>(
+  chatId: string,
+  body: { messages: Array<{ role: 'user' | 'assistant'; content: string }> },
+  onFrame: (frame: ConsultFrame<T>) => void,
+  options: { signal?: AbortSignal } = {},
+): Promise<void> {
+  const res = await apiFetch(`/api/chats/${encodeURIComponent(chatId)}/advise`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+    signal: options.signal,
+  });
+
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`${res.status}: ${text.slice(0, 300)}`);
+  }
+
+  for await (const event of parseSse(res.body)) {
+    let frame: ConsultFrame<T>;
+    try {
+      frame = JSON.parse(event.data) as ConsultFrame<T>;
     } catch {
       continue;
     }

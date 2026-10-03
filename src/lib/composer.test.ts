@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { enterMakesNewline, handleComposerEnter } from './composer';
+import { enterMakesNewline, handleComposerEnter, refocusesAfterSend } from './composer';
 
 /**
  * The reported bug: on a phone, Enter sent the message and a newline was impossible, because
@@ -88,5 +88,19 @@ describe('enterMakesNewline', () => {
     expect(enterMakesNewline()).toBe(true);
     withPointer(false);
     expect(enterMakesNewline()).toBe(false);
+  });
+});
+
+describe('refocusesAfterSend', () => {
+  test('takes focus back on a fine pointer', () => {
+    withPointer(false);
+    expect(refocusesAfterSend()).toBe(true);
+  });
+
+  test('leaves focus alone on a coarse pointer', () => {
+    // Re-focusing on a phone raises the soft keyboard again the instant the reader dismissed
+    // it by pressing Send, which is the opposite of what they asked for.
+    withPointer(true);
+    expect(refocusesAfterSend()).toBe(false);
   });
 });

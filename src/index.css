@@ -2501,6 +2501,59 @@ ul.md-list {
   flex: 1;
 }
 
+/* The chat screen has no `.sheet-commit` row for the dock to measure — that row exists only
+   on the character forms. The dock's fallback is a guessed 58px and the chat composer is a
+   different height, so the sheet's foot is pinned to the composer's real measurement here.
+   Set by the chat screen from a ResizeObserver on `.composer` while the dock is open. */
+@media (max-width: 1000px) {
+  .chat-consult-dock {
+    bottom: var(--composer-height, 58px);
+  }
+}
+
+/* One reply, with the shortcut that puts its words in the chat composer underneath. */
+.consult-answer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+/* A suggestion dropped into the chat composer. Quiet and left-aligned: it is a shortcut
+   beside the advice, not the point of the reply. */
+.consult-use {
+  padding: 3px 9px;
+  font-size: var(--text-xs);
+}
+
+/* A numbered suggestion in the chat consultant. Not a button, unlike the card consultant's
+   options: pressing it does not answer anything, it hands the words to the composer, so the
+   row is text with an action at its end rather than a full-width click target. */
+.consult-suggestion {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.consult-suggestion-text {
+  min-width: 0;
+  white-space: normal;
+  line-height: 1.45;
+  font-size: var(--text-base);
+}
+
+.consult-suggestion-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .consult-pane {
   display: flex;
   flex-direction: column;

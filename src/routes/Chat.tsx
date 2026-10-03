@@ -5,13 +5,19 @@ import { apiFetch, apiJson, streamChat, type TurnMode } from '../lib/api';
 import type { MessageRow, Transcript } from '../lib/apiTypes';
 import type { WorldState } from '../lib/state/schema';
 import { messageOf, useAsync } from '../lib/hooks';
-import { handleComposerEnter } from '../lib/composer';
+import { handleComposerEnter, refocusesAfterSend } from '../lib/composer';
 import { AppBar, BackLink, MenuAction, MenuLabel, MenuSep } from '../components/AppBar';
 import { PresetMenu } from '../components/PresetMenu';
 import { PersonaMenu } from '../components/PersonaMenu';
 import { Turn, type CastVoice, type TurnView } from '../components/Turn';
 import { MessageActions } from '../components/MessageActions';
 import { Modal } from '../components/Modal';
+import { ConsultDock } from '../components/ConsultDock';
+import {
+  ChatConsultPanel,
+  emptyChatConsultSession,
+  type ChatConsultSession,
+} from '../components/ChatConsultPanel';
 import { ConfirmPrompt } from '../components/ConfirmPrompt';
 import { useToast } from '../components/Toast';
 import { SceneBar } from '../components/SceneBar';
@@ -126,6 +132,10 @@ export default function Chat() {
   // Which side panel is open over the chat, if any. These used to be separate routes,
   // which meant leaving the scene to read the state it is in.
   const [panel, setPanel] = useState<'state' | 'cast' | 'craft' | 'memory' | 'appearance' | 'search' | null>(null);
+  // The chat consultant. Not part of the `panel` union: it is a dock that floats over the
+  // scene, not a Modal, because the reader has to see the scene they are asking about.
+  const [consultOpen, setConsultOpen] = useState(false);
+  const [consultSession, setConsultSession] = useState<ChatConsultSession>(emptyChatConsultSession);
 
   // Drives the jump-to-latest control. A ref is enough for the auto-follow logic, but the
   // button has to render, so the same fact is mirrored into state on the scroll handler.
@@ -165,6 +175,13 @@ export default function Chat() {
     setHasMore(data.hasMore);
     setCursor(data.oldestId);
   }, [data]);
+
+  // Advice is about one scene, so it must not follow the reader into another chat: an answer
+  // about a location in the last chat reads as an answer about this one.
+  useEffect(() => {
+    setConsultOpen(false);
+    setConsultSession(emptyChatConsultSession());
+  }, [id]);
 
   // What the transcript shows. Regenerating an early reply cuts everything after it
   // immediately, rather than waiting for the server to answer: the turns after that
@@ -469,6 +486,12 @@ export default function Chat() {
         (target.tagName === 'INPUT' ||
           target.tagName === 'TEXTAREA' ||
           target.isContentEditable);
+      // The consultant's dock owns Escape itself — no `Modal` is involved, so nothing else
+      // will close it. Dismissed before the early return below.
+      if (event.key === 'Escape' && consultOpen) {
+        setConsultOpen(false);
+        return;
+      }
       // Escape is left to whatever is open: a sheet, an editor, the lightbox.
       if (event.key === 'Escape') return;
 
@@ -487,7 +510,9 @@ export default function Chat() {
     }
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, []);
+    // `consultOpen` is read above, so the listener is rebuilt when it flips. Rebuilding on a
+    // boolean toggle is cheaper than a ref that only exists to keep this list empty.
+  }, [consultOpen]);
 
   const run = useCallback(
     async (mode: TurnMode, content: string, targetId: string | null, sent?: string) => {
@@ -558,7 +583,7 @@ export default function Chat() {
           // overlay would stay up forever. The timeout is the guarantee that it comes down.
           window.setTimeout(
             () => setPending((current) => (current?.settling ? null : current)),
-            6000,
+            1500,
           );
         }
       }
@@ -592,10 +617,71 @@ export default function Chat() {
     }
 
     if (busy) return;
+    // Clearing the draft shrinks the box: the layout effect above re-measures on every
+    // change, including this one.
     setDraft('');
-    if (inputRef.current) inputRef.current.style.height = 'auto';
     void run('send', content, null, content);
   }
+
+  // The composer must be ready for the next line the moment a turn ends: the reader types,
+  // presses Send, and types again. `readOnly` above keeps focus through the stream, but a
+  // turn can also start from the Send button or from Impersonate, which never had focus in
+  // the first place — so the settle is the point at which focus is guaranteed back.
+  //
+  // A ref, not state: it only has to survive between renders, and state here would re-render
+  // the whole transcript on every turn boundary.
+  const wasBusy = useRef(false);
+  useEffect(() => {
+    if (wasBusy.current && !busy && refocusesAfterSend()) inputRef.current?.focus();
+    wasBusy.current = busy;
+  }, [busy]);
+
+  /**
+   * Puts the consultant's suggestion in the composer, ready to be edited.
+   *
+   * Never sends: the suggestion is a starting point, and a message the reader has not read
+   * yet must not leave the box on their behalf.
+   */
+  function useAdvice(text: string) {
+    setDraft(text);
+    inputRef.current?.focus();
+  }
+
+  /**
+   * Grows the composer to fit its text, capped so a long paste cannot take the screen.
+   *
+   * A layout effect rather than work in `onChange`, because the draft also arrives from
+   * outside — the consultant's Use button — and React has not yet written that value into
+   * the DOM when the click handler runs. Measuring there sized the box from the text it was
+   * replacing, which left a 2,300-character suggestion showing one clipped line.
+   */
+  useLayoutEffect(() => {
+    const node = inputRef.current;
+    if (!node) return;
+    node.style.height = 'auto';
+    node.style.height = `${Math.min(node.scrollHeight, window.innerHeight * 0.42)}px`;
+  }, [draft]);
+
+  // The chat's dock is a bottom sheet with no `.sheet-commit` row to sit above, so the
+  // composer's real height is measured here and published as a custom property the sheet's
+  // media query reads. Measured rather than guessed: the composer wraps to two lines on a
+  // narrow phone with a long placeholder, and a constant then leaves the sheet floating.
+  useEffect(() => {
+    if (!consultOpen) return;
+    const composer = document.querySelector('.composer');
+    if (!composer) return;
+    const measure = () => {
+      const height = composer.getBoundingClientRect().height;
+      document.documentElement.style.setProperty('--composer-height', `${Math.round(height)}px`);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(composer);
+    return () => {
+      observer.disconnect();
+      document.documentElement.style.removeProperty('--composer-height');
+    };
+  }, [consultOpen]);
 
   async function swipe(messageId: string, direction: 'prev' | 'next') {
     try {
@@ -749,6 +835,7 @@ export default function Chat() {
             <MenuSep />
             <MenuAction label="World state" onClick={() => setPanel('state')} />
             <MenuAction label="Cast" onClick={() => setPanel('cast')} />
+            <MenuAction label="Ask about this scene" onClick={() => setConsultOpen(true)} />
             <MenuAction label="How it's written" onClick={() => setPanel('craft')} />
             <MenuAction label="Memory" onClick={() => setPanel('memory')} />
             <MenuAction label="Appearance" onClick={() => setPanel('appearance')} />
@@ -1070,12 +1157,7 @@ export default function Chat() {
             ref={inputRef}
             className="composer-input"
             value={draft}
-            onChange={(event) => {
-              setDraft(event.target.value);
-              const node = event.currentTarget;
-              node.style.height = 'auto';
-              node.style.height = `${Math.min(node.scrollHeight, window.innerHeight * 0.42)}px`;
-            }}
+            onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               // Enter sends on a keyboard; on a phone it makes a newline and the Send button
               // sends, because a soft keyboard has no Shift. See `handleComposerEnter`.
@@ -1089,7 +1171,7 @@ export default function Chat() {
                   ? 'Send empty to continue'
                   : `Write as ${userName}`
             }
-            disabled={busy}
+            readOnly={busy}
             aria-label="Message"
           />
 
@@ -1104,6 +1186,24 @@ export default function Chat() {
           )}
         </div>
       </form>
+
+      {/* A dock, not a Modal: the reader has to see the scene they are asking about. It
+          floats above the composer (`z-index: 40` against the composer's 15) and below any
+          open panel, so the card consultant's own frame is reused unchanged. */}
+      {consultOpen && (
+        <ConsultDock className="chat-consult-dock" label="Scene consultant">
+          {(dragHandlers) => (
+            <ChatConsultPanel
+              chatId={id}
+              session={consultSession}
+              onSession={setConsultSession}
+              onUse={useAdvice}
+              onClose={() => setConsultOpen(false)}
+              dragHandlers={dragHandlers}
+            />
+          )}
+        </ConsultDock>
+      )}
     </>
   );
 }

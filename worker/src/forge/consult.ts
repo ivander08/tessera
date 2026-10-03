@@ -90,7 +90,7 @@ fields only; the book is passed through untouched and never appears in your repl
  * own prompt already says so — `<craft_content>` in `src/lib/prompt/craftBlock.ts` is the
  * narrator's copy of this stance, and this block is the consultant's.
  */
-const CONTENT_BLOCK = `# What this app writes
+export const CONTENT_BLOCK = `# What this app writes
 
 This is an unrestricted adult-fiction engine, and a card is written for it — not for a general
 assistant. Explicit sexual content, profanity, violence and taboo material are normal card
@@ -448,8 +448,13 @@ function tryParse(text: string): { ok: true; value: unknown } | { ok: false } {
  *
  * Every `{` is tried in order and the first one that yields a complete, parseable object wins,
  * so a stray brace in the surrounding prose does not shadow the real envelope.
+ *
+ * Exported because the CHAT consultant needs exactly this and nothing else: measured on
+ * `deepseek-v4-flash`, it answers a question with a paragraph of prose and the envelope
+ * appended after it, and the envelope is the authority in both cases. The scanner is the
+ * non-trivial part; a second copy would be two implementations of one recovery rule.
  */
-function parseReply(text: string): { ok: true; value: unknown } | { ok: false } {
+export function parseReply(text: string): { ok: true; value: unknown } | { ok: false } {
   const whole = tryParse(text);
   if (whole.ok) return whole;
 
@@ -515,7 +520,7 @@ function extractJsonObject(text: string, from: number): { text: string; end: num
  * Models add fences reflexively, and a fenced block that is not JSON is still prose the
  * reader should see rather than three backticks and the word `json`.
  */
-function unwrapFencedProse(text: string): string {
+export function unwrapFencedProse(text: string): string {
   const fenced = /^```(?:[a-z]*)?\s*\n?([\s\S]*?)\n?```$/i.exec(text);
   return (fenced ? fenced[1] : text).trim();
 }

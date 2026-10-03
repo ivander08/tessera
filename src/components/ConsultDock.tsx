@@ -20,6 +20,8 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, ty
  */
 export function ConsultDock({
   children,
+  className = '',
+  label = 'Character consultant',
 }: {
   children: (handlers: {
     onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
@@ -27,6 +29,13 @@ export function ConsultDock({
     onPointerUp: (event: ReactPointerEvent<HTMLElement>) => void;
     onPointerCancel: (event: ReactPointerEvent<HTMLElement>) => void;
   }) => ReactNode;
+  /**
+   * An extra class on the dock itself, for a screen that needs to adjust where the dock
+   * sits. The chat adds one because it has no `.sheet-commit` row for the sheet to measure.
+   */
+  className?: string;
+  /** What a screen reader calls this dialog. The chat's dock advises, it does not consult. */
+  label?: string;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   // Distance from the right and bottom edges, in px.
@@ -135,7 +144,7 @@ export function ConsultDock({
   return (
     <div
       ref={ref}
-      className={`consult-dock${dragging ? ' is-dragging' : ''}`}
+      className={`consult-dock${dragging ? ' is-dragging' : ''}${className ? ` ${className}` : ''}`}
       // Position goes through custom properties rather than `right`/`bottom` directly, so the
       // phone's media query can ignore the desktop offset without fighting an inline style —
       // an inline `bottom` beats a media query, which pinned the sheet 88px up the screen
@@ -148,7 +157,7 @@ export function ConsultDock({
         } as React.CSSProperties
       }
       role="dialog"
-      aria-label="Character consultant"
+      aria-label={label}
     >
       {/* Phone only: the handle that resizes the sheet. */}
       <div

@@ -44,6 +44,7 @@ import { asRecord, asString } from '../../src/lib/json';
 import { EMPTY_STATE, validatePatch } from '../../src/lib/state/schema';
 import type { WorldState } from '../../src/lib/state/schema';
 import { forgeConsult } from './forge/api';
+import { chatAdvise } from './chatAdvise';
 import {
   createPersona,
   deletePersona,
@@ -252,6 +253,12 @@ async function route(req: Request, env: Env, url: URL, ctx: ExecutionContext): P
   if (searchMatch) {
     if (method !== 'GET') return notFound();
     return searchChat(env, decodeURIComponent(searchMatch[1]), url);
+  }
+
+  const adviseMatch = /^\/api\/chats\/([^/]+)\/advise$/.exec(path);
+  if (adviseMatch) {
+    if (method !== 'POST') return notFound();
+    return chatAdvise(env, req, decodeURIComponent(adviseMatch[1]));
   }
 
   const exportMatch = /^\/api\/chats\/([^/]+)\/export$/.exec(path);

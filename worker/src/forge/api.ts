@@ -13,13 +13,18 @@ import type { GreetingState, ParsedCard } from '../../../src/lib/cards/types';
  * `phase` is progress, not content: it names which part of the reply is being written, and
  * exists because `say` arrives long before the card does. The pane renders it as the wait
  * label, so a card that takes another twenty seconds to write does not read as a hang.
+ *
+ * Generic over the turn because the two consultants share the protocol and not the payload:
+ * the card consultant returns a card, the chat consultant answers about a scene and has no
+ * card to return. A shared `turn: unknown` would give up the type at both ends to describe
+ * a difference that only exists at one.
  */
 export type ConsultPhase = 'say' | 'question' | 'card';
 
-export type ConsultFrame =
+export type ConsultFrame<T = ConsultTurn> =
   | { type: 'delta'; text: string }
   | { type: 'phase'; phase: ConsultPhase }
-  | { type: 'turn'; turn: ConsultTurn }
+  | { type: 'turn'; turn: T }
   | { type: 'error'; message: string; code: string };
 
 /**
@@ -32,7 +37,7 @@ export type ConsultFrame =
  * escaped (`\"card\"`), so only a real key can match — a card the model *describes* in its
  * `say` text cannot be mistaken for the card it is about to write.
  */
-function phaseOf(buffer: string): ConsultPhase {
+export function phaseOf(buffer: string): ConsultPhase {
   if (/"card"\s*:\s*\{/.test(buffer)) return 'card';
   if (/"question"\s*:\s*\{/.test(buffer)) return 'question';
   return 'say';
@@ -114,7 +119,7 @@ function asGreetingStates(value: unknown): GreetingState[] | undefined {
  * becomes the literal text "undefined" in the prompt if it is defaulted, and the model then
  * answers a question nobody asked.
  */
-function asMessages(value: unknown): ConsultMessage[] | string {
+export function asMessages(value: unknown): ConsultMessage[] | string {
   if (!Array.isArray(value) || value.length === 0) return 'messages required';
 
   const messages: ConsultMessage[] = [];
