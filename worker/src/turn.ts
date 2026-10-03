@@ -304,6 +304,40 @@ async function runTurn(
             )
           ).replyId;
 
+    // The seq of the row just written. Provenance for anything derived from this reply —
+    // cast members, and the fact range below — needs the turn's own coordinate, and `seq`
+    // is only assigned by the insert.
+    const replyRow = await env.DB.prepare('SELECT seq FROM messages WHERE id = ?')
+      .bind(messageId)
+      .first<{ seq: number }>();
+    const replySeq = replyRow?.seq ?? 0;
+
+    // State advances only on a completed turn. Regenerating or continuing rewrites what
+    // the scene says, so folding it into state would record a draft as canon.
+    //
+    // The recovery `continue` is the exception: it completes the turn that was stopped, so
+    // it is the `send` it stands in for and advances state the same way. Without this the
+    // recovered turn would be the one turn in the chat that never touched the world state.
+    //
+    // This runs BEFORE the `done` frame, and that ordering is load-bearing. The turn's own
+    // scene line is the snapshot this writes onto `messageId`, and the client refetches the
+    // transcript the moment it sees `done`. Run behind `waitUntil` (which is where it used
+    // to be) the update takes ~3s against the live cheap model, the refetch found
+    // `state_json` still null, and the newest reply inherited the PREVIOUS turn's clock —
+    // while the state panel, fetched later from the live document, showed the new one.
+    // Reported exactly that way: "22:02 inline, 22:23 in the panel".
+    //
+    // `maybeUpdateState` never throws — every failure path returns `{ applied: false }` —
+    // so a provider problem costs the snapshot, not the turn.
+    if (mode === 'send' || answeringPendingUser) {
+      const stateUser = answeringPendingUser ? target!.content : content;
+      try {
+        await maybeUpdateState(env, chat.id, { user: stateUser, assistant: assistantText }, messageId);
+      } catch (err: unknown) {
+        console.warn(`[state] update failed for chat=${chat.id}: ${messageOf(err)}`);
+      }
+    }
+
     send(controller, {
       type: 'done',
       messageId,
@@ -324,31 +358,7 @@ async function runTurn(
 
     if (usage) await calibrate(env, settings.model, usage.promptTokens, prompt.messages);
 
-    // The seq of the row just written. Provenance for anything derived from this reply —
-    // cast members, and the fact range below — needs the turn's own coordinate, and `seq`
-    // is only assigned by the insert.
-    const replyRow = await env.DB.prepare('SELECT seq FROM messages WHERE id = ?')
-      .bind(messageId)
-      .first<{ seq: number }>();
-    const replySeq = replyRow?.seq ?? 0;
-
-    // State advances only on a completed turn. Regenerating or continuing rewrites what
-    // the scene says, so folding it into state would record a draft as canon.
-    //
-    // The recovery `continue` is the exception: it completes the turn that was stopped, so
-    // it is the `send` it stands in for and advances state the same way. Without this the
-    // recovered turn would be the one turn in the chat that never touched the world state.
     if (mode === 'send' || answeringPendingUser) {
-      const stateUser = answeringPendingUser ? target!.content : content;
-      // `maybeUpdateState` reads the chat's setup and skips the call entirely when the
-      // reader set the mode to `off`, so a scene that tracks nothing pays nothing.
-      ctx.waitUntil(
-        maybeUpdateState(env, chat.id, { user: stateUser, assistant: assistantText }, messageId).catch(
-          (err: unknown) => {
-            console.warn(`[state] update failed for chat=${chat.id}: ${messageOf(err)}`);
-          },
-        ),
-      );
       // Memory runs on the same trigger and for the same reason: the turn is already
       // delivered and persisted, so bookkeeping must not delay it. `scheduleMemory`
       // decides whether enough has accumulated; most turns it does nothing.

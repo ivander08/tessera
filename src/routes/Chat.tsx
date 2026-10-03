@@ -546,8 +546,15 @@ export default function Chat() {
             } else if (frame.type === 'error') {
               failed = true;
               setSendError(frame.message);
-            } else if (frame.type === 'done' && frame.truncated) {
-              setTruncatedId(frame.messageId);
+            } else if (frame.type === 'done') {
+              if (frame.truncated) setTruncatedId(frame.messageId);
+              // The composer unlocks HERE, not when the stream closes. The server holds the
+              // stream open a moment longer to write this turn's scene snapshot before
+              // `done` would otherwise have let the refetch outrun it (see `runTurn`), and
+              // the reply itself is complete the moment this frame arrives. Waiting for the
+              // close instead left the reader watching a locked composer for the length of
+              // a state call they cannot see.
+              setBusy(false);
             }
           },
           { mode, signal: controller.signal, targetId },
