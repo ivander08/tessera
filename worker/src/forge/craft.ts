@@ -68,7 +68,7 @@ says where and when, in the form the narrator can read directly instead of infer
 paragraph. An opening that begins "the rain has not let up since the market closed" states
 "weather": "heavy rain" here. An opening that does not establish a time gets no "time" key —
 leave it out rather than inventing one. An opening with no scene at all gets an empty object.
-State the full real-world date and clock time: "Friday, 27 February 2026, 05:35 AM". A bare
+State the full real-world date and clock time, 24-hour: "Friday, 27 February 2026, 17:35". A bare
 clock ("the small hours") is a fallback for an opening that names no date; a machine
 timestamp (an epoch number or an ISO string) is never correct.
 

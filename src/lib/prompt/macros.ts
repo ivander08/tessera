@@ -77,7 +77,12 @@ function dynamicValue(name: string, context: MacroContext): string | null {
   const now = context.now ?? new Date();
   switch (name) {
     case 'time':
-      return now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      // 24-hour, explicitly. The locale default is 12-hour in en-US, so a bare
+      // `toLocaleTimeString` rendered "05:35 PM" — and this string is fed to the narrator as
+      // the scene's clock, which then advanced it in a format the reader does not use.
+      // `h23` rather than `hour12: false`: the latter maps to `h24` on some engines and
+      // renders midnight as "24:00".
+      return now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
     case 'date':
       return now.toLocaleDateString([], { year: 'numeric', month: 'long', day: 'numeric' });
     case 'weekday':

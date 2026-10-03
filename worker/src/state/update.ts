@@ -86,26 +86,26 @@ const SYSTEM = [
 const TIME_KEY: Record<SceneSetup['timePace'], string> = {
   auto: [
     '  "time"       string  — the real-world clock time of the scene, as a full date and',
-    '                time: "Friday, 27 February 2026, 05:35 AM". Advance it by whatever the',
+    '                time (24-hour): "Friday, 27 February 2026, 05:35". Advance it by whatever the',
     '                exchange implies: a few minutes for a continuous conversation, hours',
     '                when the scene skips ahead, the next morning when it breaks for the',
     '                night. Do not invent a fantasy calendar.',
   ].join('\n'),
   minute: [
     '  "time"       string  — the real-world clock time of the scene, as a full date and',
-    '                time: "Friday, 27 February 2026, 05:35 AM". Advance it by roughly',
+    '                time (24-hour): "Friday, 27 February 2026, 05:35". Advance it by roughly',
     '                one minute per exchange unless the text says otherwise. Do not invent',
     '                a fantasy calendar.',
   ].join('\n'),
   hour: [
     '  "time"       string  — the real-world clock time of the scene, as a full date and',
-    '                time: "Friday, 27 February 2026, 05:35 AM". Advance it by roughly',
+    '                time (24-hour): "Friday, 27 February 2026, 05:35". Advance it by roughly',
     '                one hour per exchange unless the text says otherwise. Do not invent a',
     '                fantasy calendar.',
   ].join('\n'),
   scene: [
     '  "time"       string  — the real-world clock time of the scene, as a full date and',
-    '                time: "Friday, 27 February 2026, 05:35 AM". Change it only when the',
+    '                time (24-hour): "Friday, 27 February 2026, 05:35". Change it only when the',
     '                exchange establishes that time has passed. Do not invent a fantasy',
     '                calendar.',
   ].join('\n'),

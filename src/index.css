@@ -2447,12 +2447,18 @@ html[data-layout="bubble"] .turn-segment:not(:first-child) {
 
 /* The prose has stopped and the card is still being written. Sits under the streamed reply
    in the same quiet register as the pre-first-token dots, because it is the same fact —
-   work in progress — one phase later. */
+   work in progress — one phase later. Sticky to the foot of the transcript so it stays in
+   view while a long reply above it scrolls: it is the only sign the pane is still working,
+   and a long card that scrolls it off the top reads as "done". */
 .consult-working {
+  position: sticky;
+  bottom: 0;
   display: flex;
   align-items: center;
   gap: 9px;
   margin: 6px 0 0;
+  padding: 6px 0;
+  background: var(--surface);
   font-family: var(--font-data);
   font-size: var(--text-xs);
   color: var(--ink-faint);

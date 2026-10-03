@@ -279,7 +279,7 @@ describe('seedOpeningState', () => {
     const { env, sent } = makeEnv();
     stubProvider(
       sent,
-      '{"time":"Friday, 27 February 2026, 05:35 AM","location":"the lantern room",' +
+      '{"time":"Friday, 27 February 2026, 05:35","location":"the lantern room",' +
         '"weather":"warm, clear morning","outfits":{"Quill":"oilskin coat, salt-stained"}}',
     );
 
@@ -296,7 +296,7 @@ describe('seedOpeningState', () => {
 
     expect(result.applied).toBe(true);
     expect(await loadState(env, 'chat-1')).toEqual({
-      time: 'Friday, 27 February 2026, 05:35 AM',
+      time: 'Friday, 27 February 2026, 05:35',
       location: 'the lantern room',
       weather: 'warm, clear morning',
       outfits: { Quill: 'oilskin coat, salt-stained' },

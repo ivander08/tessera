@@ -26,7 +26,7 @@ export function GreetingStateFields({
             className="field"
             data-greeting-state={`${idPrefix}-${field}`}
             value={value[field] ?? ''}
-            placeholder={field === 'time' ? 'Friday, 27 February 2026, 05:35 AM' : ''}
+            placeholder={field === 'time' ? 'Friday, 27 February 2026, 17:35' : ''}
             onChange={(event) => onChange({ [field]: event.target.value })}
           />
         </label>

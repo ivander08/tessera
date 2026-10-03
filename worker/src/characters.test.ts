@@ -142,7 +142,7 @@ describe('greetingStates on a card', () => {
   test('round-trips through the write and the read', async () => {
     const { env } = makeEnv();
     const states: GreetingState[] = [
-      { time: 'Friday, 27 February 2026, 05:35 AM', location: 'The Compass Rose' },
+      { time: 'Friday, 27 February 2026, 05:35', location: 'The Compass Rose' },
       { location: 'The north road', weather: 'Cold, clear' },
     ];
     const id = await store(env, card({ name: 'Ada', greetingStates: states }));
@@ -201,7 +201,7 @@ describe('a chat started from an opening that states its scene', () => {
         name: 'Ada',
         firstMes: 'You are late.',
         alternateGreetings: ['The door is already open.'],
-        greetingStates: [{ time: 'Friday, 27 February 2026, 05:35 AM' }, { location: 'The north road' }],
+        greetingStates: [{ time: 'Friday, 27 February 2026, 05:35' }, { location: 'The north road' }],
       }),
     );
 

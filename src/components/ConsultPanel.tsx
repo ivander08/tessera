@@ -182,16 +182,46 @@ export function ConsultPanel({
    * finished reply.
    */
   const setSession = onSession;
-  const patch = (next: Partial<ConsultSession>) =>
-    setSession({ messages, turn, answer, brief, ...next });
+  // The latest session, read by `patch`. The streaming callbacks below outlive the render
+  // that started them, so reading the fields straight from the closure re-wrote a cleared
+  // composer (and the premise box) with the text that had just been sent.
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const patch = (next: Partial<ConsultSession>) => {
+    const merged = { ...sessionRef.current, ...next };
+    sessionRef.current = merged;
+    setSession(merged);
+  };
+
+  const transcriptRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * Pins the transcript to its foot.
+   *
+   * `scrollTop` is set to `scrollHeight` rather than calling `scrollIntoView` on a sentinel:
+   * the sentinel scroll is animated and can land short when the content above it is still
+   * settling (a long streamed reply, a card whose height changes as it renders), which is
+   * the reported "it stops above the card". The assignment is instant and exact.
+   *
+   * Two frames are needed when the content just changed: the first fires before the new
+   * layout is measurable, the second after it. Harmless when the first already landed.
+   */
+  function scrollToBottom() {
+    const box = transcriptRef.current;
+    if (!box) return;
+    box.scrollTop = box.scrollHeight;
+    requestAnimationFrame(() => {
+      box.scrollTop = box.scrollHeight;
+    });
+  }
 
   // Follow the reply as it streams. The text is the progress indicator, so it must stay in
   // view without the user scrolling after it. `failure` is in the list for the same reason: a
   // card that failed to arrive renders its message at the foot of the transcript, and a
   // failure the reader has to scroll to find reads as "nothing happened".
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ block: 'end' });
-  }, [pending, messages.length, turn, failure]);
+    scrollToBottom();
+  }, [pending, messages.length, turn, failure, busy]);
 
   async function send(content: string) {
     const text = content.trim();
@@ -298,7 +328,7 @@ export function ConsultPanel({
         </span>
       </header>
 
-      <div className="consult-transcript">
+      <div className="consult-transcript" ref={transcriptRef}>
         {mode === 'draft' && messages.length === 0 && (
           <div className="space-y-2">
             <label className="block space-y-1">
