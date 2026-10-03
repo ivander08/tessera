@@ -40,6 +40,9 @@ const MIGRATIONS = [
   '0013_presets_authored.sql',
 
   '0014_provenance.sql',
+
+
+  '0015_supersession_provenance.sql',
 ];
 
 /** `bun-types` types the variadic form too narrowly; one seam keeps the cast out of call sites. */
@@ -196,6 +199,14 @@ describe('extractFacts', () => {
       { text: 'The debt is forty crowns.', status: 'superseded' },
       { text: 'The debt is sixty crowns.', status: 'active' },
     ]);
+
+    // The supersession carries the turn that did it, which is what makes the write
+    // reversible: regenerating that turn away restores the fact it retired. Without this the
+    // column is 0, read as a permanent supersession, and the fact can never come back.
+    const retired = db
+      .query(`SELECT superseded_at_seq FROM facts WHERE text = 'The debt is forty crowns.'`)
+      .get() as { superseded_at_seq: number } | undefined;
+    expect(retired?.superseded_at_seq).toBe(9999);
   });
 
   test('names the REPLACEMENT in superseded_by, never the superseded row itself', async () => {

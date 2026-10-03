@@ -49,6 +49,9 @@ const MIGRATIONS = [
   '0013_presets_authored.sql',
 
   '0014_provenance.sql',
+
+
+  '0015_supersession_provenance.sql',
 ];
 
 function makeEnv(): { env: Env; db: Database } {
@@ -498,6 +501,189 @@ describe('scenario: a cast member from a regenerated-away turn', () => {
       tailExtra: '',
     });
     expect(promptText(restored)).toContain('Bram');
+  });
+});
+
+describe('scenario: supersession by a turn that is later discarded', () => {
+  /**
+   * Turn 10: Ada picks up the brass key  -> fact "Ada holds the brass key".
+   * Turn 20: Ada gives it to Bram        -> fact "Bram holds the brass key", which
+   *                                         SUPERSEDES the first.
+   *
+   * Regenerating turn 20 to "Ada keeps the key" must undo BOTH halves of that turn: the
+   * fact it created goes away (provenance), and the fact it superseded comes back
+   * (supersession provenance). Without the second half the prompt knows nothing about the
+   * key, because the only surviving fact was suppressed by a turn that no longer exists.
+   */
+  function seedSupersession(db: Database): {
+    chat: ChatRow;
+    turn10: { id: string; seq: number };
+    turn20: { id: string; seq: number };
+    turn20b: { id: string; seq: number };
+  } {
+    const chat = seedChat(db);
+    const now = Date.now();
+    // A CHAIN, not three roots. The walk starts at the active root and follows the newest
+    // active child, so rows that all have `parent_id = NULL` are three competing roots and
+    // the path contains only one of them — a fixture that would pass for the wrong reason.
+    const put = (id: string, parentId: string | null, content: string, active: number) => {
+      exec(
+        db,
+        `INSERT INTO messages (id, chat_id, parent_id, role, content, content_tokens, active, created_at)
+         VALUES (?, ?, ?, 'assistant', ?, 20, ?, ?)`,
+        id,
+        CHAT_ID,
+        parentId,
+        content,
+        active,
+        now,
+      );
+      return { id, seq: one<{ seq: number }>(db, 'SELECT seq FROM messages WHERE id = ?', id)!.seq };
+    };
+
+    const turn10 = put('t10', null, 'Ada picks up the brass key.', 1);
+    const turn20 = put('t20', turn10.id, 'Ada gives the key to Bram.', 1);
+    // The regenerated version: a SIBLING of turn 20, so swiping between them swaps the
+    // continuation while the trunk stays put.
+    const turn20b = put('t20b', turn10.id, 'Ada keeps the key.', 0);
+
+    // What turn 10's extraction wrote.
+    exec(
+      db,
+      `INSERT INTO facts (id, chat_id, text, subject, status, pinned, learned_at_seq, created_at)
+       VALUES ('f-ada', ?, 'FACT_ADA Ada holds the brass key.', NULL, 'active', 0, ?, ?)`,
+      CHAT_ID,
+      turn10.seq,
+      now,
+    );
+    // What turn 20's extraction wrote: a new fact, and a supersession of the first.
+    exec(
+      db,
+      `INSERT INTO facts (id, chat_id, text, subject, status, pinned, learned_at_seq, created_at)
+       VALUES ('f-bram', ?, 'FACT_BRAM Bram holds the brass key.', NULL, 'active', 0, ?, ?)`,
+      CHAT_ID,
+      turn20.seq,
+      now,
+    );
+    exec(
+      db,
+      `UPDATE facts SET status = 'superseded', superseded_by = 'f-bram', superseded_at_seq = ?
+        WHERE id = 'f-ada'`,
+      turn20.seq,
+    );
+
+    return { chat, turn10, turn20, turn20b };
+  }
+
+  test('while turn 20 is on the path, the replacement is shown and the original is not', async () => {
+    const { db, env } = makeEnv();
+    const { chat } = seedSupersession(db);
+
+    const prompt = await buildPrompt(env, chat, settings(40000), {
+      mode: 'send',
+      userSeq: null,
+      stateSeq: null,
+      userContent: 'brass key',
+      tailExtra: '',
+    });
+
+    expect(promptText(prompt)).toContain('FACT_BRAM');
+    expect(promptText(prompt)).not.toContain('FACT_ADA');
+  });
+
+  test('regenerating turn 20 restores the superseded fact', async () => {
+    // The whole point. Turn 20 leaves the transcript, so both of its effects are undone:
+    // the fact it created disappears AND the fact it suppressed returns.
+    const { db, env } = makeEnv();
+    const { chat } = seedSupersession(db);
+
+    exec(db, `UPDATE messages SET active = 0 WHERE id = 't20'`);
+    exec(db, `UPDATE messages SET active = 1 WHERE id = 't20b'`);
+
+    const prompt = await buildPrompt(env, chat, settings(40000), {
+      mode: 'send',
+      userSeq: null,
+      stateSeq: null,
+      userContent: 'brass key',
+      tailExtra: '',
+    });
+
+    expect(promptText(prompt)).toContain('FACT_ADA');
+    expect(promptText(prompt)).not.toContain('FACT_BRAM');
+  });
+
+  test('swiping back to turn 20 re-supersedes it, so the pair moves together', async () => {
+    // Symmetry: the restoration must not be a one-way door either.
+    const { db, env } = makeEnv();
+    const { chat } = seedSupersession(db);
+
+    const swap = (activeId: string, inactiveId: string) => {
+      exec(db, `UPDATE messages SET active = 0 WHERE id = ?`, inactiveId);
+      exec(db, `UPDATE messages SET active = 1 WHERE id = ?`, activeId);
+    };
+
+    swap('t20b', 't20');
+    const regenerated = await buildPrompt(env, chat, settings(40000), {
+      mode: 'send',
+      userSeq: null,
+      stateSeq: null,
+      userContent: 'brass key',
+      tailExtra: '',
+    });
+    expect(promptText(regenerated)).toContain('FACT_ADA');
+
+    // Swipe back to the original version.
+    swap('t20', 't20b');
+    const original = await buildPrompt(env, chat, settings(40000), {
+      mode: 'send',
+      userSeq: null,
+      stateSeq: null,
+      userContent: 'brass key',
+      tailExtra: '',
+    });
+    expect(promptText(original)).toContain('FACT_BRAM');
+    expect(promptText(original)).not.toContain('FACT_ADA');
+  });
+
+  test('a fact superseded before the point being written is still suppressed', async () => {
+    // The supersession must keep working when it HAS happened: a later turn still sees Bram
+    // holding the key, because turn 20 is on the path.
+    const { db, env } = makeEnv();
+    const { chat } = seedSupersession(db);
+
+    const prompt = await buildPrompt(env, chat, settings(40000), {
+      mode: 'send',
+      userSeq: null,
+      stateSeq: null,
+      userContent: 'brass key',
+      tailExtra: '',
+    });
+
+    expect(promptText(prompt)).toContain('FACT_BRAM');
+    expect(promptText(prompt)).not.toContain('FACT_ADA');
+  });
+
+  test('a supersession with no recorded turn stays permanent', async () => {
+    // `superseded_at_seq = 0` is a backfilled row: the write happened and there is no record
+    // of when. Treating it as reversible would resurrect facts the reader already watched
+    // disappear.
+    const { db, env } = makeEnv();
+    const { chat } = seedSupersession(db);
+    exec(db, `UPDATE facts SET superseded_at_seq = 0 WHERE id = 'f-ada'`);
+
+    // Take turn 20 off the path; without the guard this would resurrect f-ada.
+    exec(db, `UPDATE messages SET active = 0 WHERE id = 't20'`);
+    exec(db, `UPDATE messages SET active = 1 WHERE id = 't20b'`);
+
+    const prompt = await buildPrompt(env, chat, settings(40000), {
+      mode: 'send',
+      userSeq: null,
+      stateSeq: null,
+      userContent: 'brass key',
+      tailExtra: '',
+    });
+
+    expect(promptText(prompt)).not.toContain('FACT_ADA');
   });
 });
 

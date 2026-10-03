@@ -229,8 +229,9 @@ export async function extractFacts(
     ),
     ...targets.map((target) =>
       env.DB.prepare(
-        `UPDATE facts SET status = 'superseded', superseded_by = ? WHERE id = ? AND chat_id = ?`,
-      ).bind(replacementId, target.id, chatId),
+        `UPDATE facts SET status = 'superseded', superseded_by = ?, superseded_at_seq = ?
+          WHERE id = ? AND chat_id = ?`,
+      ).bind(replacementId, toSeq, target.id, chatId),
     ),
   ];
 

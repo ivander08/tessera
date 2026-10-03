@@ -1,5 +1,7 @@
 import { badRequest, json, notFound, readJson } from '../http';
 import { recall } from './recall';
+import { factStatusSql } from './facts';
+import { VISIBLE_PATH_SEQ_CTE } from '../branch';
 import { renderMemoryBlock } from '../../../src/lib/prompt/memoryBlock';
 import { estimateTokens } from '../../../src/lib/tokenEstimate';
 import type { RecallHit } from '../../../src/lib/memoryTypes';
@@ -36,6 +38,8 @@ interface FactRow {
   status: 'active' | 'superseded';
   superseded_by: string | null;
   pinned: number;
+  learned_at_seq: number;
+  superseded_at_seq: number;
   created_at: number;
 }
 
@@ -54,8 +58,13 @@ export async function listMemory(env: Env, chatId: string): Promise<Response> {
       .bind(chatId)
       .all<SummaryRow>(),
     env.DB.prepare(
-      `SELECT id, text, subject, status, superseded_by, pinned, created_at
-         FROM facts WHERE chat_id = ? ORDER BY pinned DESC, created_at`,
+      // The status is RESOLVED, not raw. A fact superseded by a turn that has since left
+      // the transcript is active again as far as the narrator is concerned, and a panel
+      // that reported "superseded" for it would contradict the prompt it is explaining.
+      `${VISIBLE_PATH_SEQ_CTE}
+       SELECT id, text, subject, ${factStatusSql('facts')} AS status, superseded_by,
+              pinned, learned_at_seq, superseded_at_seq, created_at
+         FROM facts WHERE chat_id = ?1 ORDER BY pinned DESC, created_at`,
     )
       .bind(chatId)
       .all<FactRow>(),

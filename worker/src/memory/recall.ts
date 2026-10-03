@@ -1,5 +1,6 @@
 import { buildMatchQuery } from './fts';
 import { VISIBLE_PATH_SEQ_CTE } from '../branch';
+import { factIsTrueSql } from './facts';
 
 export type { RecallHit, RecallKind } from '../../../src/lib/memoryTypes';
 import type { RecallHit } from '../../../src/lib/memoryTypes';
@@ -93,14 +94,8 @@ export async function recall(
               f.text AS text, f.id AS ref_id
          FROM facts_fts
          JOIN facts f ON f.rowid = facts_fts.rowid
-        WHERE facts_fts MATCH ?2 AND f.chat_id = ?1 AND f.status = 'active'
-          AND (
-            f.learned_at_seq = 0
-            OR (
-              (?4 IS NULL OR f.learned_at_seq < ?4)
-              AND EXISTS (SELECT 1 FROM path WHERE path.seq = f.learned_at_seq)
-            )
-          )
+        WHERE facts_fts MATCH ?2 AND f.chat_id = ?1
+          AND ${factIsTrueSql('f', '?4')}
         ORDER BY score
         LIMIT ?3`,
     )
@@ -123,21 +118,13 @@ export async function recall(
       .all<FtsRow>(),
 
     env.DB.prepare(
-      // Pinning overrides RANKING, never status: a pinned fact that has since been
-      // superseded is still superseded, and must not be presented as established.
-      //
-      // It does not override PROVENANCE either. A pinned fact is still a fact produced by
-      // some turn, and pinning it does not make it true at an earlier point in the story.
+      // Pinning overrides RANKING, never status or provenance: a pinned fact that has since
+      // been superseded is still superseded, and a pinned fact recorded at turn 5 is still
+      // not true at turn 4.
       `${VISIBLE_PATH_SEQ_CTE}
        SELECT id, text FROM facts
-        WHERE chat_id = ?1 AND pinned = 1 AND status = 'active'
-          AND (
-            learned_at_seq = 0
-            OR (
-              (?2 IS NULL OR learned_at_seq < ?2)
-              AND EXISTS (SELECT 1 FROM path WHERE path.seq = facts.learned_at_seq)
-            )
-          )
+        WHERE chat_id = ?1 AND pinned = 1
+          AND ${factIsTrueSql('facts', '?2')}
         ORDER BY created_at`,
     )
       .bind(chatId, beforeSeq)

@@ -37,6 +37,8 @@ const MIGRATIONS = [
   '0012_message_deleted.sql',
   '0013_presets_authored.sql',
   '0014_provenance.sql',
+
+  '0015_supersession_provenance.sql',
 ];
 
 function makeEnv(): { env: Env; db: Database } {
