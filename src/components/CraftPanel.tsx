@@ -2,9 +2,8 @@ import { useState } from 'react';
 import { apiJson } from '../lib/api';
 import { messageOf, useAsync } from '../lib/hooks';
 import {
+  CRAFT_ENUMS,
   CRAFT_TOGGLES,
-  POV_OPTIONS,
-  REGISTER_OPTIONS,
   TIME_PACE_OPTIONS,
   type Craft,
   type SceneSetup,
@@ -116,49 +115,30 @@ export function CraftPanel({ chatId }: { chatId: string }) {
             </label>
           ))}
 
-          <label className="form-row">
-            <span className="form-label">
-              <span>Narrative person</span>
-              <span className="form-hint">
-                {POV_OPTIONS.find((option) => option.value === craft.pov)?.description}
+          {CRAFT_ENUMS.map((entry) => (
+            <label key={entry.key} className="form-row">
+              <span className="form-label">
+                <span>{entry.label}</span>
+                <span className="form-hint">
+                  {entry.options.find((option) => option.value === craft[entry.key])?.description}
+                </span>
               </span>
-            </span>
-            <select
-              className="field"
-              value={craft.pov}
-              disabled={busy}
-              onChange={(event) => void patch({ pov: event.target.value as Craft['pov'] })}
-            >
-              {POV_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="form-row">
-            <span className="form-label">
-              <span>Prose register</span>
-              <span className="form-hint">
-                {REGISTER_OPTIONS.find((option) => option.value === craft.register)?.description}
-              </span>
-            </span>
-            <select
-              className="field"
-              value={craft.register}
-              disabled={busy}
-              onChange={(event) =>
-                void patch({ register: event.target.value as Craft['register'] })
-              }
-            >
-              {REGISTER_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
+              <select
+                className="field"
+                value={craft[entry.key] as string}
+                disabled={busy}
+                onChange={(event) =>
+                  void patch({ [entry.key]: event.target.value } as Partial<Craft>)
+                }
+              >
+                {entry.options.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ))}
         </>
       )}
     </div>

@@ -113,11 +113,51 @@ describe('parseSceneSetup — craft', () => {
         earnedKnowledge: false,
         independentNpcs: true,
         vocalisation: false,
+        antiParrot: false,
+        stagnation: true,
+        impulseFirst: false,
+        subtext: true,
+        dialogueState: false,
+        livingWorld: true,
+        sideCharacters: false,
+        nomenclature: true,
+        wordplay: true,
+        dialects: true,
+        momentum: 'driving',
+        tense: 'present',
+        showTell: 'show',
+        narrativeDistance: 'fid',
+        responseLength: 'adaptiveLong',
+        density: 'dense',
+        rhythm: 'percussive',
+        figurative: 'saturated',
+        vocabulary: 'ornate',
+        profanity: 'heavy',
+        dialogueFrequency: 'talkative',
+        dialogueNaturalism: 'verbatim',
+        dialogueDepth: 'philosophical',
+        changeResistance: 'entrenched',
+        traitAdherence: 'exaggerated',
+        consequence: 'reset',
         bonds: true,
         threads: false,
       },
     };
     expect(parseSceneSetup(JSON.parse(JSON.stringify(setup)))).toEqual(setup);
+  });
+
+  test('an unknown member of a new enum falls back per field', () => {
+    const parsed = parseSceneSetup({
+      craft: { momentum: 'nonsense', dialogueDepth: 'nonsense' },
+    });
+    expect(parsed.craft.momentum).toBe(DEFAULT_CRAFT.momentum);
+    expect(parsed.craft.dialogueDepth).toBe(DEFAULT_CRAFT.dialogueDepth);
+  });
+
+  test('a new boolean with a wrong type falls back', () => {
+    const parsed = parseSceneSetup({ craft: { antiParrot: 'yes', livingWorld: 1 } });
+    expect(parsed.craft.antiParrot).toBe(DEFAULT_CRAFT.antiParrot);
+    expect(parsed.craft.livingWorld).toBe(DEFAULT_CRAFT.livingWorld);
   });
 
   test('a patch turning vocalisation off leaves the other craft fields at the fallback', () => {

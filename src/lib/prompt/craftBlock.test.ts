@@ -47,6 +47,32 @@ describe('renderCraftBlock', () => {
       earnedKnowledge: false,
       independentNpcs: false,
       vocalisation: false,
+      antiParrot: false,
+      stagnation: false,
+      impulseFirst: false,
+      subtext: false,
+      dialogueState: false,
+      livingWorld: false,
+      sideCharacters: false,
+      nomenclature: false,
+      wordplay: false,
+      dialects: false,
+      momentum: 'off',
+      tense: 'off',
+      showTell: 'off',
+      narrativeDistance: 'off',
+      responseLength: 'off',
+      density: 'off',
+      rhythm: 'off',
+      figurative: 'off',
+      vocabulary: 'off',
+      profanity: 'off',
+      dialogueFrequency: 'off',
+      dialogueNaturalism: 'off',
+      dialogueDepth: 'off',
+      changeResistance: 'off',
+      traitAdherence: 'off',
+      consequence: 'off',
       bonds: false,
       threads: false,
     };
@@ -64,6 +90,32 @@ describe('renderCraftBlock', () => {
       earnedKnowledge: false,
       independentNpcs: true,
       vocalisation: true,
+      antiParrot: false,
+      stagnation: true,
+      impulseFirst: false,
+      subtext: true,
+      dialogueState: false,
+      livingWorld: true,
+      sideCharacters: false,
+      nomenclature: true,
+      wordplay: false,
+      dialects: true,
+      momentum: 'driving',
+      tense: 'past',
+      showTell: 'show',
+      narrativeDistance: 'fid',
+      responseLength: 'short',
+      density: 'dense',
+      rhythm: 'percussive',
+      figurative: 'saturated',
+      vocabulary: 'ornate',
+      profanity: 'heavy',
+      dialogueFrequency: 'talkative',
+      dialogueNaturalism: 'verbatim',
+      dialogueDepth: 'philosophical',
+      changeResistance: 'entrenched',
+      traitAdherence: 'exaggerated',
+      consequence: 'reset',
       bonds: true,
       threads: true,
     };
@@ -83,6 +135,76 @@ describe('renderCraftBlock', () => {
     for (const variant of variants) {
       expect(renderCraftBlock(variant)).not.toBe(base);
     }
+  });
+
+  test('the default craft emits the new quality blocks and the enum lines', () => {
+    const block = renderCraftBlock(DEFAULT_CRAFT);
+    for (const tag of [
+      '<craft_no_echo>',
+      '<craft_motion>',
+      '<craft_impulse>',
+      '<craft_subtext>',
+      '<craft_dialogue>',
+      '<craft_world>',
+      '<craft_side_characters>',
+      '<craft_naming>',
+      '<craft_momentum>',
+      '<craft_show_tell>',
+      '<craft_distance>',
+      '<craft_length>',
+      '<craft_density>',
+      '<craft_rhythm>',
+      '<craft_figurative>',
+      '<craft_vocabulary>',
+      '<craft_profanity>',
+      '<craft_dialogue_frequency>',
+      '<craft_dialogue_naturalism>',
+      '<craft_dialogue_depth>',
+      '<craft_change_resistance>',
+      '<craft_trait_adherence>',
+      '<craft_consequence>',
+    ]) {
+      expect(block).toContain(tag);
+    }
+  });
+
+  test('the default craft leaves the genre switches off', () => {
+    // Wordplay and dialects are genre switches, not quality rules: on by default they
+    // would change every scene's genre, so the defaults keep them out of the prompt.
+    const block = renderCraftBlock(DEFAULT_CRAFT);
+    expect(block).not.toContain('<craft_wordplay>');
+    expect(block).not.toContain('<craft_dialect>');
+    expect(renderCraftBlock({ ...DEFAULT_CRAFT, wordplay: true })).toContain('<craft_wordplay>');
+    expect(renderCraftBlock({ ...DEFAULT_CRAFT, dialects: true })).toContain('<craft_dialect>');
+  });
+
+  test('a toggled-off block leaves no tag behind', () => {
+    expect(renderCraftBlock({ ...DEFAULT_CRAFT, stagnation: false })).not.toContain(
+      '<craft_motion>',
+    );
+    expect(renderCraftBlock({ ...DEFAULT_CRAFT, subtext: false })).not.toContain('<craft_subtext>');
+  });
+
+  test("an 'off' enum drops its wrapper and its line", () => {
+    const off = renderCraftBlock({ ...DEFAULT_CRAFT, momentum: 'off' });
+    expect(off).not.toContain('<craft_momentum>');
+    expect(off).not.toContain('pursue their own aims');
+    // Tense has no wrapper: its line is bare, and 'off' removes it entirely.
+    expect(renderCraftBlock({ ...DEFAULT_CRAFT, tense: 'off' })).not.toContain('Narration is in');
+    expect(renderCraftBlock({ ...DEFAULT_CRAFT, tense: 'past' })).toContain(
+      'Narration is in past tense.',
+    );
+  });
+
+  test('the dialogue-frequency line carries the silence allowance', () => {
+    // The allowance is the point of the block: without it a percentage target reads as a
+    // prohibition on silence.
+    expect(renderCraftBlock(DEFAULT_CRAFT)).toContain(
+      'A silent scene is allowed when silence is right.',
+    );
+    expect(renderCraftBlock({ ...DEFAULT_CRAFT, dialogueFrequency: 'off' })).not.toContain(
+      'A silent scene is allowed',
+    );
   });
 
   test('vocalisation is NOT in the prefix, whatever its toggle says', () => {

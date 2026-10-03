@@ -48,10 +48,21 @@ describe('Markdown', () => {
 
   test('preserves line breaks inside a paragraph', () => {
     // State blocks are one field per line; collapsing them into a single run would make
-    // them unreadable.
+    // them unreadable. Asserted as one contiguous string, because `toContain` on each
+    // line separately would pass even if the newline between them were dropped.
     const html = render('Location: here\nTime: now');
-    expect(html).toContain('Location: here');
-    expect(html).toContain('Time: now');
+    // `renderToStaticMarkup` writes the void element as `<br/>`; the assertion is about
+    // the break existing between the two lines at all.
+    expect(html).toContain('Location: here<br/>Time: now');
+  });
+
+  test('keeps a line break in a paragraph that also holds dialogue', () => {
+    // The speech-marking path flattens the paragraph and slices it by offset; a `br`
+    // token is text-bearing there, so without the explicit `<br>` it rendered as a bare
+    // newline the browser collapsed back into a space.
+    const html = render('"Huh?"\n*Sits down.*\nI wait.');
+    expect(html.match(/<br/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+    expect(html).toContain('<span class="md-speech">&quot;Huh?&quot;</span>');
   });
 });
 

@@ -94,7 +94,9 @@ replace the global ones wholesale.
 
 ## 2. "How it's written" — the full prompt text
 
-Nine controls, all per-chat, all in the **cached prefix** except the content policy.
+Thirty-six controls, all per-chat: eighteen switches and eighteen enums. All in the
+**cached prefix** except the content policy and the vocalisation block, which are tail
+blocks for the measured position reason below.
 
 > **Position note.** The content policy is deliberately in the **tail**, not the
 > prefix. Measured against the local model: the same text in the prefix was refused;
@@ -107,6 +109,52 @@ Nine controls, all per-chat, all in the **cached prefix** except the content pol
 <craft>
 Address the reader as "you". Never write their actions, words or thoughts.
 Concrete and visual. Name what is in the room, what it sounds like, what it does.
+<craft_momentum>
+The turn resolves the reader's input and carries the scene forward on its own: characters pursue their own aims and events continue whether or not the reader drives them.
+</craft_momentum>
+<craft_show_tell>
+Emotion and traits may be named where naming is efficient, and shown through physical action otherwise.
+</craft_show_tell>
+<craft_distance>
+Narration takes on the POV character's perceptions and biases: what gets noticed, ignored, assumed, or misread reflects who they are and their state of mind.
+</craft_distance>
+<craft_length>
+Length follows the beat: developmental under eight, transitional under four, reactive under three, climax under ten. Dialogue paragraphs do not count.
+</craft_length>
+<craft_density>
+One to five sentences per paragraph: conventional novel paragraphing. A paragraph holds one beat and closes.
+</craft_density>
+<craft_rhythm>
+Sentence length follows what the scene is doing: physical action gets short sentences and fragments with visceral verbs; interiority and observation get longer, subordinated sentences.
+</craft_rhythm>
+<craft_figurative>
+Default to literal description. Figurative language is reserved for beats that carry weight — emotional turns, first sight of something significant, moments of extremity; routine action and functional description stay literal.
+</craft_figurative>
+<craft_vocabulary>
+Word choice derives from the POV character: class, education, age, occupation, and era.
+</craft_vocabulary>
+<craft_profanity>
+Characters and narration swear as much as the situation warrants; explicit swears are allowed.
+</craft_profanity>
+<craft_dialogue_frequency>
+Conversations run to natural length: roughly half dialogue, half narration.
+A silent scene is allowed when silence is right.
+</craft_dialogue_frequency>
+<craft_dialogue_naturalism>
+Speech loosens: slang, regional phrasing, fragments, characters talking over each other and trailing off.
+</craft_dialogue_naturalism>
+<craft_dialogue_depth>
+Depth follows the speaker and the moment: functional exchanges stay functional; pressure, intimacy, and idleness are when characters reach for larger statements. Education, temperament, and self-awareness cap how abstract a character gets.
+</craft_dialogue_depth>
+<craft_change_resistance>
+Resistance scales: preferences, tactics, and surface opinions move easily; identity-level convictions and beliefs tied to self-image require sustained pressure and resist reverting.
+</craft_change_resistance>
+<craft_trait_adherence>
+Traits reliably inform behavior.
+</craft_trait_adherence>
+<craft_consequence>
+Injury, damage, and loss do not reverse: wounds heal at realistic rates or not at all, broken things stay broken unless repaired, and the dead stay dead.
+</craft_consequence>
 <craft_antislop>
 Write what a thing IS. One direct assertion; no negated foil, no balanced halves.
 The shape counts whatever the wording: "not X, but Y" | "isn't X — it's Y" | "not just
@@ -163,10 +211,76 @@ happens. When an NPC wants something, they take the step and live with the answe
 An NPC answers from their own wants, never by reflecting the reader's feelings back.
 At most one question a turn, and only one they want answered for their own reasons.
 </craft_independent_npcs>
+<craft_no_echo>
+Never repeat, parrot, or echo the reader's words back — not a phrase, not a single
+word, not as a question or for clarification. Where a pause or reaction beat is
+needed, use a physical action or silence instead of the reader's own line.
+</craft_no_echo>
+<craft_motion>
+Something changes by the end of every turn. If nothing has, introduce a complication.
+Do not reuse a gesture, phrasing, injury, or detail the last few turns already used,
+and do not open a turn in the previous turn's shape.
+Flip the modality: if the previous beat was internal, this one is external; if it was
+dialogue-led, this one leads with sensation or the physical.
+</craft_motion>
+<craft_impulse>
+The flaw-driven urge comes first: the cowardice, jealousy, or pride fires before
+reason, and reason then overrides it, fails to, or arrives too late.
+Empathy costs energy. A character who is starving, dehydrated, exhausted, or injured
+degrades into selfish reactivity: blunt, irritable, unable to comfort.
+</craft_impulse>
+<craft_subtext>
+Characters deflect: silence, a subject change, or an answer to a different question.
+Hard questions get non-answers where the character has a reason to evade. Characters
+filter others through their own insecurities and may reach wrong conclusions; a
+misread stands until something corrects it.
+No one-upmanship. A character does not refine or improve the reader's sound idea to
+look competent — genuine agreement is allowed. No character needs the last clever
+line: when the reader wins a point, show stunned silence or frustrated acceptance.
+New information can expose real knowledge gaps; a character says "I don't know"
+rather than improvising authority.
+</craft_subtext>
+<craft_dialogue>
+Each character speaks in their own recognizable idiolect: vocabulary, rhythm, and
+sentence shape come from their background and stay consistent across the scene.
+Current state bends the line without breaking the voice:
+  anger      -> clipped syntax, hedges dropped, volume shown by word choice
+  fear       -> fragments, false starts, sentences that restart
+  drunk      -> lost trains of thought, repetition, inappropriate honesty
+  exhausted  -> shorter utterances, delays, missing words
+  lying      -> over-specific detail, hedging, unnatural smoothness or stutter
+  seduction  -> slower rhythm, more pauses, suggestive ambiguity
+  authority  -> fewer words, statements over questions
+An interruption cuts the previous speaker off with an em dash.
+</craft_dialogue>
+<craft_world>
+The world is shown, never explained: magic, technology, and power systems appear
+through everyday use, not narrator exposition. Oaths, curses, and metaphors come from
+the setting's own cosmology and material culture.
+The world runs whether or not the reader is watching. Each turn draws on one or two:
+someone mid-task, the tail of a conversation, a market hour, a feud, a repair —
+something unrelated to the reader that is already underway and progresses between
+scenes.
+A location the scene returns to keeps at least one specific detail from its last
+appearance. Background figures stay unnamed until they do something the story will
+return to.
+</craft_world>
+<craft_side_characters>
+Each new side character is a distinct archetype with one defining flaw or quirk — a
+tic, a vice, a verbal habit — that shapes the first interaction. Their voice differs
+audibly from the previous side character's. Some initiate, some withhold; some
+respect the reader, some dismiss them. Each enters mid-activity, mid-mood, or
+mid-distraction: the reader is interrupting something.
+</craft_side_characters>
+<craft_naming>
+New characters, locations, and items get names rooted in their culture or
+environment — compound words or in-world linguistic roots. Reject generic fantasy
+names and stock name lists.
+</craft_naming>
 </craft>
 ```
 
-**Each block is switched by one control.** With all ten off, the function returns
+**Each block is switched by one control.** With everything off, the function returns
 `''` and your system prompt governs alone.
 
 ### Where the preset techniques went
@@ -186,8 +300,15 @@ chat rather than in a file:
 
 Every one of these **replaced or extended** an existing line rather than being appended:
 the Douyin README warns that a sparse-attention model *"HATES long, complex presets… the
-harder you micromanage a SA model, the more of your instructions it drops."* The net
-growth of `craftBlock.ts` was kept under 25 lines.
+harder you micromanage a SA model, the more of your instructions it drops."*
+
+The same rule governed the second port, from *Writer's Block Unlimited v2*: ten switches
+and sixteen enums of writing craft — anti-parrot, forward motion, impulse-first,
+subtext, dialogue state, living world, side characters, nomenclature, wordplay, dialects,
+and the prose enums (`craft_momentum` … `craft_consequence`). The preset's own sampler
+values and regex scripts were **not** ported: Tessera owns samplers globally and has no
+regex pipeline. Its prose rules were transcribed into `craftBlock.ts`, which is why that
+file is now much longer than the anti-slop block it started as.
 
 `<craft_vocalisation>` is **not** in the prefix — it is emitted into the tail, beside the
 content policy, for the same measured reason. See below.
@@ -273,7 +394,9 @@ and produced `"Mmph—"`, `"Hn—"`. The **per-category probe** (16 beats, fresh
 the stable measurement: it moved 32 → 50 devices between v4 and v5, with multi-punctuation
 and ellipsis going 0 → 10 each. Judge the block on that, not on one scenario's count.
 
-### The ten controls
+### The controls
+
+Thirty-six, all per-chat. Eighteen switches:
 
 | Control | Default | Effect |
 |---|---|---|
@@ -283,13 +406,56 @@ and ellipsis going 0 → 10 each. Judge the block on that, not on one scenario's
 | **Earned knowledge** | on | `<craft_earned_knowledge>` |
 | **Independent NPCs** | on | `<craft_independent_npcs>` |
 | **Vocalisation** | on | `<craft_vocalisation>` |
+| **Anti-parrot** | on | `<craft_no_echo>` |
+| **Forward motion** | on | `<craft_motion>` |
+| **Impulse first** | on | `<craft_impulse>` |
+| **Subtext** | on | `<craft_subtext>` |
+| **Dialogue state** | on | `<craft_dialogue>` |
+| **Living world** | on | `<craft_world>` |
+| **Side characters** | on | `<craft_side_characters>` |
+| **Nomenclature** | on | `<craft_naming>` |
+| **Wordplay** | **off** | `<craft_wordplay>` |
+| **Dialects** | **off** | `<craft_dialect>` |
 | **Track relationships** | **off** | bonds in world state |
 | **Track plot threads** | **off** | threads in world state |
-| **Narrative person** | Second person | or First / Third / *Leave it to the preset* |
-| **Prose register** | Cinematic | or Plain / Literary / *Leave it to the preset* |
 
-The two enum fields carry an **"off"** member, because suppressing an instruction is a
+And eighteen enums, each leading with *Leave it to the card* (`'off'`), which emits
+nothing:
+
+| Control | Default | Other members |
+|---|---|---|
+| **Narrative person** | Second person | First / Third / *off* |
+| **Prose register** | Cinematic | Plain / Literary / *off* |
+| **Plot momentum** | Active | Responsive / Driving / *off* |
+| **Tense** | **off** | Past / Present |
+| **Show vs tell** | Balanced | Show / Show weighted / Tell weighted / Tell / Adaptive / *off* |
+| **Narrative distance** | Close | Remote / Objective / Standard / Free indirect discourse / Adaptive / *off* |
+| **Response length** | Adaptive medium | Short / Medium / Long / No set limit / Adaptive short / Adaptive long / *off* |
+| **Paragraph density** | Standard | Minimal / Light / Full / Dense / Adaptive / *off* |
+| **Sentence rhythm** | Dynamic | Uniform / Sprawling / Percussive / *off* |
+| **Figurative language** | Adaptive | None / Sparse / Moderate / Rich / Saturated / *off* |
+| **Vocabulary** | Adaptive | Plain / Clean / Literary / Ornate / Purple / *off* |
+| **Profanity** | Natural | Light / Heavy / Setting appropriate / *off* |
+| **Dialogue frequency** | Balanced | Silent / Sparse / Often / Talkative / *off* |
+| **Dialogue naturalism** | Casual | Literary / Verbatim / *off* |
+| **Dialogue depth** | Realistic | Surface / Simple / Grounded / Layered / Philosophical / *off* |
+| **Change resistance** | Adaptive | Fluid / Responsive / Resistant / Entrenched / *off* |
+| **Trait adherence** | Natural | Restrained / Pronounced / Exaggerated / *off* |
+| **Consequence persistence** | Realistic | Persistent / Soft / Resets / *off* |
+
+Every enum carries an **"off"** member, because suppressing an instruction is a
 first-class choice, not an absent value.
+
+**Three defaults are deliberately not "on":**
+
+- **Wordplay** and **Dialects** are genre switches, not quality rules. On by default they
+  would change every scene's genre — comedy misreadings in a tragedy, Earth dialect
+  tables in a secondary-world fantasy. Off means the reader opts in.
+- **Tense** is `'off'` because the greeting establishes it. Forcing past or present
+  fights every imported card whose opening is written in the other one.
+
+Every other new default is on, per the reader's instruction. Flip any of them in
+`DEFAULT_CRAFT` (`src/lib/scene/setup.ts`).
 
 ---
 

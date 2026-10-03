@@ -1,5 +1,5 @@
 import { Fragment, type ReactNode } from 'react';
-import { marked, type Token, type Tokens } from 'marked';
+import { Marked, type Token, type Tokens } from 'marked';
 
 /**
  * Renders a message as React elements, never as HTML.
@@ -18,8 +18,23 @@ import { marked, type Token, type Tokens } from 'marked';
 /** Token types that carry no visible output at this level. */
 const SILENT = new Set(['space', 'def']);
 
+/**
+ * A lexer configured so a single newline inside a paragraph is a real line break.
+ *
+ * Marked's default is CommonMark, where a soft break collapses to a space — so every
+ * line the reader typed in the composer rendered as one paragraph. `breaks: true` is
+ * the GFM hard-break behavior the transcript wants.
+ *
+ * Built as an instance rather than by passing options to `marked.lexer()`: the static
+ * entrypoint does NOT merge partial options with the defaults, so `{ breaks: true }`
+ * alone silently drops `gfm` — and `breaks` is only honored when `gfm` is on. Verified
+ * against marked 18: `marked.lexer(src, { breaks: true })` emits no `br` tokens; a
+ * `Marked` configured with `breaks: true` does.
+ */
+const md = new Marked({ breaks: true });
+
 export function Markdown({ content }: { content: string }): ReactNode {
-  const tokens = marked.lexer(content);
+  const tokens = md.lexer(content);
   return <>{renderBlocks(tokens, 'root')}</>;
 }
 
@@ -163,7 +178,7 @@ function renderHtmlBlock(raw: string, key: string): ReactNode {
       <summary className="md-summary">{summary}</summary>
       {/* The body is itself markdown in practice — a state block is one line per
           field — so it goes through the same renderer rather than being shown raw. */}
-      <div className="md-details-body">{renderBlocks(marked.lexer(body), `${key}-body`)}</div>
+      <div className="md-details-body">{renderBlocks(md.lexer(body), `${key}-body`)}</div>
     </details>
   );
 }
@@ -246,6 +261,18 @@ function renderInline(tokens: Token[], keyPrefix: string): ReactNode[] {
 
   for (const run of runs) {
     const text = run.text;
+
+    // A line break is structure, not characters. Left to the slicing below it renders
+    // as a bare newline, which the browser collapses back into a space — the exact bug
+    // `breaks: true` exists to fix. Keyed on the offset, which is unique per br (each
+    // advances the offset by one).
+    if (run.token.type === 'br') {
+      const brStart = offset;
+      offset += 1;
+      out.push(<br key={`${keyPrefix}-br${brStart}`} />);
+      continue;
+    }
+
     if (text === null) {
       // A styled or non-text run: emitted whole, keeping its own rendering.
       out.push(renderBlockInline(run.token, `${keyPrefix}-r${offset}`));
