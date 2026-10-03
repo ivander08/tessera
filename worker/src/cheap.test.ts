@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { encryptKey } from '../../src/lib/crypto';
 import { complete, parseJsonReply, streamCheap } from './cheap';
+import { estimateTokens } from '../../src/lib/tokenEstimate';
 
 /**
  * The side-channel transport, and the two things about it that a caller cannot see by
@@ -20,16 +21,17 @@ const SETTINGS = [
   { key: 'cheapModel', value: 'deepseek-v4-flash' },
 ];
 
-async function configuredEnv(): Promise<Env> {
+async function configuredEnv(extra: Array<{ key: string; value: string }> = []): Promise<Env> {
   const { enc, iv } = await encryptKey('sk-test', TOKEN);
   const keyRow = { key_enc: new Uint8Array(enc), iv: new Uint8Array(iv) };
+  const settings = [...SETTINGS, ...extra];
 
   return {
     DB: {
       prepare: (sql: string) => {
         const statement = {
           bind: () => statement,
-          all: async () => ({ results: sql.includes('FROM settings') ? SETTINGS : [] }),
+          all: async () => ({ results: sql.includes('FROM settings') ? settings : [] }),
           first: async () => keyRow,
           run: async () => ({}),
         };
@@ -229,6 +231,129 @@ describe('streamCheap', () => {
         ).rejects.toThrow(/used all 512 tokens without producing an answer/);
       },
     );
+  });
+});
+
+describe('cheapContextBudget', () => {
+  const filler = 'word '.repeat(50);
+
+  test('drops the oldest conversation turns, keeping the instruction and the last message', async () => {
+    const env = await configuredEnv([{ key: 'cheapContextBudget', value: '60' }]);
+    const sent = await withFetch(
+      () => bufferedReply('{"ok":true}', 'stop'),
+      async (bodies) => {
+        await streamCheap(env, {
+          system: 'SYS',
+          messages: [
+            { role: 'user', content: `old1 ${filler}` },
+            { role: 'assistant', content: `old2 ${filler}` },
+            { role: 'user', content: `old3 ${filler}` },
+            { role: 'user', content: 'newest question' },
+          ],
+        });
+        return bodies;
+      },
+    );
+
+    const messages = sent[0].messages as Array<{ role: string; content: string }>;
+    expect(messages).toEqual([
+      { role: 'system', content: 'SYS' },
+      { role: 'user', content: 'newest question' },
+    ]);
+  });
+
+  test('keeps a context block in preference to an old conversation turn', async () => {
+    // The precedence that matters: the transcript is disposable, the scene is not. A guard
+    // that dropped the character card while keeping four old questions would be the wrong
+    // trade in exactly the case it exists for.
+    const ctx = 'c '.repeat(40);
+    const turn = 't '.repeat(40);
+    const full =
+      estimateTokens('SYS') + estimateTokens(ctx) + estimateTokens(turn) + estimateTokens('n');
+    const env = await configuredEnv([
+      { key: 'cheapContextBudget', value: String(full - estimateTokens(turn)) },
+    ]);
+
+    const sent = await withFetch(
+      () => bufferedReply('{"ok":true}', 'stop'),
+      async (bodies) => {
+        await streamCheap(env, {
+          system: 'SYS',
+          messages: [
+            { role: 'system', content: ctx },
+            { role: 'user', content: turn },
+            { role: 'user', content: 'n' },
+          ],
+        });
+        return bodies;
+      },
+    );
+
+    const messages = sent[0].messages as Array<{ role: string; content: string }>;
+    expect(messages.map((message) => message.content)).toEqual(['SYS', ctx, 'n']);
+  });
+
+  test('sends an over-budget one-shot unsplit rather than dropping the instruction', async () => {
+    // With only an instruction and a payload there is nothing disposable. Refusing to
+    // answer is not better than answering a slightly large prompt, so it goes as-is.
+    const env = await configuredEnv([{ key: 'cheapContextBudget', value: '10' }]);
+    const sent = await withFetch(
+      () => bufferedReply('{"ok":true}', 'stop'),
+      async (bodies) => {
+        await complete(env, { system: 'SYS', user: filler });
+        return bodies;
+      },
+    );
+
+    const messages = sent[0].messages as Array<{ role: string; content: string }>;
+    expect(messages).toEqual([
+      { role: 'system', content: 'SYS' },
+      { role: 'user', content: filler },
+    ]);
+  });
+
+  test('zero means no ceiling, not "drop everything"', async () => {
+    // A falsy fallback would have turned this into a real cap, which is why the setting is
+    // parsed without one.
+    const env = await configuredEnv([{ key: 'cheapContextBudget', value: '0' }]);
+    const sent = await withFetch(
+      () => bufferedReply('{"ok":true}', 'stop'),
+      async (bodies) => {
+        await streamCheap(env, {
+          system: 'SYS',
+          messages: [
+            { role: 'user', content: `a ${filler}` },
+            { role: 'user', content: `b ${filler}` },
+            { role: 'user', content: 'newest' },
+          ],
+        });
+        return bodies;
+      },
+    );
+
+    const messages = sent[0].messages as Array<{ role: string; content: string }>;
+    expect(messages).toHaveLength(4);
+  });
+
+  test('a prompt inside the budget is left byte-identical', async () => {
+    const env = await configuredEnv([{ key: 'cheapContextBudget', value: '100000' }]);
+    const sent = await withFetch(
+      () => bufferedReply('{"ok":true}', 'stop'),
+      async (bodies) => {
+        await streamCheap(env, {
+          system: 'SYS',
+          messages: [
+            { role: 'user', content: 'one' },
+            { role: 'assistant', content: 'two' },
+            { role: 'user', content: 'three' },
+          ],
+        });
+        return bodies;
+      },
+    );
+
+    const messages = sent[0].messages as Array<{ role: string; content: string }>;
+    expect(messages.map((message) => message.content)).toEqual(['SYS', 'one', 'two', 'three']);
   });
 });
 

@@ -4,6 +4,7 @@ import { keyErrorMessage, loadProviderKey } from './keys';
 import { getProvider } from './providers';
 import type { Provider, WireMessage } from './providers/types';
 import { parseSse } from '../../src/lib/sse';
+import { estimateTokens } from '../../src/lib/tokenEstimate';
 
 /**
  * The "cheap model" used for side-channel work: memory summarization, world-state
@@ -42,6 +43,63 @@ interface Prepared {
   model: string;
   url: string;
   init: RequestInit;
+}
+
+/**
+ * Trims a cheap call's input to the configured ceiling by DROPPING WHOLE MESSAGES.
+ *
+ * Never truncates a message's text, and that is the whole point. Two of the callers
+ * (`summarize`, `extractFacts`) cover a fixed seq range and record that range as covered
+ * when they finish; a summary generated from a silently clipped transcript would claim to
+ * cover messages it never read, and nothing downstream could ever detect it. Dropping a
+ * whole message is at least visible — the seq numbers the summarizer is handed make a gap
+ * legible in the text.
+ *
+ * Index 0 is the instruction (system prompt, or the single user blob on a one-shot call)
+ * and the last message is the thing being answered. Neither is ever dropped: a cheap call
+ * with no instruction, or with nothing to answer, is worse than one that ran long. When
+ * those two alone exceed the ceiling the call proceeds and says so, because refusing to
+ * answer is not a better outcome than answering a slightly large prompt.
+ *
+ * Shedding order: conversation turns first, context blocks second. Old Q&A is disposable;
+ * a context block is the scene itself. Dropping the character card while keeping four old
+ * questions would be the wrong trade in exactly the case this guard exists for.
+ *
+ * `budget <= 0` means no ceiling.
+ */
+export function applyCheapContextBudget(messages: WireMessage[], budget: number): void {
+  if (budget <= 0 || messages.length === 0) return;
+
+  // Tracked incrementally rather than recomputed: the shedding loop below runs once per
+  // dropped message, and re-estimating the whole prompt each time would make an
+  // already-oversized input quadratic in its own length.
+  let total = 0;
+  for (const message of messages) total += estimateTokens(message.content);
+  if (total <= budget) return;
+
+  const drop = (index: number) => {
+    total -= estimateTokens(messages[index].content);
+    messages.splice(index, 1);
+  };
+
+  // Pass 1: the oldest conversation turn that is not the instruction and not the last
+  // message.
+  for (let index = 1; index < messages.length - 1; ) {
+    if (total <= budget) break;
+    if (messages[index].role === 'system') index++;
+    else drop(index);
+  }
+
+  // Pass 2: the oldest remaining context block, still never index 0.
+  while (messages.length > 2 && total > budget) drop(1);
+
+  if (total > budget) {
+    console.warn(
+      `[cheap] prompt is ${total} estimated tokens against a ${budget}-token cheapContextBudget, ` +
+        'and the instruction and the final message alone exceed it. Sending it unsplit rather ' +
+        'than dropping either: raise cheapContextBudget, or shorten the input at its source.',
+    );
+  }
 }
 
 /**
@@ -85,6 +143,7 @@ async function prepare(
   else messages.push({ role: 'user', content: opts.user ?? '' });
 
   const settings: ChatSettings = await loadChatSettings(env);
+  applyCheapContextBudget(messages, settings.cheapContextBudget);
   const { url, init } = provider.buildRequest(
     {
       model: cheap.model,

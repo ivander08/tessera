@@ -114,6 +114,19 @@ export interface ChatSettings {
   authorsNote: string;
   maxTokens: number;
   contextBudget: number;
+  /**
+   * Input ceiling for every call that uses the cheap model, in estimated tokens.
+   *
+   * Separate from `contextBudget`, which sizes the narrator's prompt: the two models are
+   * configured independently (`cheapProvider`/`cheapModel`) and can have different windows,
+   * so one number cannot serve both. A cheap model with a small window and a narrator with a
+   * large one is the normal case, not an exotic one.
+   *
+   * Zero means "no ceiling" — an install that wants the old unbounded behaviour keeps it,
+   * and the default is generous enough that the summarizer's fixed 20-message blocks
+   * (~1,000-2,500 estimated tokens measured on real chats) never come near it.
+   */
+  cheapContextBudget: number;
   knobs: Record<string, number | string | string[]>;
   /** Configured IDR-per-USD rate; when absent Kenari costs stay in micro-IDR. */
   idrPerUsd: number | null;
@@ -181,6 +194,19 @@ function parseKnobs(raw: string | undefined): Record<string, number | string | s
   }
 }
 
+/**
+ * The cheap-model input ceiling, or 0 for "no ceiling".
+ *
+ * Unlike every other numeric setting there is no fallback constant: the stored value is
+ * either a positive number or the absence of a ceiling. A malformed or negative value is
+ * treated as absent rather than clamped to a default, so a corrupt row cannot silently
+ * impose a ceiling nobody chose.
+ */
+function parseCheapContextBudget(raw: string | undefined): number {
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
 export async function loadChatSettings(env: Env): Promise<ChatSettings> {
   const raw = await getSettings(env);
   return {
@@ -190,6 +216,9 @@ export async function loadChatSettings(env: Env): Promise<ChatSettings> {
     authorsNote: raw.authorsNote ?? '',
     maxTokens: Number(raw.maxTokens ?? 1024) || 1024,
     contextBudget: Number(raw.contextBudget ?? 16384) || 16384,
+    // Not `|| DEFAULT`: zero is a meaningful value here (no ceiling), so the usual
+    // falsy-fallback would turn "unlimited" into 16384 and silently cap it.
+    cheapContextBudget: parseCheapContextBudget(raw.cheapContextBudget),
     knobs: parseKnobs(raw.knobs),
     idrPerUsd: raw.idrPerUsd ? Number(raw.idrPerUsd) : null,
     loreScanDepth: Number(raw.loreScanDepth ?? 4) || 4,

@@ -17,6 +17,7 @@ interface SettingsShape {
   authorsNote?: string;
   maxTokens?: string;
   contextBudget?: string;
+  cheapContextBudget?: string;
   knobs?: string;
   idrPerUsd?: string;
   cheapProvider?: string;
@@ -91,6 +92,7 @@ export default function Settings() {
       authorsNote: form.authorsNote ?? '',
       maxTokens: form.maxTokens ?? '',
       contextBudget: form.contextBudget ?? '',
+      cheapContextBudget: form.cheapContextBudget ?? '',
       knobs: form.knobs ?? '{}',
       idrPerUsd: form.idrPerUsd ?? '',
       cheapProvider: form.cheapProvider ?? '',
@@ -297,6 +299,14 @@ export default function Settings() {
           </label>
         </div>
         {cheapModels.error && <p className="note warn">{cheapModels.error}</p>}
+        <Field label="Cheap context budget (prompt tokens; 0 for no ceiling)">
+          <input
+            value={form.cheapContextBudget ?? ''}
+            onChange={(event) => setForm({ ...form, cheapContextBudget: event.target.value })}
+            inputMode="numeric"
+            className="field" style={{ maxWidth: 40 * 4 }}
+          />
+        </Field>
         <Field label="IDR per USD (Kenari bills in Rupiah; blank leaves costs unreported)">
           <input
             value={form.idrPerUsd ?? ''}

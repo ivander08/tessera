@@ -132,3 +132,43 @@ describe('the sampler defaults', () => {
     expect(body.top_p).toBe(0.8);
   });
 });
+
+describe('cheapContextBudget', () => {
+  test('an install that has never set it gets no ceiling', async () => {
+    const { env } = makeEnv();
+    expect((await loadChatSettings(env)).cheapContextBudget).toBe(0);
+  });
+
+  test('zero is preserved as "no ceiling" rather than replaced by a default', async () => {
+    // The bug a `|| DEFAULT` fallback would introduce: an explicit 0 becomes 16384, and the
+    // reader who asked for no ceiling silently gets one.
+    const { env, db } = makeEnv();
+    setSetting(db, 'cheapContextBudget', '0');
+    expect((await loadChatSettings(env)).cheapContextBudget).toBe(0);
+  });
+
+  test('a positive value is read as the ceiling', async () => {
+    const { env, db } = makeEnv();
+    setSetting(db, 'cheapContextBudget', '8192');
+    expect((await loadChatSettings(env)).cheapContextBudget).toBe(8192);
+  });
+
+  test('a malformed or negative value falls back to no ceiling, not to a guessed one', async () => {
+    const { env, db } = makeEnv();
+    setSetting(db, 'cheapContextBudget', 'not a number');
+    expect((await loadChatSettings(env)).cheapContextBudget).toBe(0);
+
+    setSetting(db, 'cheapContextBudget', '-500');
+    expect((await loadChatSettings(env)).cheapContextBudget).toBe(0);
+  });
+
+  test('the ceiling is independent of the narrator context budget', async () => {
+    const { env, db } = makeEnv();
+    setSetting(db, 'contextBudget', '32768');
+    setSetting(db, 'cheapContextBudget', '4096');
+
+    const settings = await loadChatSettings(env);
+    expect(settings.contextBudget).toBe(32768);
+    expect(settings.cheapContextBudget).toBe(4096);
+  });
+});
