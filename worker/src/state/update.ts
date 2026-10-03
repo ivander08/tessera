@@ -96,8 +96,11 @@ const TIME_KEY: Record<SceneSetup['timePace'], string> = {
     '                  - vague time of day: make it concrete, keeping the stored date unless',
     '                    the scene moves to another day — "late evening" -> 21:00, "night" ->',
     '                    23:00, "dawn" -> 06:00, "morning" -> 09:00, "afternoon" -> 15:00',
-    '                  - nothing stated: add a few minutes for a continuous conversation,',
-    '                    more when the scene moves on, hours for a night\'s sleep',
+    '                  - nothing stated: a couple of exchanged lines is 1 MINUTE; a turn',
+    '                    with several actions or a longer conversation is 2-3 minutes; a scene',
+    '                    that clearly moves on (a walk across campus, a meal) is 10-20',
+    '                    minutes; a night\'s sleep is the next morning. A plain back-and-forth',
+    '                    is never more than a few minutes.',
     '                Do not invent a fantasy calendar.',
   ].join('\n'),
   manual: [
@@ -135,10 +138,11 @@ const THREADS_KEY = [
 const TIME_BULLET: Record<SceneSetup['timePace'], string> = {
   auto: [
     '- "time" is the exception to "emit a key only when it changes": it is ALWAYS emitted.',
-    '  The clock moves forward on every exchange, including a quiet one, because a',
-    '  conversation is minutes. Read the stored value and work out the new one from what the',
-    '  exchange says: add a stated duration, use a stated clock time, turn a vague time of',
-    '  day into a concrete one, or add a few minutes when nothing was said.',
+    '  The clock moves forward on every exchange, including a quiet one, but it moves at the',
+    '  pace of the scene: a few exchanged lines is one minute, not three. Read the stored',
+    '  value and work out the new one from what the exchange says — add a stated duration,',
+    '  use a stated clock time, turn a vague time of day into a concrete one, or add a',
+    '  minute or two when nothing was said.',
   ].join('\n'),
   manual: [
     '- "time" belongs to the reader. Never change a stored value, and do not add one unless',
