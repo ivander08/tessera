@@ -185,6 +185,7 @@ function settings(contextBudget: number): EffectiveSettings {
     authorsNote: '',
     maxTokens: 1024,
     contextBudget,
+    cheapContextBudget: 0,
     knobs: {},
     idrPerUsd: null,
     loreScanDepth: 4,
