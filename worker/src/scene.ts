@@ -95,8 +95,10 @@ export async function maybeUpdateState(
   chatId: string,
   lastExchange: { user: string; assistant: string },
   messageId?: string | null,
+  /** Read the state as of this transcript point rather than the live document. */
+  atSeq?: number | null,
 ): Promise<{ applied: boolean; reason?: string }> {
   const setup = await loadSceneSetup(env, chatId);
   if (setup.stateMode === 'off') return { applied: false, reason: 'state mode is off' };
-  return updateState(env, chatId, lastExchange, setup, messageId);
+  return updateState(env, chatId, lastExchange, setup, messageId, atSeq ?? null);
 }

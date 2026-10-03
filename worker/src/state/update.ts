@@ -203,9 +203,22 @@ export async function updateState(
   setup: SceneSetup,
   /** The assistant row this state describes, so a snapshot can be attached to it. */
   messageId?: string | null,
+  /**
+   * The transcript point the state must be written FROM, or null for the live document.
+   *
+   * A number reads the newest snapshot strictly before it on the visible path, which is
+   * what stops a deleted or regenerated turn from poisoning the clock. Reported: the
+   * reader deleted the turn that had jumped the clock to 22:11, so the live row still said
+   * 22:11 while the visible path said 22:01 — and the next turn computed 22:11 + 1. Reading
+   * from the path is the same rule the prompt already applies (`loadStateAt`), so the
+   * narrator and the state engine can no longer disagree about what "now" is.
+   */
+  atSeq?: number | null,
 ): Promise<{ applied: boolean; reason?: string }> {
   try {
-    const current = await loadState(env, chatId);
+    const current = atSeq === null || atSeq === undefined
+      ? await loadState(env, chatId)
+      : await loadStateAt(env, chatId, atSeq);
 
     const reply = await complete(env, {
       system: buildSystemPrompt(setup),

@@ -332,7 +332,13 @@ async function runTurn(
     if (mode === 'send' || answeringPendingUser) {
       const stateUser = answeringPendingUser ? target!.content : content;
       try {
-        await maybeUpdateState(env, chat.id, { user: stateUser, assistant: assistantText }, messageId);
+        await maybeUpdateState(
+          env,
+          chat.id,
+          { user: stateUser, assistant: assistantText },
+          messageId,
+          stateSeq,
+        );
       } catch (err: unknown) {
         console.warn(`[state] update failed for chat=${chat.id}: ${messageOf(err)}`);
       }

@@ -337,6 +337,37 @@ describe('updateState: the clock advances', () => {
     // Comfortably above what a reasoning model needs to think and still emit the patch.
     expect(maxTokens).toBeGreaterThanOrEqual(1024);
   });
+
+  test('a turn reads the clock from the branch it is on, not the live document', async () => {
+    // The reported bug: the reader wrote a jump that put the clock at 22:11, then deleted
+    // that turn. The live state row still said 22:11, the visible path said 22:01, and the
+    // next turn computed 22:11 + 1. The update now reads from the same point the prompt
+    // reads from, so deleting a turn un-advances the clock with it.
+    const { env, db, sent } = makeEnv();
+
+    const seedRow = (id: string, parentId: string | null, time: string | null, active: number, deleted: number): void => {
+      db.run(
+        `INSERT INTO messages (id, chat_id, parent_id, role, content, active, deleted, state_json, created_at)
+         VALUES (?, 'chat-1', ?, 'assistant', 'x', ?, ?, ?, 0)`,
+        [id, parentId, active, deleted, time === null ? null : JSON.stringify({ time })] as never[],
+      );
+    };
+
+    // 22:00 -> 22:01 on the visible path, then a deleted turn that jumped to 22:11.
+    seedRow('root', null, 'Friday, April 11, 2025, 22:00', 1, 0);
+    seedRow('a1', 'root', null, 1, 0);
+    seedRow('a2', 'a1', 'Friday, April 11, 2025, 22:01', 1, 0);
+    seedRow('deleted', 'a2', 'Friday, April 11, 2025, 22:11', 1, 1);
+    // The turn being written now: active, no snapshot yet.
+    seedRow('new', 'a2', null, 1, 0);
+
+    stubProvider(sent, '{"time":"Friday, April 11, 2025, 22:02"}');
+
+    // Reading from before the deleted turn's point must see 22:01, not 22:11.
+    await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'), 'new', 103);
+
+    expect((await loadState(env, 'chat-1')).time).toBe('Friday, April 11, 2025, 22:02');
+  });
 });
 
 describe('seedOpeningState', () => {
