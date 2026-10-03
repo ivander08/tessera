@@ -296,4 +296,56 @@ describe('forgeConsult streaming', () => {
       restore();
     }
   });
+
+  // The reported bug end to end: the reply was cut off mid-card, the terminal turn carried
+  // `card: null`, and the user got no diff, no Apply button and no error — while the model's
+  // own prose said it had shipped the change. A card that cannot be read is now a named
+  // failure, and it reaches the client as an error frame.
+  test('a reply cut off mid-card is an error frame, not a silent card-less turn', async () => {
+    const env = await configuredEnv();
+    const reply =
+      '{"say":"Here it is: the whole card back.","question":null,"card":{"name":"Ada","description":"A cartographer';
+
+    const restore = stubReply(reply);
+    try {
+      const res = await forgeConsult(
+        env,
+        post({ mode: 'consult', messages: [{ role: 'user', content: 'add a line' }], card: CARD }),
+      );
+      const frames = await framesOf(res);
+      const terminal = frames[frames.length - 1];
+
+      // The card phase still fires — the model did start writing one. What must not happen is
+      // the stream ending on a `turn` whose card is null.
+      expect(phasesOf(frames)).toEqual(['card']);
+      expect(terminal.type).toBe('error');
+      expect(asString(terminal.message)).toContain('writing the card');
+    } finally {
+      restore();
+    }
+  });
+
+  test('an envelope wrapped in a sentence still delivers its card', async () => {
+    // The other half of the same report: a leading sentence or a trailing sign-off is a
+    // formatting habit, and the card inside must not be thrown away with it.
+    const env = await configuredEnv();
+    const reply =
+      'Sure — here it is:\n{"say":"Added it.","question":null,"card":{"name":"Ada","first_mes":"One."}}\n\nLet me know.';
+
+    const restore = stubReply(reply);
+    try {
+      const res = await forgeConsult(
+        env,
+        post({ mode: 'consult', messages: [{ role: 'user', content: 'add a line' }], card: CARD }),
+      );
+      const frames = await framesOf(res);
+      const terminal = frames[frames.length - 1];
+
+      expect(terminal.type).toBe('turn');
+      const turn = asRecord(terminal.turn);
+      expect(asRecord(turn?.card)?.name).toBe('Ada');
+    } finally {
+      restore();
+    }
+  });
 });

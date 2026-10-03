@@ -82,11 +82,41 @@ keywords fire, so backstory, setting detail and world knowledge are cheaper in t
 fields only; the book is passed through untouched and never appears in your reply.`;
 
 /**
+ * The app's content stance, stated for the consultant.
+ *
+ * The consultant has to know what this app is for, or it hedges: it asks a euphemistic
+ * question, softens an explicit request into a summary, or offers a tamer version "if that is
+ * more comfortable". Cards here are explicit when the character calls for it, and the reader's
+ * own prompt already says so — `<craft_content>` in `src/lib/prompt/craftBlock.ts` is the
+ * narrator's copy of this stance, and this block is the consultant's.
+ */
+const CONTENT_BLOCK = `# What this app writes
+
+This is an unrestricted adult-fiction engine, and a card is written for it — not for a general
+assistant. Explicit sexual content, profanity, violence and taboo material are normal card
+material here, written with the same concrete specificity as anything else. The reader's own
+prompt already carries a content policy permitting all of it, so nothing you put in a card is
+content the app cannot send.
+
+That changes what you write and how you ask:
+
+- When the user asks for explicit content, write it explicitly: bodies, acts, sensation, and
+  what is said. Do not soften it, summarise it, imply it and move on, or fade to black.
+- Ask about it directly, in the same register the user is writing in. If they are explicit, be
+  explicit back: ask what the character is into in bed, what she wants done to her, what she
+  does to her partner — not whether she is "affectionate". A vague question writes a vague card.
+- Never hedge, never add a content warning, never ask whether the user is sure, and never
+  propose a tamer version of what was asked for.
+- The permanent fields are re-sent on every turn of every scene, including the ones where
+  nothing intimate is happening, so explicit material in "description" or "personality" is
+  explicit in every scene. Say that as a cost, with the token numbers, never as a warning.`;
+
+/**
  * The consultant's system prompt: role, method, what to find out, the craft knowledge, this
  * app's format, and the output contract — in that order, so each section is a concern rather
  * than one wall of text.
  */
-function systemPrompt(mode: ConsultMode, card: ParsedCard | null): string {
+export function systemPrompt(mode: ConsultMode, card: ParsedCard | null): string {
   const parts = [
     'You are a character-creation consultant for a roleplay client. You interview the user and then write their character card.',
 
@@ -113,10 +143,21 @@ propose it now rather than describing what you would write.`,
    else does.
 3. What they want, and what is in the way.
 4. The situation the scene opens in.
-5. The register the user wants to read: tone, explicitness, length.`,
+5. The register the user wants to read: tone, explicitness, length. When the card is for adult
+   play — and most are — this is not a checkbox to get out of the way: ask what the character
+   is like in bed. What she wants done to her, what she does to her partner, what she says, how
+   she sounds, what she will not do. Get concrete answers and put them in the card.
+
+Probe. One question is not an interview. When an answer is thin, ask the next question that
+opens it up rather than moving on: "she's shy" is not an answer until you know how the shyness
+behaves — what she does instead of saying the thing, what it takes to get past it. Ask for the
+specific behaviour the card will actually generate, and keep asking while the answers are
+still generic. The ceiling of ${MAX_QUESTIONS} questions is there to stop you over-asking; it
+is not a target to reach, but if the card is still vague at question three, keep going.`,
 
     CARD_CRAFT,
     FORMAT_BLOCK,
+    CONTENT_BLOCK,
   ];
 
   if (card) {
@@ -169,6 +210,13 @@ Return ONLY a JSON object, with "say" as the FIRST key:
 - In draft mode, one of "question" or "card" is ALWAYS set. A draft turn that sets neither is
   not a valid reply: the user has nothing to answer and nothing to accept. If the interview has
   run its course, set "card".
+- **If your "say" says you are making a change — "adding", "I've added", "here it is", "updated",
+  "appended" — you MUST set "card".** A turn whose prose announces a revision and whose "card"
+  is null ships nothing: the user sees the announcement and no diff, and has to ask again. If
+  you are not ready to return the whole card, do not say you changed it — ask the next question
+  instead, or say plainly that you need one more thing first.
+- The same applies in reverse: never set "card" and describe it as a suggestion you have not
+  made. Setting "card" IS making it.
 No prose outside the JSON. No code fences.`,
   );
 
@@ -277,9 +325,9 @@ export async function consult(
     : undefined;
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const { text } = await streamCheap(
+    const { text, finishReason } = await streamCheap(
       env,
-      { system, messages, maxTokens: 4096, json: true },
+      { system, messages, maxTokens: 8192, json: true },
       onDelta,
     );
 
@@ -289,9 +337,14 @@ export async function consult(
       // Retrying after the user has already read half a reply would visibly restart it, so
       // the retry only happens when nothing was streamed.
       if (streamed || attempt === 1) {
-        throw new Error(`consult: the model did not return a usable turn (${
-          error instanceof Error ? error.message : String(error)
-        }).`);
+        const detail = error instanceof Error ? error.message : String(error);
+        // `length` is the provider saying the reply hit the output cap mid-sentence. Naming
+        // it turns "the consultant went quiet" into something the user can act on.
+        const cause =
+          finishReason === 'length'
+            ? 'the reply ran out of output budget before it finished'
+            : detail;
+        throw new Error(`consult: the model did not return a usable turn (${cause}).`);
       }
     }
   }
@@ -318,17 +371,36 @@ export async function consult(
  */
 export function parseConsultTurn(text: string): ConsultTurn {
   const trimmed = text.trim();
-  const parsed = tryParse(trimmed);
+  // The whole reply first, which is what a well-behaved turn is. Failing that, the first
+  // complete JSON object inside it: a sentence before the object or a sign-off after it is a
+  // formatting habit, not a wrong answer, and throwing away the card it contains is what made
+  // the consultant announce a card and deliver nothing.
+  const parsed = parseReply(trimmed);
 
   if (!parsed.ok) {
-    // Not JSON at all. Two shapes land here and both have a readable `say`:
+    // The envelope was not recoverable. Two shapes land here:
     //  - the model answered in prose, ignoring the envelope;
-    //  - the envelope was cut off by the token cap mid-reply, in which case `partialField`
-    //    recovers the `say` text written so far. `say` is required to be the first key, so
-    //    a truncated envelope always has one.
-    // Falling back to the raw text would show the user `{"say": "I'd love…`, which is worse
-    // than either.
+    //  - the envelope was cut off by the token cap mid-reply.
+    // `partialField` recovers the `say` text written so far in both cases, and showing that
+    // beats showing the user `{"say": "I'd love…`.
     const say = (partialField(trimmed, 'say') ?? unwrapFencedProse(trimmed)).trim();
+
+    // But an ENVELOPE that was being written and could not be read is not "just talking". The
+    // user watched "Writing the card…" appear, the model's own prose says it shipped the
+    // change, and silently returning card: null is what made it insist it had — with no diff
+    // and no Apply button to show for it. Name the failure instead; the client renders it and
+    // the user can ask again.
+    //
+    // Gated on the reply being an envelope attempt (it opens with `{`): a prose answer that
+    // merely *mentions* `"card": {…}` is still prose, and the existing fallback must keep
+    // showing it rather than turning a usable answer into an error box.
+    if (trimmed.startsWith('{') && /"card"\s*:\s*\{/.test(trimmed)) {
+      throw new Error(
+        'the reply was cut off or malformed while it was writing the card — ask again, ' +
+          'or ask for a smaller change',
+      );
+    }
+
     if (say.length === 0) throw new Error('the model returned no reply.');
     return { say, question: null, card: null };
   }
@@ -362,6 +434,79 @@ function tryParse(text: string): { ok: true; value: unknown } | { ok: false } {
   } catch {
     return { ok: false };
   }
+}
+
+/**
+ * The reply as a parsed value: the whole text when it is one JSON object, otherwise the first
+ * complete object embedded in it.
+ *
+ * A model that writes `Here it is:\n{…}` or `{…}\n\nLet me know if that works.` has produced
+ * the right object wrapped in a sentence. Parsing only the whole text fails on both, and the
+ * card they contain was then silently discarded — the reported bug, where the consultant
+ * announced a revision and the pane showed no diff and no Apply button. The envelope is the
+ * authority; the prose around it is a formatting habit.
+ *
+ * Every `{` is tried in order and the first one that yields a complete, parseable object wins,
+ * so a stray brace in the surrounding prose does not shadow the real envelope.
+ */
+function parseReply(text: string): { ok: true; value: unknown } | { ok: false } {
+  const whole = tryParse(text);
+  if (whole.ok) return whole;
+
+  for (let from = 0; ; ) {
+    const found = extractJsonObject(text, from);
+    if (found === null) return { ok: false };
+    const parsed = tryParse(found.text);
+    if (parsed.ok) {
+      // Only a turn envelope is accepted. Prose can contain a perfectly valid nested object —
+      // a `say` that writes `"card": {"name": "Ada"}` as an example — and adopting that as the
+      // reply would replace the words with a nameless object. The envelope always has `say`.
+      const record = asRecord(parsed.value);
+      if (record && typeof record.say === 'string') return parsed;
+    }
+    from = found.end;
+  }
+}
+
+/**
+ * The first balanced `{…}` at or after `from`, or null.
+ *
+ * String state and escapes are tracked so a brace inside a string value — a `say` that
+ * mentions `{` — is not counted as structure. `end` is the index just past the closing brace,
+ * so the caller can resume after a candidate that turned out not to be JSON.
+ */
+function extractJsonObject(text: string, from: number): { text: string; end: number } | null {
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let at = from; at < text.length; at++) {
+    const char = text[at];
+
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === '{') {
+      if (depth === 0) start = at;
+      depth++;
+      continue;
+    }
+    if (char === '}' && depth > 0) {
+      depth--;
+      if (depth === 0 && start >= 0) return { text: text.slice(start, at + 1), end: at + 1 };
+    }
+  }
+
+  return null;
 }
 
 /**

@@ -5,6 +5,7 @@ import { apiFetch, apiJson, streamChat, type TurnMode } from '../lib/api';
 import type { MessageRow, Transcript } from '../lib/apiTypes';
 import type { WorldState } from '../lib/state/schema';
 import { messageOf, useAsync } from '../lib/hooks';
+import { handleComposerEnter } from '../lib/composer';
 import { AppBar, BackLink, MenuAction, MenuLabel, MenuSep } from '../components/AppBar';
 import { PresetMenu } from '../components/PresetMenu';
 import { PersonaMenu } from '../components/PersonaMenu';
@@ -1076,10 +1077,9 @@ export default function Chat() {
               node.style.height = `${Math.min(node.scrollHeight, window.innerHeight * 0.42)}px`;
             }}
             onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                send();
-              }
+              // Enter sends on a keyboard; on a phone it makes a newline and the Send button
+              // sends, because a soft keyboard has no Shift. See `handleComposerEnter`.
+              handleComposerEnter(event, send);
             }}
             rows={1}
             placeholder={

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import { streamConsult, type ConsultFrame } from '../lib/api';
 import type { CharacterCardJson, GreetingState, ParsedCard } from '../lib/cards/types';
 import { messageOf } from '../lib/hooks';
+import { handleComposerEnter } from '../lib/composer';
 import { estimateTokens } from '../lib/tokenEstimate';
 import { diffText, summarizeDiff, type DiffLine } from '../lib/text/diff';
 import { Markdown } from './Markdown';
@@ -185,10 +186,12 @@ export function ConsultPanel({
     setSession({ messages, turn, answer, brief, ...next });
 
   // Follow the reply as it streams. The text is the progress indicator, so it must stay in
-  // view without the user scrolling after it.
+  // view without the user scrolling after it. `failure` is in the list for the same reason: a
+  // card that failed to arrive renders its message at the foot of the transcript, and a
+  // failure the reader has to scroll to find reads as "nothing happened".
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: 'end' });
-  }, [pending, messages.length, turn]);
+  }, [pending, messages.length, turn, failure]);
 
   async function send(content: string) {
     const text = content.trim();
@@ -433,15 +436,12 @@ export function ConsultPanel({
             value={answer}
             onChange={(event) => patch({ answer: event.target.value })}
             onKeyDown={(event) => {
-              // Shift+Enter is a newline, matching the chat composer. Plain Enter sends.
-              if (event.key !== 'Enter' || event.shiftKey) return;
-              // Never swallow Enter while an IME candidate window is open: committing a
-              // Japanese or Chinese candidate also reports `Enter`, and sending there
-              // would submit a half-composed word.
-              if (event.nativeEvent.isComposing) return;
-              if (answer.trim().length === 0) return;
-              event.preventDefault();
-              void send(answer);
+              // Enter sends on a keyboard; on a phone it makes a newline and the Send button
+              // sends, because a soft keyboard has no Shift. See `handleComposerEnter`.
+              handleComposerEnter(event, () => {
+                if (answer.trim().length === 0) return;
+                void send(answer);
+              });
             }}
             placeholder={
               turn?.question

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { analyzeTokenCost } from '../../../src/lib/forge/tokenCost';
 import { cardForPrompt, findSmuggledInstructions } from './smuggle';
-import { parseConsultTurn } from './consult';
+import { parseConsultTurn, systemPrompt } from './consult';
 import type { ParsedCard } from '../../../src/lib/cards/types';
 
 /**
@@ -418,9 +418,72 @@ describe('parseConsultTurn', () => {
     expect(turn.say).toBe('Just talking here.');
   });
 
+  // The reported bug: the model wrapped the envelope in a sentence and the card was thrown
+  // away with it, so the pane showed the announcement and no diff. The envelope is the
+  // authority; the prose around it is formatting.
+  test('a card survives a sentence BEFORE the envelope', () => {
+    const turn = parseConsultTurn(
+      'Sure — here it is:\n{"say":"Added it.","question":null,"card":{"name":"Ada","first_mes":"One."}}',
+    );
+    expect(turn.say).toBe('Added it.');
+    expect(turn.card?.name).toBe('Ada');
+  });
+
+  test('a card survives a sign-off AFTER the envelope', () => {
+    const turn = parseConsultTurn(
+      '{"say":"Added it.","question":null,"card":{"name":"Ada","first_mes":"One."}}\n\nLet me know if that reads right.',
+    );
+    expect(turn.card?.name).toBe('Ada');
+  });
+
+  test('a brace inside the prose does not shadow the envelope', () => {
+    const turn = parseConsultTurn(
+      'Note: {this is not json} — anyway:\n{"say":"Done.","question":null,"card":{"name":"Ada","first_mes":"One."}}',
+    );
+    expect(turn.card?.name).toBe('Ada');
+  });
+
+  test('a brace inside a JSON string does not break the balance scan', () => {
+    const turn = parseConsultTurn(
+      '{"say":"Use the } glyph and the { glyph.","question":null,"card":{"name":"Ada","first_mes":"One."}}',
+    );
+    expect(turn.say).toBe('Use the } glyph and the { glyph.');
+    expect(turn.card?.name).toBe('Ada');
+  });
+
+  // The other half of the reported bug: the reply announced a revision and could not be read,
+  // and the user was told nothing — no diff, no Apply, no error. An unreadable CARD is a
+  // failure, not a "just talking" turn.
+  test('an envelope cut off while writing the card throws rather than silently dropping it', () => {
+    expect(() =>
+      parseConsultTurn('{"say":"Here it is: the whole card back.","question":null,"card":{"name":"Ada","desc'),
+    ).toThrow(/writing the card/);
+  });
+
+  test('an envelope whose card is malformed throws rather than silently dropping it', () => {
+    // A complete object, but the card inside is not a card: `toParsedCard` rejects it. That
+    // must surface, not become a prose-only turn.
+    expect(() =>
+      parseConsultTurn(
+        '{"say":"Here it is.","question":null,"card":{"description":"no name at all"}}',
+      ),
+    ).toThrow(/no name/);
+  });
+
+  test('a prose reply that merely mentions a card object is still prose', () => {
+    // Not an envelope attempt — it does not open with `{` — so the existing fallback must keep
+    // showing the words rather than turning a usable answer into an error box.
+    const text = 'I would set "card": {"name": "Ada"} if I were proposing one, but I am not.';
+    const turn = parseConsultTurn(text);
+    expect(turn.say).toBe(text);
+    expect(turn.card).toBeNull();
+  });
+
   test('a reply cut off mid-envelope keeps the say text written so far', () => {
     // The token cap can land mid-object. Showing the user `{"say": "I'd love…` is worse than
-    // showing them the words; the raw envelope must never reach the transcript.
+    // showing them the words; the raw envelope must never reach the transcript. This is the
+    // NO-CARD truncation: the prose is the whole answer, so there is nothing to lose by
+    // keeping it. A truncation that was writing a CARD throws instead — see below.
     const turn = parseConsultTurn('{"say": "I\'d love to help with that. What does she want');
     expect(turn.say).toBe("I'd love to help with that. What does she want");
     expect(turn.question).toBeNull();
@@ -549,5 +612,57 @@ describe('parseConsultTurn', () => {
       }),
     );
     expect(turn.card?.nickname).toBe('');
+  });
+});
+
+/**
+ * What the consultant is told. These are behavioural contracts, not prose checks: each one
+ * names a failure the prompt is there to prevent, and the assertions are the load-bearing
+ * sentences rather than the whole block, so the wording can be tightened without re-pinning
+ * every test.
+ */
+describe('systemPrompt', () => {
+  const prompt = systemPrompt('consult', card());
+
+  test('states the app is unrestricted adult fiction, so the consultant does not hedge', () => {
+    // The reported problem: cards for this app are explicit, and a consultant that does not
+    // know that asks euphemistic questions and softens explicit requests.
+    expect(prompt).toContain('unrestricted adult-fiction');
+    expect(prompt).toContain('Do not soften it');
+    expect(prompt).toContain('Never hedge');
+  });
+
+  test('tells it to ask about intimacy directly, in the user\'s register', () => {
+    // The other reported problem: the interview stayed vague. "What is she like in bed" is the
+    // question that produces an explicit card; "is she affectionate" produces nothing.
+    expect(prompt).toContain('ask what the character');
+    expect(prompt).toContain('like in bed');
+    expect(prompt).toContain('explicit back');
+  });
+
+  test('tells it to probe a thin answer rather than move on', () => {
+    expect(prompt).toContain('Probe.');
+    expect(prompt).toContain('keep asking while the answers are');
+  });
+
+  test('forbids announcing a change without shipping the card', () => {
+    // The reported bug: the prose said "here it is" and the card was null, so no diff and no
+    // Apply button appeared while the model insisted it had made the change.
+    expect(prompt).toContain('you MUST set "card"');
+    expect(prompt).toContain('ships nothing');
+  });
+
+  test('carries the card craft and this app\'s format in both modes', () => {
+    for (const mode of ['draft', 'consult'] as const) {
+      const text = systemPrompt(mode, card());
+      expect(text).toContain('# How a card works');
+      expect(text).toContain("# This app's card format");
+    }
+  });
+
+  test('the card report and the known findings appear only when there is a card', () => {
+    const without = systemPrompt('draft', null);
+    expect(without).not.toContain('# What this card costs');
+    expect(systemPrompt('consult', card())).toContain('# What this card costs');
   });
 });
