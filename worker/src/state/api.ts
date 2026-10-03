@@ -64,12 +64,32 @@ export async function patchState(env: Env, req: Request): Promise<Response> {
   const result = validatePatch(current, body.patch);
   if (!result.ok) return badRequest(result.reason);
 
-  await env.DB.prepare(
-    `INSERT INTO state (chat_id, json, updated_at) VALUES (?, ?, ?)
-     ON CONFLICT(chat_id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at`,
+  // The corrected document must also land ON the visible path, at the tail. Every turn
+  // reads the path at its anchor, so a correction that lived only in the live row would be
+  // overwritten by the next turn — which would read the path, see the value the reader had
+  // just corrected, and re-derive the wrong world from it. Reported as "I fix the clock in
+  // the panel and the next reply moves it back".
+  const tail = await env.DB.prepare(
+    `SELECT seq FROM messages
+      WHERE chat_id = ?1 AND active = 1 AND deleted = 0
+      ORDER BY seq DESC LIMIT 1`,
   )
-    .bind(body.chatId, JSON.stringify(result.next), Date.now())
-    .run();
+    .bind(body.chatId)
+    .first<{ seq: number }>();
+
+  const statements = [
+    env.DB.prepare(
+      `INSERT INTO state (chat_id, json, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(chat_id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at`,
+    ).bind(body.chatId, JSON.stringify(result.next), Date.now()),
+  ];
+  if (tail) {
+    statements.push(
+      env.DB.prepare('UPDATE messages SET state_json = ? WHERE chat_id = ? AND seq = ?')
+        .bind(JSON.stringify(result.next), body.chatId, tail.seq),
+    );
+  }
+  await env.DB.batch(statements);
 
   return json({ ok: true, state: result.next });
 }

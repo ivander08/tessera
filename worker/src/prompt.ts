@@ -13,7 +13,8 @@ import { dynamicMacrosIn, substituteHead, substituteTail } from '../../src/lib/p
 import { renderStateBlock } from '../../src/lib/prompt/stateBlock';
 import { renderCraftBlock, renderContentPolicy, renderVocalisation } from '../../src/lib/prompt/craftBlock';
 import { recall } from './memory/recall';
-import { loadStateAt } from './state/update';
+import { loadStateForTurn } from './state/update';
+import type { StatePoint } from './turn';
 import { loadSceneSetup } from './scene';
 import { loadPathTail, VISIBLE_PATH_SEQ_CTE, type BranchRow } from './branch';
 import { loadCast, type CastRow } from './cast';
@@ -61,13 +62,16 @@ export interface PromptOptions {
    */
   historyCutoff: number | null;
   /**
-   * The row being re-rolled, whose world state must be read from BEFORE it.
+   * Where the turn's world state is read from — an anchor row on the visible path plus
+   * whether the anchor's own snapshot counts. See `statePointFor`.
    *
-   * `null` means "use the live state", which is what every forward turn wants. A `regenerate`
-   * passes the target's seq: the snapshot on a row is the state that row's own turn produced,
-   * so including it would hand the model the outcome of the very reply being rewritten.
+   * Reading from the path, never the live document, is what makes a delete un-advance the
+   * world with it: the snapshot on a row is the state that row's own turn produced, so a
+   * deleted turn's snapshot is off the path and cannot be read. A regenerate excludes its
+   * target's snapshot (the outcome of the reply being rewritten); a send includes the
+   * tail's (the state the new turn extends).
    */
-  stateSeq: number | null;
+  statePoint: StatePoint;
   userContent: string;
   /** Mode-specific instruction appended to the tail, after the author's note. */
   tailExtra: string;
@@ -224,7 +228,7 @@ export async function buildPrompt(
   // `includeNames` prefixing here. Bounded by the same cut point as the memory and state
   // reads: a speaker introduced by a reply that has since been regenerated away was never
   // in this scene, and naming them puts a stranger in the room.
-  const cast = await loadCast(env, chat.id, options.stateSeq);
+  const cast = await loadCast(env, chat.id, options.statePoint.seq);
   const multiSpeaker = cast.length > 1;
 
   // `includeNames` is the preset's lever for a scene with several speakers: prefix each
@@ -243,8 +247,8 @@ export async function buildPrompt(
   // Both blocks go in the TAIL. Recalled content and world state change as the scene
   // moves; putting either in the head would rewrite the cached prefix every turn.
   const [memoryBlock, stateBlock] = await Promise.all([
-    buildMemoryBlock(env, chat.id, recallQuery, calibration, options.stateSeq),
-    buildStateBlock(env, chat.id, calibration, options.stateSeq, {
+    buildMemoryBlock(env, chat.id, recallQuery, calibration, options.statePoint.seq),
+    buildStateBlock(env, chat.id, calibration, options.statePoint, {
       bonds: setup.craft.bonds,
       threads: setup.craft.threads,
     }),
@@ -545,11 +549,11 @@ async function buildStateBlock(
   env: Env,
   chatId: string,
   calibration: number,
-  atSeq: number | null,
+  point: StatePoint,
   options: { bonds?: boolean; threads?: boolean },
 ): Promise<string> {
   try {
-    const state = await loadStateAt(env, chatId, atSeq);
+    const state = await loadStateForTurn(env, chatId, point);
     return renderStateBlock(state, Math.round(800 * calibration), undefined, options);
   } catch (error) {
     console.warn(`[state] render failed for chat=${chatId}: ${messageOf(error)}`);

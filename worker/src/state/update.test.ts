@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, test } from 'bun:test';
 
 import { loadState, seedOpeningState, updateState } from './update';
+import { statePointFor } from '../turn';
 import { encryptKey } from '../../../src/lib/crypto';
 import { DEFAULT_SCENE_SETUP } from '../../../src/lib/scene/setup';
 import type { SceneSetup } from '../../../src/lib/scene/setup';
@@ -338,11 +339,13 @@ describe('updateState: the clock advances', () => {
     expect(maxTokens).toBeGreaterThanOrEqual(1024);
   });
 
-  test('a turn reads the clock from the branch it is on, not the live document', async () => {
-    // The reported bug: the reader wrote a jump that put the clock at 22:11, then deleted
-    // that turn. The live state row still said 22:11, the visible path said 22:01, and the
-    // next turn computed 22:11 + 1. The update now reads from the same point the prompt
-    // reads from, so deleting a turn un-advances the clock with it.
+  test('a resent turn computes from the path, not from the turn that was deleted', async () => {
+    // The reported bug, end to end: a turn jumped the clock to 22:21, the reader deleted
+    // it (active=0, deleted=1, exactly what deleteMessage writes), and the live state row
+    // still said 22:21 while the visible path said 22:01. The resent turn computed
+    // 22:21 + 20 = 22:41 because a send read the LIVE row. The point passed here is the
+    // one `statePointFor('send', ...)` produces from the real tail, so the test defends
+    // the wiring, not just the SQL.
     const { env, db, sent } = makeEnv();
 
     const seedRow = (id: string, parentId: string | null, time: string | null, active: number, deleted: number): void => {
@@ -353,20 +356,66 @@ describe('updateState: the clock advances', () => {
       );
     };
 
-    // 22:00 -> 22:01 on the visible path, then a deleted turn that jumped to 22:11.
+    // 22:00 -> 22:01 on the visible path; then the deleted jump to 22:21.
     seedRow('root', null, 'Friday, April 11, 2025, 22:00', 1, 0);
     seedRow('a1', 'root', null, 1, 0);
     seedRow('a2', 'a1', 'Friday, April 11, 2025, 22:01', 1, 0);
-    seedRow('deleted', 'a2', 'Friday, April 11, 2025, 22:11', 1, 1);
-    // The turn being written now: active, no snapshot yet.
-    seedRow('new', 'a2', null, 1, 0);
+    seedRow('deleted', 'a2', 'Friday, April 11, 2025, 22:21', 0, 1);
+    // The visible path ends at a2: the tail a send anchors at.
+    const tailSeq = (db.query('SELECT seq FROM messages WHERE id = ?').get('a2') as { seq: number }).seq;
 
-    stubProvider(sent, '{"time":"Friday, April 11, 2025, 22:02"}');
+    // The live document still carries the deleted turn's 22:21.
+    db.run(
+      `INSERT INTO state (chat_id, json, updated_at) VALUES ('chat-1', ?, 0)
+       ON CONFLICT(chat_id) DO UPDATE SET json = excluded.json`,
+      [JSON.stringify({ time: 'Friday, April 11, 2025, 22:21' })] as never[],
+    );
 
-    // Reading from before the deleted turn's point must see 22:01, not 22:11.
-    await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'), 'new', 103);
+    stubProvider(sent, '{"time":"Friday, April 11, 2025, 22:21"}');
 
-    expect((await loadState(env, 'chat-1')).time).toBe('Friday, April 11, 2025, 22:02');
+    // The point the real send flow computes, then the model's answer is asserted against
+    // it: 22:01 + 20 minutes, not 22:21 + 20.
+    const point = statePointFor('send', null, tailSeq, false);
+    expect(point).toEqual({ seq: tailSeq, inclusive: true });
+
+    await updateState(
+      env, 'chat-1',
+      { user: 'He took 20 minutes to find it.', assistant: 'He came back empty-handed.' },
+      setupWith('auto'), 'newrow', point,
+    );
+
+    // The prompt the engine saw must be based on 22:01 — the read is asserted before the
+    // write, so a wrong base cannot pass by the model coincidentally echoing it.
+    expect(sent[0].user).toContain('22:01');
+    expect(sent[0].user).not.toContain('22:21\n');
+    expect((await loadState(env, 'chat-1')).time).toBe('Friday, April 11, 2025, 22:21');
+  });
+
+  test('a regenerate still excludes its target snapshot', async () => {
+    // The older rule, unchanged: the target's snapshot is the OUTCOME of the reply being
+    // rewritten, so it is read strictly before.
+    const { env, db, sent } = makeEnv();
+
+    const seedRow = (id: string, parentId: string | null, time: string | null): void => {
+      db.run(
+        `INSERT INTO messages (id, chat_id, parent_id, role, content, active, deleted, state_json, created_at)
+         VALUES (?, 'chat-1', ?, 'assistant', 'x', 1, 0, ?, 0)`,
+        [id, parentId, time === null ? null : JSON.stringify({ time })] as never[],
+      );
+    };
+
+    seedRow('root', null, 'Friday, April 11, 2025, 22:00');
+    seedRow('a1', 'root', 'Friday, April 11, 2025, 22:05');
+    const targetSeq = (db.query('SELECT seq FROM messages WHERE id = ?').get('a1') as { seq: number }).seq;
+
+    stubProvider(sent, '{"time":"Friday, April 11, 2025, 22:01"}');
+
+    const point = statePointFor('regenerate', { seq: targetSeq }, targetSeq, false);
+    await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'), 'a1b', point);
+
+    // Written from BEFORE the target: 22:00 + 1, not 22:05 + 1.
+    expect(sent[0].user).toContain('22:00');
+    expect((await loadState(env, 'chat-1')).time).toBe('Friday, April 11, 2025, 22:01');
   });
 });
 

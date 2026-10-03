@@ -536,6 +536,7 @@ async function createChat(env: Env, req: Request, ctx: ExecutionContext): Promis
                 description: typeof card.description === 'string' ? card.description : '',
               },
               setup,
+              greetingId,
             );
           })
           .catch((error: unknown) => {

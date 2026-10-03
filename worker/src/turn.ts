@@ -165,9 +165,15 @@ async function runTurn(
   // for a `continue` with no target, and a null there would root a row at the opening.
   const tail = await tailId(env, chat.id);
 
-  // The world state this turn is written against. See `stateSeqFor` for the rule and why a
-  // regenerate is the only mode that differs.
-  const stateSeq = stateSeqFor(mode, target);
+  // The world state this turn is written against. See `statePointFor` for the rule; the
+  // tail's seq is the anchor every forward mode reads from.
+  const tailSeq = tail
+    ? await env.DB.prepare('SELECT seq FROM messages WHERE id = ?')
+        .bind(tail)
+        .first<{ seq: number }>()
+        .then((row) => row?.seq ?? null)
+    : null;
+  const statePoint = statePointFor(mode, target, tailSeq, answeringPendingUser);
 
   // Where a new row attaches, and where the model's output attaches. Both are decided by
   // one pure function so the rules can be asserted without a provider.
@@ -209,7 +215,7 @@ async function runTurn(
     const prompt = await buildPrompt(env, chat, settings, {
       mode,
       historyCutoff,
-      stateSeq,
+      statePoint,
       // A recovery `continue` has no new text, but the prompt's tail needs the reader's
       // message — that is what the reply is answering. Without it the model would be
       // asked to continue a conversation whose last user turn it cannot see.
@@ -337,7 +343,7 @@ async function runTurn(
           chat.id,
           { user: stateUser, assistant: assistantText },
           messageId,
-          stateSeq,
+          statePoint,
         );
       } catch (err: unknown) {
         console.warn(`[state] update failed for chat=${chat.id}: ${messageOf(err)}`);
@@ -422,26 +428,47 @@ const IMPERSONATE_INSTRUCTION =
  *    `impersonate` writes the reader's next line, which IS the new tail.
  */
 /**
- * The transcript point a turn's world state must be read from.
+ * Where a turn's world state is read from: an anchor row plus whether that row's own
+ * snapshot is included.
  *
- * `null` means "now" — the live document — and is what every forward turn wants. A
- * `regenerate` instead names the row it is re-rolling, and the state is read from BEFORE it.
+ * The snapshot on a row is the state that row's own turn PRODUCED (`updateState` attaches
+ * it to the reply it just wrote), so the rule is:
  *
- * Why strictly before: the snapshot on a row is the state that row's own turn PRODUCED
- * (`updateState` attaches it to the reply it just wrote), so reading "at or before" the
- * target would hand the model the outcome of the very reply being rewritten. The reported
- * failure was a character walking back INTO a room she had already left, because the state
- * said she was elsewhere — and that fact came from the turn being re-rolled.
+ *  - `send` / `impersonate` / recovery-`continue` answer at the END of the visible path,
+ *    and the tail's snapshot IS the state the new turn extends — inclusive at the tail.
+ *  - `regenerate` rewrites a reply, and the target's snapshot is the OUTCOME of the very
+ *    reply being rewritten — strictly before the target.
+ *
+ * Reading from the path rather than the live document is what makes a delete un-advance
+ * the world with it. The reported failure: a turn that jumped the clock to 22:21 was
+ * deleted, the visible path said 22:01, and the resent turn computed 22:21 + 20 = 22:41
+ * because `send` read the LIVE row. Every mode now reads from the path at its anchor.
  *
  * A pure function so the rule can be asserted without a provider, the same shape
  * `resolveAttachment` uses beside it. The bug it prevents was a correct-looking helper
  * called with the wrong argument, which a test of the helper alone cannot catch.
+ *
+ * `tailSeq` is the seq of the visible path's last row, resolved by the caller. `send`
+ * needs it inclusive; the other forward modes reuse the same anchor.
  */
-export function stateSeqFor(
+export interface StatePoint {
+  /** The anchor row's seq, or null for a chat with no visible rows yet. */
+  seq: number | null;
+  /** Include the anchor's own snapshot (`send` at the tail) or exclude it (`regenerate`). */
+  inclusive: boolean;
+}
+
+export function statePointFor(
   mode: TurnMode,
   target: { seq: number } | null,
-): number | null {
-  return mode === 'regenerate' ? (target?.seq ?? null) : null;
+  tailSeq: number | null,
+  answeringPendingUser: boolean,
+): StatePoint {
+  if (mode === 'regenerate') return { seq: target?.seq ?? null, inclusive: false };
+  if (answeringPendingUser) return { seq: target?.seq ?? null, inclusive: true };
+  // `send` / `impersonate` / plain `continue` extend the tail. Plain `continue` on an
+  // assistant row extends THAT row's own turn, so the tail is its anchor either way.
+  return { seq: tailSeq, inclusive: true };
 }
 
 /**

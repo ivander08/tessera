@@ -2,6 +2,7 @@ import { complete, parseJsonReply } from '../cheap';
 import { EMPTY_STATE, validatePatch } from '../../../src/lib/state/schema';
 import type { WorldState } from '../../../src/lib/state/schema';
 import type { SceneSetup } from '../../../src/lib/scene/setup';
+import type { StatePoint } from '../turn';
 
 /**
  * M5 — world state tracking.
@@ -204,21 +205,17 @@ export async function updateState(
   /** The assistant row this state describes, so a snapshot can be attached to it. */
   messageId?: string | null,
   /**
-   * The transcript point the state must be written FROM, or null for the live document.
-   *
-   * A number reads the newest snapshot strictly before it on the visible path, which is
-   * what stops a deleted or regenerated turn from poisoning the clock. Reported: the
-   * reader deleted the turn that had jumped the clock to 22:11, so the live row still said
-   * 22:11 while the visible path said 22:01 — and the next turn computed 22:11 + 1. Reading
-   * from the path is the same rule the prompt already applies (`loadStateAt`), so the
-   * narrator and the state engine can no longer disagree about what "now" is.
+   * Where the state is read from — the turn's anchor on the visible path. Never the live
+   * document except for a chat with no rows yet: a deleted or regenerated turn must not
+   * poison what the next turn computes from. Reported: the reader deleted the turn that
+   * had jumped the clock to 22:21, so the live row said 22:21 while the path said 22:01 —
+   * and the resent turn computed 22:21 + 20. Reading from the path is the same rule the
+   * prompt applies, so the narrator and the state engine cannot disagree about "now".
    */
-  atSeq?: number | null,
+  point?: StatePoint | null,
 ): Promise<{ applied: boolean; reason?: string }> {
   try {
-    const current = atSeq === null || atSeq === undefined
-      ? await loadState(env, chatId)
-      : await loadStateAt(env, chatId, atSeq);
+    const current = await loadStateForTurn(env, chatId, point ?? { seq: null, inclusive: true });
 
     const reply = await complete(env, {
       system: buildSystemPrompt(setup),
@@ -298,6 +295,8 @@ export async function seedOpeningState(
   openingContent: string,
   card: { name: string; description: string },
   setup: SceneSetup,
+  /** The greeting row, so the seed lands ON the visible path. See the snapshot below. */
+  greetingId?: string | null,
 ): Promise<{ applied: boolean; reason?: string }> {
   try {
     // Nothing to seed from, and a call with no user text is a wasted one.
@@ -344,6 +343,16 @@ export async function seedOpeningState(
       .bind(chatId, JSON.stringify(result.next), Date.now())
       .run();
 
+    // The seed must exist ON the visible path, not only in the live row: every turn reads
+    // the path at its anchor, and a seed that lives only in the live document is invisible
+    // to them — the first turn would re-derive time, place and outfit from nothing.
+    // The greeting is the anchor every early turn reads back to, so the snapshot goes there.
+    if (greetingId) {
+      await env.DB.prepare('UPDATE messages SET state_json = ? WHERE id = ?')
+        .bind(JSON.stringify(result.next), greetingId)
+        .run();
+    }
+
     return { applied: true };
   } catch (error) {
     return { applied: false, reason: messageOf(error) };
@@ -360,6 +369,27 @@ const OPENING_RULE = [
   // would hand them a time they did not choose.
   'When the pace is manual, omit "time" entirely.',
 ].join('\n');
+
+/**
+ * The world state to write one turn against, read from the turn's anchor on the visible
+ * path (see `statePointFor`).
+ *
+ * `point.seq === null` — a chat with no visible rows yet, which only the very first turn
+ * of a fresh chat can produce — falls back to the live document, which at that moment is
+ * either empty or the opening seed.
+ *
+ * Inclusive anchors need the newest snapshot at or before the anchor row. `seq` is a
+ * global autoincrement, so `seq <= anchor` is expressed as `seq < anchor + 1`: the walk
+ * itself stays strictly-before, one query for both cases.
+ */
+export async function loadStateForTurn(
+  env: Env,
+  chatId: string,
+  point: StatePoint,
+): Promise<WorldState> {
+  if (point.seq === null) return await loadState(env, chatId);
+  return await loadStateAt(env, chatId, point.inclusive ? point.seq + 1 : point.seq);
+}
 
 /**
  * Load the stored document.

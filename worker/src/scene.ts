@@ -1,5 +1,6 @@
 import { badRequest, json, notFound, readJson } from './http';
 import { updateState } from './state/update';
+import type { StatePoint } from './turn';
 import {
   DEFAULT_SCENE_SETUP,
   parseSceneSetup,
@@ -95,10 +96,10 @@ export async function maybeUpdateState(
   chatId: string,
   lastExchange: { user: string; assistant: string },
   messageId?: string | null,
-  /** Read the state as of this transcript point rather than the live document. */
-  atSeq?: number | null,
+  /** Where the state is read from — the turn's anchor on the visible path. */
+  point?: StatePoint | null,
 ): Promise<{ applied: boolean; reason?: string }> {
   const setup = await loadSceneSetup(env, chatId);
   if (setup.stateMode === 'off') return { applied: false, reason: 'state mode is off' };
-  return updateState(env, chatId, lastExchange, setup, messageId, atSeq ?? null);
+  return updateState(env, chatId, lastExchange, setup, messageId, point ?? null);
 }

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'bun:test';
 
 import { buildPrompt } from './prompt';
-import { historyCutoffFor, stateSeqFor } from './turn';
+import { historyCutoffFor, statePointFor } from './turn';
 import type { EffectiveSettings } from './effective';
 import type { ChatRow } from './db';
 
@@ -221,7 +221,7 @@ describe('the four turn modes on a long chat', () => {
     const prompt = await buildPrompt(env, chat, settings(8000), {
       mode: 'send',
       historyCutoff: null,
-      stateSeq: null,
+      statePoint: { seq: null, inclusive: true },
       userContent: 'next',
       tailExtra: '',
     });
@@ -244,7 +244,7 @@ describe('the four turn modes on a long chat', () => {
     const prompt = await buildPrompt(env, chat, settings(2500), {
       mode: 'regenerate',
       historyCutoff: historyCutoffFor('regenerate', trunk[2], false),
-      stateSeq: stateSeqFor('regenerate', trunk[2]),
+      statePoint: statePointFor('regenerate', trunk[2], null, false),
       userContent: '',
       tailExtra: '',
     });
@@ -264,7 +264,7 @@ describe('the four turn modes on a long chat', () => {
     const prompt = await buildPrompt(env, chat, settings(2500), {
       mode: 'regenerate',
       historyCutoff: historyCutoffFor('regenerate', trunk[150], false),
-      stateSeq: stateSeqFor('regenerate', trunk[150]),
+      statePoint: statePointFor('regenerate', trunk[150], null, false),
       userContent: '',
       tailExtra: '',
     });
@@ -283,7 +283,7 @@ describe('the four turn modes on a long chat', () => {
     const prompt = await buildPrompt(env, chat, settings(8000), {
       mode: 'impersonate',
       historyCutoff: historyCutoffFor('impersonate', null, false),
-      stateSeq: stateSeqFor('impersonate', null),
+      statePoint: statePointFor('impersonate', null, null, false),
       userContent: '',
       tailExtra: '',
     });
@@ -299,7 +299,7 @@ describe('the four turn modes on a long chat', () => {
     const prompt = await buildPrompt(env, chat, settings(8000), {
       mode: 'continue',
       historyCutoff: historyCutoffFor('continue', trunk[199], false),
-      stateSeq: stateSeqFor('continue', trunk[199]),
+      statePoint: statePointFor('continue', trunk[199], null, false),
       userContent: '',
       tailExtra: '',
     });
@@ -319,7 +319,7 @@ describe('the four turn modes on a long chat', () => {
     const prompt = await buildPrompt(env, chat, settings(8000), {
       mode: 'continue',
       historyCutoff: historyCutoffFor('continue', target, true),
-      stateSeq: stateSeqFor('continue', target),
+      statePoint: statePointFor('continue', target, null, false),
       userContent: 'RECOVERY_TAIL',
       tailExtra: '',
     });
@@ -341,7 +341,7 @@ describe('the four turn modes on a long chat', () => {
       await buildPrompt(env, currentChat(db), settings(8000), {
         mode: 'regenerate',
         historyCutoff: historyCutoffFor('regenerate', trunk[index], false),
-        stateSeq: stateSeqFor('regenerate', trunk[index]),
+        statePoint: statePointFor('regenerate', trunk[index], null, false),
         userContent: '',
         tailExtra: '',
       });
@@ -376,7 +376,7 @@ describe('branching on a long chat', () => {
     const branched = await buildPrompt(env, currentChat(db), settings(8000), {
       mode: 'send',
       historyCutoff: null,
-      stateSeq: null,
+      statePoint: { seq: null, inclusive: true },
       userContent: 'x',
       tailExtra: '',
     });
@@ -392,7 +392,7 @@ describe('branching on a long chat', () => {
     const restored = await buildPrompt(env, currentChat(db), settings(8000), {
       mode: 'send',
       historyCutoff: null,
-      stateSeq: null,
+      statePoint: { seq: null, inclusive: true },
       userContent: 'x',
       tailExtra: '',
     });
@@ -409,7 +409,7 @@ describe('branching on a long chat', () => {
     const prompt = await buildPrompt(env, currentChat(db), settings(8000), {
       mode: 'send',
       historyCutoff: null,
-      stateSeq: null,
+      statePoint: { seq: null, inclusive: true },
       userContent: 'x',
       tailExtra: '',
     });
