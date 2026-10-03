@@ -32,20 +32,32 @@ export function renderMemoryBlock(
 
   if (sections.length === 0) return '';
 
-  // Drop whole lines from the end of the least critical section until the block fits.
-  // Truncating mid-sentence would hand the model a half-fact, which is worse than
-  // omitting it.
+  // Drop whole lines from the least critical section until the block fits. Truncating
+  // mid-sentence would hand the model a half-fact, which is worse than omitting it.
+  //
+  // "Least critical" is NOT the reverse of compose order — compose order alone gets it
+  // backwards: summaries are first in the block but they are re-derivable from the
+  // original messages any time, and a recalled message is raw transcript the reader can
+  // scroll to — while a fact is a distilled statement that exists only here. Sacrificing
+  // by position evicted every fact whenever the summaries alone filled the budget, and
+  // the model then answered questions about remembered specifics with confident
+  // inventions (measured on a 240-message soak chat: recall returned the fact top-ranked,
+  // the rendered block contained no facts at all, and the narrator denied remembering).
+  // So the sacrifice order is explicit, independent of compose order: summary lines
+  // first, recalled messages second, facts last. Within a section the END of the list
+  // goes first, which is also correct: summaries arrive newest-first, so the oldest
+  // scene dies first, and bm25-ranked hits arrive best-first, so the weakest match dies
+  // first.
+  const byHeading = new Map(sections.map((section) => [section.heading, section]));
+  const sacrificeOrder = ['Story so far', 'Relevant earlier moments', 'Established facts'];
+
   let text = compose(sections);
   while (count(text) > maxTokens) {
-    const section = sections[sections.length - 1];
-    if (section.lines.length > 1) {
-      section.lines.pop();
-    } else if (sections.length > 1) {
-      sections.pop();
-    } else {
-      sections[0].lines = [];
-      break;
-    }
+    const section = sacrificeOrder
+      .map((heading) => byHeading.get(heading))
+      .find((candidate) => candidate !== undefined && candidate.lines.length > 0);
+    if (!section) break;
+    section.lines.pop();
     text = compose(sections);
   }
 
