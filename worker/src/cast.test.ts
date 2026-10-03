@@ -33,6 +33,10 @@ const MIGRATIONS = [
   '0007_scene_setup.sql',
   '0008_cast.sql',
   '0009_message_speaker.sql',
+  '0011_message_state.sql',
+  '0012_message_deleted.sql',
+  '0013_presets_authored.sql',
+  '0014_provenance.sql',
 ];
 
 function makeEnv(): { env: Env; db: Database } {
@@ -112,6 +116,26 @@ function seedChat(db: Database, id = 'chat-1', nickname: string | null = 'Quill'
 
 const count = (db: Database): number =>
   one<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM chat_cast')?.n ?? 0;
+
+/**
+ * One message, so the chat has a visible path.
+ *
+ * Cast members are scoped to the turn that introduced them (`joined_seq`), and a turn is
+ * only visible if it is on the path. A chat with no messages has an EMPTY path, so every
+ * member with a real `joined_seq` is correctly hidden and these tests would be asserting
+ * against a state the app never reaches. The primary character is the exception — its cast
+ * row is derived from the chat, not stored, so it is visible regardless.
+ */
+function seedMessage(db: Database, chatId: string): number {
+  exec(
+    db,
+    `INSERT INTO messages (id, chat_id, parent_id, role, content, content_tokens, active, created_at)
+     VALUES ('m1', ?, NULL, 'assistant', 'Quill looks up.', 5, 1, ?)`,
+    chatId,
+    Date.now(),
+  );
+  return one<{ seq: number }>(db, 'SELECT seq FROM messages WHERE id = ?', 'm1')?.seq ?? 0;
+}
 
 describe('loadCast', () => {
   test('a chat with no rows still has a cast: its own character', async () => {
@@ -315,10 +339,12 @@ describe('recordSpeakers', () => {
     const { env, db } = makeEnv();
     const chatId = seedChat(db);
 
+    const seq = seedMessage(db, chatId);
     const added = await recordSpeakers(
       env,
       chatId,
       'Quill: *looks up*\n\nOlivia: "You\'re late."',
+      seq,
     );
     // Quill is the primary and already known; Olivia is new.
     expect(added).toEqual(['Olivia']);
@@ -336,7 +362,8 @@ describe('recordSpeakers', () => {
     );
     exec(db, 'UPDATE chats SET persona_id = ? WHERE id = ?', 'p1', chatId);
 
-    const added = await recordSpeakers(env, chatId, 'Quill: hi\nIvander: hello\nAda: "hm"');
+    const seq = seedMessage(db, chatId);
+    const added = await recordSpeakers(env, chatId, 'Quill: hi\nIvander: hello\nAda: "hm"', seq);
     expect(added).toEqual(['Ada']);
   });
 
@@ -345,15 +372,16 @@ describe('recordSpeakers', () => {
     const chatId = seedChat(db);
     const reply = 'Quill: one\n\nOlivia: two';
 
-    await recordSpeakers(env, chatId, reply);
-    expect(await recordSpeakers(env, chatId, reply)).toEqual([]);
+    const seq = seedMessage(db, chatId);
+    await recordSpeakers(env, chatId, reply, seq);
+    expect(await recordSpeakers(env, chatId, reply, seq)).toEqual([]);
     expect(count(db)).toBe(1);
   });
 
   test('prose with no script lines adds nothing', async () => {
     const { env, db } = makeEnv();
     const chatId = seedChat(db);
-    expect(await recordSpeakers(env, chatId, 'Quill looks up. You are late.')).toEqual([]);
+    expect(await recordSpeakers(env, chatId, 'Quill looks up. You are late.', seedMessage(db, chatId))).toEqual([]);
     expect(count(db)).toBe(0);
   });
 
@@ -368,6 +396,6 @@ describe('recordSpeakers', () => {
       now,
       now,
     );
-    expect(await recordSpeakers(env, 'bare', 'Olivia: hello')).toEqual([]);
+    expect(await recordSpeakers(env, 'bare', 'Olivia: hello', 1)).toEqual([]);
   });
 });

@@ -33,6 +33,10 @@ const MIGRATIONS = [
   '0009_message_speaker.sql',
   '0011_message_state.sql',
   '0012_message_deleted.sql',
+
+  '0013_presets_authored.sql',
+
+  '0014_provenance.sql',
 ];
 
 interface Recorded {

@@ -321,6 +321,14 @@ async function runTurn(
 
     if (usage) await calibrate(env, settings.model, usage.promptTokens, prompt.messages);
 
+    // The seq of the row just written. Provenance for anything derived from this reply —
+    // cast members, and the fact range below — needs the turn's own coordinate, and `seq`
+    // is only assigned by the insert.
+    const replyRow = await env.DB.prepare('SELECT seq FROM messages WHERE id = ?')
+      .bind(messageId)
+      .first<{ seq: number }>();
+    const replySeq = replyRow?.seq ?? 0;
+
     // State advances only on a completed turn. Regenerating or continuing rewrites what
     // the scene says, so folding it into state would record a draft as canon.
     //
@@ -347,7 +355,7 @@ async function runTurn(
       // is already delivered, so a cast member must never delay it — and a failure here
       // costs a cast entry, not a turn.
       ctx.waitUntil(
-        recordSpeakers(env, chat.id, assistantText).catch((err: unknown) => {
+        recordSpeakers(env, chat.id, assistantText, replySeq).catch((err: unknown) => {
           console.warn(`[cast] speaker detection failed for chat=${chat.id}: ${messageOf(err)}`);
         }),
       );

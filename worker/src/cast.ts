@@ -1,4 +1,5 @@
 import { getCharacter } from './db';
+import { VISIBLE_PATH_SEQ_CTE } from './branch';
 import { VOICE_SLOTS } from '../../src/lib/theme';
 import { speakersIn } from '../../src/lib/transcript/speakers';
 
@@ -41,14 +42,35 @@ export interface CastRow {
  * character from the cast the moment anyone else spoke, which re-added the character as a
  * SUPPORTING member on the next reply and removed them from the prompt's cast block.
  */
-export async function loadCast(env: Env, chatId: string): Promise<CastRow[]> {
+export async function loadCast(
+  env: Env,
+  chatId: string,
+  /**
+   * Only members introduced before this turn, and whose introducing turn is still on the
+   * visible path. `null` means "now" and returns the whole cast.
+   *
+   * A member added by a reply that has since been regenerated away was never in this scene,
+   * so injecting them puts a stranger in the room. Same two bounds the summary read uses.
+   */
+  beforeSeq: number | null = null,
+): Promise<CastRow[]> {
   const { results } = await env.DB.prepare(
-    `SELECT chat_id, id, character_id, name, color, is_primary, created_at
+    // `joined_seq = 0` is the primary character and anything predating provenance: always
+    // visible, because it belongs to the chat rather than to a turn.
+    `${VISIBLE_PATH_SEQ_CTE}
+     SELECT chat_id, id, character_id, name, color, is_primary, created_at
        FROM chat_cast
-      WHERE chat_id = ?
+      WHERE chat_id = ?1
+        AND (
+          joined_seq = 0
+          OR (
+            (?2 IS NULL OR joined_seq < ?2)
+            AND EXISTS (SELECT 1 FROM path WHERE path.seq = chat_cast.joined_seq)
+          )
+        )
       ORDER BY is_primary DESC, created_at`,
   )
-    .bind(chatId)
+    .bind(chatId, beforeSeq)
     .all<CastRow>();
 
   if (results.some((row) => row.is_primary === 1)) return results;
@@ -105,7 +127,13 @@ export async function castNames(env: Env, chatId: string): Promise<string[]> {
  * Returns the EXISTING row when the name is already present, so a caller can add freely
  * without checking first.
  */
-export async function addCastMember(env: Env, chatId: string, name: string): Promise<CastRow> {
+export async function addCastMember(
+  env: Env,
+  chatId: string,
+  name: string,
+  /** The turn that introduced this speaker; 0 for one that predates any message. */
+  joinedSeq = 0,
+): Promise<CastRow> {
   const trimmed = name.trim();
   const existing = await loadCast(env, chatId);
   const already = existing.find((row) => row.name.trim().toLowerCase() === trimmed.toLowerCase());
@@ -134,8 +162,8 @@ export async function addCastMember(env: Env, chatId: string, name: string): Pro
   };
 
   await env.DB.prepare(
-    `INSERT INTO chat_cast (chat_id, id, character_id, name, color, is_primary, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO chat_cast (chat_id, id, character_id, name, color, is_primary, joined_seq, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       row.chat_id,
@@ -144,6 +172,7 @@ export async function addCastMember(env: Env, chatId: string, name: string): Pro
       row.name,
       row.color,
       row.is_primary,
+      joinedSeq,
       row.created_at,
     )
     .run();
@@ -215,12 +244,31 @@ export async function recordSpeakers(
   env: Env,
   chatId: string,
   content: string,
+  /** The turn this reply occupies, so the cast member is scoped to it. */
+  atSeq: number,
 ): Promise<string[]> {
-  const cast = await loadCast(env, chatId);
-  if (cast.length === 0) return [];
+  // Read UNBOUNDED — not `loadCast`, which is path-filtered for the prompt. This is a
+  // deduplication question ("have we ever recorded this person?"), not a visibility one.
+  // Using the visibility read here would make a member whose introducing turn is off the
+  // visible path look new, and re-add them with a second colour.
+  const { results: stored } = await env.DB.prepare(
+    'SELECT name FROM chat_cast WHERE chat_id = ?',
+  )
+    .bind(chatId)
+    .all<{ name: string }>();
 
   // Everyone already known, so the reply's existing speakers are not re-added.
-  const known = cast.map((row) => row.name);
+  //
+  // The stored rows are not the whole cast: the chat's own character is DERIVED by
+  // `loadCast` when no row claims `is_primary`, so reading the table alone would leave the
+  // primary out of `known` and the narrator's own name would be re-added as a supporting
+  // member on every reply.
+  const known = stored.map((row) => row.name);
+  const primary = await primaryRow(env, chatId);
+  if (!primary) return [];
+  if (!known.some((name) => name.trim().toLowerCase() === primary.name.trim().toLowerCase())) {
+    known.push(primary.name);
+  }
 
   // The persona is the reader. The narrator naming them in a script is the model
   // overstepping, and it must not become a cast member.
@@ -233,7 +281,7 @@ export async function recordSpeakers(
 
   const added: string[] = [];
   for (const name of found) {
-    const row = await addCastMember(env, chatId, name);
+    const row = await addCastMember(env, chatId, name, atSeq);
     added.push(row.name);
   }
   return added;

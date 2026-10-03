@@ -179,9 +179,10 @@ export async function buildPrompt(
   }
 
   // The cast, loaded once and used for two things: the tail block below, and the
-  // `includeNames` prefixing here. A chat with no cast rows still has one — the chat's
-  // own character — so the common single-character scene takes the same path.
-  const cast = await loadCast(env, chat.id);
+  // `includeNames` prefixing here. Bounded by the same cut point as the memory and state
+  // reads: a speaker introduced by a reply that has since been regenerated away was never
+  // in this scene, and naming them puts a stranger in the room.
+  const cast = await loadCast(env, chat.id, options.stateSeq);
   const multiSpeaker = cast.length > 1;
 
   // `includeNames` is the preset's lever for a scene with several speakers: prefix each

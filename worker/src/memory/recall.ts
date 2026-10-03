@@ -82,15 +82,29 @@ export async function recall(
       // `status = 'active'` is required, not incidental: the caller renders fact hits
       // under "Established facts". A superseded fact is one the story has moved past,
       // so recalling it would state something the narrative has already contradicted.
-      `SELECT facts_fts.rowid AS rowid, bm25(facts_fts) AS score,
+      //
+      // The provenance bounds are what stop a fact outliving the turn that produced it.
+      // A fact recorded at turn 9 is not true at turn 3, and if turn 9 is regenerated away
+      // it is not true at all — injecting it anyway writes a scene where an event that
+      // never happened has already happened. `learned_at_seq = 0` is a fact with no
+      // recorded origin (a backfilled row, or a manually added one) and stays visible.
+      `${VISIBLE_PATH_SEQ_CTE}
+       SELECT facts_fts.rowid AS rowid, bm25(facts_fts) AS score,
               f.text AS text, f.id AS ref_id
          FROM facts_fts
          JOIN facts f ON f.rowid = facts_fts.rowid
-        WHERE facts_fts MATCH ? AND f.chat_id = ? AND f.status = 'active'
+        WHERE facts_fts MATCH ?2 AND f.chat_id = ?1 AND f.status = 'active'
+          AND (
+            f.learned_at_seq = 0
+            OR (
+              (?4 IS NULL OR f.learned_at_seq < ?4)
+              AND EXISTS (SELECT 1 FROM path WHERE path.seq = f.learned_at_seq)
+            )
+          )
         ORDER BY score
-        LIMIT ?`,
+        LIMIT ?3`,
     )
-      .bind(match, chatId, limit)
+      .bind(chatId, match, limit, beforeSeq)
       .all<FtsRow>(),
 
     env.DB.prepare(
@@ -111,11 +125,22 @@ export async function recall(
     env.DB.prepare(
       // Pinning overrides RANKING, never status: a pinned fact that has since been
       // superseded is still superseded, and must not be presented as established.
-      `SELECT id, text FROM facts
-        WHERE chat_id = ? AND pinned = 1 AND status = 'active'
+      //
+      // It does not override PROVENANCE either. A pinned fact is still a fact produced by
+      // some turn, and pinning it does not make it true at an earlier point in the story.
+      `${VISIBLE_PATH_SEQ_CTE}
+       SELECT id, text FROM facts
+        WHERE chat_id = ?1 AND pinned = 1 AND status = 'active'
+          AND (
+            learned_at_seq = 0
+            OR (
+              (?2 IS NULL OR learned_at_seq < ?2)
+              AND EXISTS (SELECT 1 FROM path WHERE path.seq = facts.learned_at_seq)
+            )
+          )
         ORDER BY created_at`,
     )
-      .bind(chatId)
+      .bind(chatId, beforeSeq)
       .all<PinnedRow>(),
   ]);
 

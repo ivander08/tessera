@@ -215,12 +215,17 @@ export async function extractFacts(
   // happens in the same atomic step as the insert, so there is never a committed state
   // where both facts are active — the reason supersede ran first — while the update can
   // now reference an id that exists.
+  //
+  // `learned_at_seq` is the turn that produced these facts. It is what lets a read ask "was
+  // this true at the point I am writing?", and it is the same coordinate the summary read
+  // uses. Without it a fact recorded by a turn that is later regenerated away keeps being
+  // injected, so an early scene is written with knowledge of an event that has not happened.
   const statements = [
     ...inserts.map((fact) =>
       env.DB.prepare(
-        `INSERT INTO facts (id, chat_id, text, subject, status, pinned, created_at)
-         VALUES (?, ?, ?, ?, 'active', 0, ?)`,
-      ).bind(fact.id, chatId, fact.text, fact.subject, now),
+        `INSERT INTO facts (id, chat_id, text, subject, status, pinned, learned_at_seq, created_at)
+         VALUES (?, ?, ?, ?, 'active', 0, ?, ?)`,
+      ).bind(fact.id, chatId, fact.text, fact.subject, toSeq, now),
     ),
     ...targets.map((target) =>
       env.DB.prepare(

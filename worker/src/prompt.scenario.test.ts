@@ -45,6 +45,10 @@ const MIGRATIONS = [
   '0009_message_speaker.sql',
   '0011_message_state.sql',
   '0012_message_deleted.sql',
+
+  '0013_presets_authored.sql',
+
+  '0014_provenance.sql',
 ];
 
 function makeEnv(): { env: Env; db: Database } {
@@ -289,6 +293,213 @@ function seedFullMemoryChat(db: Database): {
 
   return { chat, rows };
 }
+
+/**
+ * The reported failure, as a two-branch conversation.
+ *
+ * Branch A: turn 5 records "Ivan died" and turn 8 records "Sydney died".
+ * Branch B: turn 4 is regenerated, so A's turns 4-8 leave the transcript, and the new
+ * line records "Olivia died" instead.
+ *
+ * The rule: a fact belongs to the turn that produced it, so A's facts are invisible
+ * everywhere in B, and B's fact is invisible in A. Swiping between the branches swaps
+ * the whole set, because the reads resolve against the visible path.
+ */
+function seedTwoBranches(db: Database): {
+  chat: ChatRow;
+  a: Array<{ id: string; seq: number }>;
+  b: Array<{ id: string; seq: number }>;
+} {
+  const chat = seedChat(db);
+  const now = Date.now();
+  let parent: string | null = null;
+  const make = (id: string, role: string, content: string, active: number) => {
+    exec(
+      db,
+      `INSERT INTO messages (id, chat_id, parent_id, role, content, content_tokens, active, created_at)
+       VALUES (?, ?, ?, ?, ?, 20, ?, ?)`,
+      id,
+      CHAT_ID,
+      parent,
+      role,
+      content,
+      active,
+      now,
+    );
+    const seq = one<{ seq: number }>(db, 'SELECT seq FROM messages WHERE id = ?', id)!.seq;
+    if (active === 1) parent = id;
+    return { id, seq };
+  };
+
+  // Shared trunk: turns 1-3.
+  const a: Array<{ id: string; seq: number }> = [];
+  a.push(make('a1', 'assistant', 'turn 1', 1));
+  a.push(make('a2', 'user', 'turn 2', 1));
+  a.push(make('a3', 'assistant', 'turn 3', 1));
+
+  // Branch A continues: turns 4-8, active first so the walk follows it.
+  const aBranch: Array<{ id: string; seq: number }> = [];
+  aBranch.push(make('a4', 'user', 'turn 4', 1));
+  aBranch.push(make('a5', 'assistant', 'turn 5', 1));
+  aBranch.push(make('a6', 'user', 'turn 6', 1));
+  aBranch.push(make('a7', 'assistant', 'turn 7', 1));
+  aBranch.push(make('a8', 'user', 'turn 8', 1));
+
+  // The fact branch A recorded at turn 5.
+  seedFact(db, 'f-ivan', 'FACT_IVAN_DIED Ivan is dead.', 0);
+  exec(db, `UPDATE facts SET learned_at_seq = ? WHERE id = 'f-ivan'`, aBranch[1].seq);
+
+  // Now branch B: the reader regenerates turn 4, so A's continuation goes inactive and B
+  // is written in its place, off the same parent (a3).
+  exec(db, `UPDATE messages SET active = 0 WHERE id = 'a4'`);
+  parent = 'a3';
+  const b: Array<{ id: string; seq: number }> = [];
+  b.push(make('b4', 'user', 'turn 4b', 1));
+  b.push(make('b5', 'assistant', 'turn 5b', 1));
+  b.push(make('b6', 'user', 'turn 6b', 1));
+  b.push(make('b7', 'assistant', 'turn 7b', 1));
+  b.push(make('b8', 'user', 'turn 8b', 1));
+
+  // Branch B's fact, recorded at its own turn 7b.
+  seedFact(db, 'f-olivia', 'FACT_OLIVIA_DIED Olivia is dead.', 0);
+  exec(db, `UPDATE facts SET learned_at_seq = ? WHERE id = 'f-olivia'`, b[3].seq);
+
+  return { chat, a: aBranch, b };
+}
+
+describe('scenario: a fact from a regenerated-away turn', () => {
+  test('branch A facts are invisible while branch B is the visible transcript', async () => {
+    const { db, env } = makeEnv();
+    const { chat, b } = seedTwoBranches(db);
+
+    // Writing at the end of B: only B's fact is true.
+    const atEnd = await buildPrompt(env, chat, settings(40000), {
+      mode: 'send',
+      userSeq: null,
+      stateSeq: null,
+      userContent: 'Ivan dead',
+      tailExtra: '',
+    });
+    expect(promptText(atEnd)).toContain('FACT_OLIVIA_DIED');
+    expect(promptText(atEnd)).not.toContain('FACT_IVAN_DIED');
+
+    // And writing B's early turn: neither is true yet, because B's turn 7b is still ahead.
+    const atStart = await buildPrompt(env, chat, settings(40000), {
+      mode: 'regenerate',
+      userSeq: null,
+      stateSeq: b[1].seq,
+      userContent: '',
+      tailExtra: '',
+    });
+    expect(promptText(atStart)).not.toContain('FACT_OLIVIA_DIED');
+    expect(promptText(atStart)).not.toContain('FACT_IVAN_DIED');
+  });
+
+  test('swiping back to branch A restores its facts and hides branch Bs', async () => {
+    // The reader's exact question: swipe from 3b back to 3, and the original continuation
+    // returns. Because each fact carries its own branch's turn, the swap is automatic.
+    const { db, env } = makeEnv();
+    const { chat, a } = seedTwoBranches(db);
+
+    // Swipe back: reactivate A's turn 4, deactivate B's.
+    exec(db, `UPDATE messages SET active = 1 WHERE id = 'a4'`);
+    exec(db, `UPDATE messages SET active = 0 WHERE id = 'b4'`);
+
+    const prompt = await buildPrompt(env, chat, settings(40000), {
+      mode: 'send',
+      userSeq: null,
+      stateSeq: null,
+      userContent: 'Ivan dead',
+      tailExtra: '',
+    });
+
+    // A's fact is back; B's is gone. Nothing had to be recalculated.
+    expect(promptText(prompt)).toContain('FACT_IVAN_DIED');
+    expect(promptText(prompt)).not.toContain('FACT_OLIVIA_DIED');
+
+    // And A's own early turn still does not see it, since turn 5 is ahead of turn 4.
+    const early = await buildPrompt(env, chat, settings(40000), {
+      mode: 'regenerate',
+      userSeq: null,
+      stateSeq: a[0].seq,
+      userContent: '',
+      tailExtra: '',
+    });
+    expect(promptText(early)).not.toContain('FACT_IVAN_DIED');
+  });
+
+  test('a pinned fact is bounded by provenance too', async () => {
+    // Pinning overrides ranking, never provenance: a pinned fact recorded at turn 5 is
+    // still not true at turn 4.
+    const { db, env } = makeEnv();
+    const { chat, a } = seedTwoBranches(db);
+    exec(db, `UPDATE facts SET pinned = 1 WHERE id = 'f-ivan'`);
+
+    const early = await buildPrompt(env, chat, settings(40000), {
+      mode: 'regenerate',
+      userSeq: null,
+      stateSeq: a[0].seq,
+      userContent: '',
+      tailExtra: '',
+    });
+    expect(promptText(early)).not.toContain('FACT_IVAN_DIED');
+  });
+});
+
+describe('scenario: a cast member from a regenerated-away turn', () => {
+  test('a speaker introduced off-path is not named in the prompt', async () => {
+    // Same rule for the cast: someone the narrator introduced in a reply that has since
+    // been regenerated away was never in this scene.
+    const { db, env } = makeEnv();
+    const { chat, b } = seedTwoBranches(db);
+
+    // The primary character is stored, so the cast block renders at all.
+    exec(
+      db,
+      `INSERT INTO chat_cast (chat_id, id, character_id, name, color, is_primary, joined_seq, created_at)
+       VALUES (?, 'cast-quill', 'char-1', 'Quill', NULL, 1, 0, ?)`,
+      CHAT_ID,
+      Date.now(),
+    );
+    // A speaker branch A introduced at its turn 7.
+    exec(
+      db,
+      `INSERT INTO chat_cast (chat_id, id, character_id, name, color, is_primary, joined_seq, created_at)
+       VALUES (?, 'cast-bram', NULL, 'Bram', '--voice-2', 0, ?, ?)`,
+      CHAT_ID,
+      Date.now(),
+      Date.now(),
+    );
+    exec(
+      db,
+      `UPDATE chat_cast SET joined_seq = (SELECT seq FROM messages WHERE id = 'a7') WHERE id = 'cast-bram'`,
+    );
+
+    // B is the visible transcript, so A's speaker is not in the room.
+    const prompt = await buildPrompt(env, chat, settings(40000), {
+      mode: 'send',
+      userSeq: null,
+      stateSeq: null,
+      userContent: 'hello',
+      tailExtra: '',
+    });
+    expect(promptText(prompt)).toContain('Quill');
+    expect(promptText(prompt)).not.toContain('Bram');
+    void b;
+
+    // Swipe back to A and Bram is present again.
+    exec(db, `UPDATE messages SET active = 1 WHERE id = 'a4'`);
+    exec(db, `UPDATE messages SET active = 0 WHERE id = 'b4'`);
+    const restored = await buildPrompt(env, chat, settings(40000), {
+      mode: 'send',
+      userSeq: null,
+      stateSeq: null,
+      userContent: 'hello',
+      tailExtra: '',
+    });
+    expect(promptText(restored)).toContain('Bram');
+  });
+});
 
 describe('scenario: which state a mode reads', () => {
   test('only regenerate names a point in time; every forward mode reads live', () => {

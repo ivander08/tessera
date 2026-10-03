@@ -53,6 +53,10 @@ const MIGRATIONS = [
   '0009_message_speaker.sql',
   '0011_message_state.sql',
   '0012_message_deleted.sql',
+
+  '0013_presets_authored.sql',
+
+  '0014_provenance.sql',
 ];
 
 function makeEnv(): { env: Env; db: Database; calls: Recorded[] } {
@@ -319,7 +323,8 @@ describe('recall', () => {
     expect(messageQuery?.sql).toContain('bm25(messages_fts)');
 
     const factQuery = calls.find((call) => call.sql.includes('facts_fts MATCH'));
-    expect(factQuery?.params).toEqual(['"Ada" OR "room"', chatId, 5]);
+    // Same ordering as the message query: the path CTE owns `?1`.
+    expect(factQuery?.params).toEqual([chatId, '"Ada" OR "room"', 5, null]);
     // Superseded facts must not be recalled: the caller labels these "Established
     // facts", and a superseded one is something the story has moved past.
     expect(factQuery?.sql).toContain("f.status = 'active'");
