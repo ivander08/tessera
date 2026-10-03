@@ -13,8 +13,20 @@ import { asRecord } from '../json';
  * more questions without a migration each time.
  */
 export interface SceneSetup {
-  /** How much in-world time one exchange advances. */
-  timePace: 'auto' | 'minute' | 'hour' | 'scene' | 'manual';
+  /**
+   * How in-world time moves.
+   *
+   * There used to be five choices — auto, minute, hour, scene, manual — and the first four
+   * were all the same instruction ("move the clock") with a different multiplier, which the
+   * cheap model then had to apply by doing clock arithmetic it is bad at. Measured: a plain
+   * exchange left the clock unchanged for several turns, and "10 minutes pass" advanced it
+   * by a minute or not at all. The reader is not asked to pick a broken dial.
+   *
+   * So time is SYSTEM-managed: the model reports only the elapsed minutes it read out of
+   * the exchange and `advanceClock` does the addition. `manual` survives as the one
+   * deliberate opt-out, for a reader who wants to keep the clock themselves.
+   */
+  timePace: 'auto' | 'manual';
   /** Who maintains the world state. */
   stateMode: 'automatic' | 'manual' | 'off';
   /** Generate time/weather/location/outfits from the greeting when the scene opens. */
@@ -196,17 +208,15 @@ export const TIME_PACE_OPTIONS: Array<{
 }> = [
   {
     value: 'auto',
-    label: 'Let the narrator decide',
-    description: 'Time moves by what the scene implies — a minute, an hour, or overnight.',
+    label: 'Managed for you',
+    description:
+      'The clock moves by what the exchange covers — minutes for a conversation, hours for a skip, overnight for a night\'s sleep.',
   },
-  { value: 'minute', label: 'Minute by minute', description: '1 exchange ≈ 1 minute' },
-  { value: 'hour', label: 'Hourly', description: '1 exchange ≈ 1 hour' },
   {
-    value: 'scene',
-    label: 'When the writing says so',
-    description: 'Time moves only when the writing says so',
+    value: 'manual',
+    label: 'I keep the clock',
+    description: 'Nothing advances it. It changes only when you write a time yourself.',
   },
-  { value: 'manual', label: 'I keep the clock', description: 'I set the clock myself' },
 ];
 
 export const STATE_MODE_OPTIONS: Array<{

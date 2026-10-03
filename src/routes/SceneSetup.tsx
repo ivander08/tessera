@@ -218,7 +218,7 @@ export default function SceneSetup() {
                 className="btn quiet"
                 onClick={() => void start()}
                 disabled={busy}
-                title="Start with the defaults: time moves when the writing says so, state tracked automatically."
+                title="Start with the defaults: the clock is managed for you, state tracked automatically."
               >
                 Skip
               </button>

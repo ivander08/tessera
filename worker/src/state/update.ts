@@ -1,7 +1,9 @@
 import { complete, parseJsonReply } from '../cheap';
+import { asRecord } from '../../../src/lib/json';
 import { EMPTY_STATE, validatePatch } from '../../../src/lib/state/schema';
 import type { WorldState } from '../../../src/lib/state/schema';
 import type { SceneSetup } from '../../../src/lib/scene/setup';
+import { advanceClock, clampElapsed } from '../../../src/lib/state/time';
 
 /**
  * M5 — world state tracking.
@@ -85,29 +87,17 @@ const SYSTEM = [
  */
 const TIME_KEY: Record<SceneSetup['timePace'], string> = {
   auto: [
-    '  "time"       string  — the real-world clock time of the scene, as a full date and',
-    '                time (24-hour): "Friday, 27 February 2026, 05:35". Advance it by whatever the',
-    '                exchange implies: a few minutes for a continuous conversation, hours',
-    '                when the scene skips ahead, the next morning when it breaks for the',
-    '                night. Do not invent a fantasy calendar.',
-  ].join('\n'),
-  minute: [
-    '  "time"       string  — the real-world clock time of the scene, as a full date and',
-    '                time (24-hour): "Friday, 27 February 2026, 05:35". Advance it by roughly',
-    '                one minute per exchange unless the text says otherwise. Do not invent',
-    '                a fantasy calendar.',
-  ].join('\n'),
-  hour: [
-    '  "time"       string  — the real-world clock time of the scene, as a full date and',
-    '                time (24-hour): "Friday, 27 February 2026, 05:35". Advance it by roughly',
-    '                one hour per exchange unless the text says otherwise. Do not invent a',
-    '                fantasy calendar.',
-  ].join('\n'),
-  scene: [
-    '  "time"       string  — the real-world clock time of the scene, as a full date and',
-    '                time (24-hour): "Friday, 27 February 2026, 05:35". Change it only when the',
-    '                exchange establishes that time has passed. Do not invent a fantasy',
-    '                calendar.',
+    '  "elapsed"    integer number of MINUTES that pass during this exchange. This key is',
+    '                ALWAYS emitted, on every reply, because the clock always moves. Read the',
+    '                exchange and count: "10 minutes pass" -> 10; "minutes pass" -> 3;',
+    '                "three hours later" -> 180; a short exchange of a few lines -> 1; a long',
+    '                scene with several actions -> 10; an overnight break -> 480. Use 0 only',
+    '                when the exchange is genuinely instantaneous.',
+    '  "time"       string  — ONLY when the exchange states an absolute clock time or a date',
+    '                ("at eight o\'clock" -> "Friday, April 11, 2025, 20:00"; "the next',
+    '                morning" -> the following day). Otherwise OMIT this key entirely: the',
+    '                elapsed minutes above are added to the stored clock for you, so never do',
+    '                the arithmetic yourself.',
   ].join('\n'),
   manual: [
     '  "time"       string  — the reader maintains this clock. Include the key ONLY when the',
@@ -143,26 +133,13 @@ const THREADS_KEY = [
 /** The recording rule for the Rules block, per pace. */
 const TIME_BULLET: Record<SceneSetup['timePace'], string> = {
   auto: [
-    '- "time" is the reader\'s real-world time, not an in-fiction day count. If the',
-    '  exchange gives a date, a clock time, or a day of the week, record it in full.',
-    '  Otherwise move the clock by what the scene implies and by nothing else: a',
-    '  continuous conversation is minutes, a scene that moves on is hours, a night\'s',
-    '  sleep is the next morning.',
-  ].join('\n'),
-  minute: [
-    '- "time" is the reader\'s real-world time, not an in-fiction day count. If the',
-    '  exchange gives a date, a clock time, or a day of the week, record it in full, then',
-    '  advance it by roughly a minute per exchange.',
-  ].join('\n'),
-  hour: [
-    '- "time" is the reader\'s real-world time, not an in-fiction day count. If the',
-    '  exchange gives a date, a clock time, or a day of the week, record it in full, then',
-    '  advance it by roughly an hour per exchange.',
-  ].join('\n'),
-  scene: [
-    '- "time" is the reader\'s real-world time, not an in-fiction day count. If the',
-    '  exchange gives a date, a clock time, or a day of the week, record it in full. Change',
-    '  it only when the exchange establishes that time has passed.',
+    '- "elapsed" is ALWAYS emitted. The clock moves forward on every exchange, including a',
+    '  quiet one: a conversation is minutes. Count the minutes the exchange covers and emit',
+    '  the number. "10 minutes pass" is 10; a few lines of dialogue is 1; a scene that moves',
+    '  on is tens of minutes; a night\'s sleep is hundreds.',
+    '- "time" is the reader\'s real-world clock, not an in-fiction day count. Emit it ONLY',
+    '  when the exchange states an absolute time or date, and copy what was stated. Do not',
+    '  compute a new clock yourself — that is done for you from "elapsed".',
   ].join('\n'),
   manual: [
     '- "time" belongs to the reader. Never change a stored value, and do not add one unless',
@@ -176,17 +153,26 @@ const TIME_BULLET: Record<SceneSetup['timePace'], string> = {
  * The per-pace rules above say how the clock ADVANCES, and they were written as though the
  * model were the only one who could move it. A reader who writes "Later, at eight o'clock"
  * has stated the time themselves, and a pace rule telling the model to add a minute would
- * quietly overrule the author of the scene. Measured: a reader wrote a jump to eight
- * o'clock on a `minute` chat and the stored time stayed at 16:38, because the model was
- * doing exactly what it was told.
+ * quietly overrule the author of the scene.
+ *
+ * The duration sentence is `auto`-only: under `manual` there is no `elapsed` key to put a
+ * count in, and telling the model to use one it was never given is how a prompt contradicts
+ * itself.
  */
-const EXPLICIT_TIME_RULE = [
-  'Regardless of the pace above: if the READER\'s own message states a clock time, a date,',
-  'or a jump in time ("later", "the next morning", "three hours later"), that stated time is',
-  'the truth. Record it verbatim in "time" and do not advance it by the pace rule for that',
-  'exchange. The reader authored it; the pace only decides how the clock moves when nobody',
-  'has said.',
-].join('\n');
+const EXPLICIT_TIME_RULE: Record<SceneSetup['timePace'], string> = {
+  auto: [
+    "Regardless of the rule above: if the READER's own message states a clock time or a date",
+    '("at eight o\'clock", "the next morning"), that stated time is the truth. Put it in',
+    '"time" verbatim. A stated DURATION ("ten minutes", "three hours") is not an absolute',
+    'time: count it into "elapsed" instead, and leave "time" out so the arithmetic is done',
+    'for you.',
+  ].join('\n'),
+  manual: [
+    "Regardless of the rule above: if the READER's own message states a clock time or a date",
+    '("at eight o\'clock", "the next morning"), record it verbatim in "time" — the reader',
+    'authored it. Never advance a stored clock.',
+  ].join('\n'),
+};
 
 /**
  * The system prompt for one setup: `SYSTEM` with the time key, its rule, and the optional
@@ -201,7 +187,38 @@ function buildSystemPrompt(setup: SceneSetup): string {
     .replace('{{TIME_BULLET}}', TIME_BULLET[setup.timePace])
     .replace('{{BONDS_KEY}}', setup.craft.bonds ? BONDS_KEY : '')
     .replace('{{THREADS_KEY}}', setup.craft.threads ? THREADS_KEY : '')
-    .concat('\n', EXPLICIT_TIME_RULE);
+    .concat('\n', EXPLICIT_TIME_RULE[setup.timePace]);
+}
+
+/**
+ * Turn the model's `elapsed` count into a concrete `time`, replacing the clock-arithmetic
+ * it used to be asked to do itself.
+ *
+ * - `manual` never advances: the reader owns the clock, and `TIME_KEY.manual` tells the
+ *   model not to send `elapsed` at all. Ignoring it here is the second guard.
+ * - An absolute `time` in the patch wins outright. The reader wrote "at eight o'clock";
+ *   that is a fact, not a duration, and adding elapsed minutes to it would be wrong.
+ * - Otherwise the stored clock is advanced by the clamped count. A stored value that
+ *   cannot be parsed is left alone rather than replaced with an invented date.
+ *
+ * Returns a NEW object; `elapsed` is dropped so `validatePatch` never sees it.
+ */
+function applyElapsed(patch: unknown, current: WorldState, setup: SceneSetup): unknown {
+  const record = asRecord(patch);
+  if (!record) return patch;
+
+  const { elapsed: rawElapsed, ...rest } = record;
+  if (setup.timePace === 'manual') return rest;
+
+  // A stated absolute time is the answer; the duration is then redundant.
+  if (typeof rest.time === 'string' && rest.time.trim().length > 0) return rest;
+
+  const minutes = clampElapsed(rawElapsed);
+  if (minutes === null) return rest;
+
+  const next = advanceClock(current.time, minutes);
+  if (next !== null) rest.time = next;
+  return rest;
 }
 
 /**
@@ -247,6 +264,18 @@ export async function updateState(
     } catch (error) {
       return { applied: false, reason: `reply was not JSON: ${messageOf(error)}` };
     }
+
+    // The clock is OUR arithmetic, not the model's.
+    //
+    // The model reports only how many minutes the exchange covers; `advanceClock` adds
+    // them to the stored time. Asking the model to compute the new clock was the reported
+    // bug: a plain exchange ("You good now?" / "Both.") left it unchanged for several
+    // turns, and "10 minutes pass" advanced it by one minute or not at all. A stated
+    // absolute time still wins — it is in the patch as `time` and replaces the stored one.
+    //
+    // `elapsed` is consumed here and never stored: it is an instruction about the clock,
+    // not a fact about the scene, and `validatePatch` would reject it as an unknown key.
+    patch = applyElapsed(patch, current, setup);
 
     const result = validatePatch(current, patch);
     if (!result.ok) return { applied: false, reason: result.reason };
@@ -326,6 +355,11 @@ export async function seedOpeningState(
       return { applied: false, reason: `reply was not JSON: ${messageOf(error)}` };
     }
 
+    // An opening has no clock to advance — the greeting establishes the time it states —
+    // so `elapsed` is dropped rather than added to nothing. Against an empty state,
+    // `advanceClock` returns null and no time is written.
+    patch = applyElapsed(patch, EMPTY_STATE, setup);
+
     const result = validatePatch({ ...EMPTY_STATE }, patch);
     if (!result.ok) return { applied: false, reason: result.reason };
 
@@ -351,6 +385,8 @@ const OPENING_RULE = [
   'This is the OPENING of a scene. Nothing has happened yet. Establish the initial "time",',
   '"location", "weather" and "outfits" that the greeting implies, and leave everything else',
   'empty. If the greeting does not establish something, omit it rather than inventing it.',
+  'Emit "time" only when the greeting states an absolute clock time or date, and copy it',
+  'verbatim. Do not emit "elapsed": nothing has happened yet, so no time has passed.',
   // A greeting rarely states a clock, and under `manual` the reader owns it — seeding one
   // would hand them a time they did not choose.
   'When the pace is manual, omit "time" entirely.',

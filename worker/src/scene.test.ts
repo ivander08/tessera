@@ -150,14 +150,14 @@ describe('scene setup: writing', () => {
     const { env, db } = makeEnv();
     const chatId = seedChat(db);
 
-    await patchSceneSetup(env, chatId, patchRequest({ timePace: 'hour' }));
+    await patchSceneSetup(env, chatId, patchRequest({ timePace: 'manual' }));
     const second = await patchSceneSetup(env, chatId, patchRequest({ stateMode: 'off' }));
 
     const payload = (await second.json()) as { setup: SceneSetup };
     // The pace from the first call survives: a patch that omits a field is not a request
     // to reset it.
     expect(payload.setup).toEqual({
-      timePace: 'hour',
+      timePace: 'manual',
       stateMode: 'off',
       generateOpeningState: DEFAULT_SCENE_SETUP.generateOpeningState,
       craft: DEFAULT_SCENE_SETUP.craft,
@@ -169,12 +169,12 @@ describe('scene setup: writing', () => {
     const { env, db } = makeEnv();
     const chatId = seedChat(db);
 
-    await patchSceneSetup(env, chatId, patchRequest({ timePace: 'minute' }));
+    await patchSceneSetup(env, chatId, patchRequest({ timePace: 'auto' }));
     await patchSceneSetup(env, chatId, patchRequest({ timePace: 'bogus' }));
 
     // `parseSceneSetup` falls back per field, and the merge means the fallback lands on
     // the STORED value here rather than the built-in default.
-    expect((await loadSceneSetup(env, chatId)).timePace).toBe('minute');
+    expect((await loadSceneSetup(env, chatId)).timePace).toBe('auto');
   });
 
   test('rejects a body that is not an object', async () => {
@@ -188,7 +188,7 @@ describe('scene setup: writing', () => {
 
   test('a patch on an unknown chat is a 404 and writes nothing', async () => {
     const { env, db } = makeEnv();
-    expect((await patchSceneSetup(env, 'nope', patchRequest({ timePace: 'hour' }))).status).toBe(404);
+    expect((await patchSceneSetup(env, 'nope', patchRequest({ timePace: 'manual' }))).status).toBe(404);
     expect(one<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM chat_scene_setup')).toEqual({ n: 0 });
   });
 
@@ -196,17 +196,17 @@ describe('scene setup: writing', () => {
     const { env, db } = makeEnv();
     const chatId = seedChat(db);
 
-    await patchSceneSetup(env, chatId, patchRequest({ timePace: 'hour' }));
-    await patchSceneSetup(env, chatId, patchRequest({ timePace: 'minute' }));
+    await patchSceneSetup(env, chatId, patchRequest({ timePace: 'manual' }));
+    await patchSceneSetup(env, chatId, patchRequest({ timePace: 'auto' }));
 
     expect(one<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM chat_scene_setup')).toEqual({ n: 1 });
-    expect((await loadSceneSetup(env, chatId)).timePace).toBe('minute');
+    expect((await loadSceneSetup(env, chatId)).timePace).toBe('auto');
   });
 
   test('deleting the chat deletes its setup', async () => {
     const { env, db } = makeEnv();
     const chatId = seedChat(db);
-    await patchSceneSetup(env, chatId, patchRequest({ timePace: 'hour' }));
+    await patchSceneSetup(env, chatId, patchRequest({ timePace: 'manual' }));
 
     exec(db, 'PRAGMA foreign_keys = ON');
     exec(db, 'DELETE FROM chats WHERE id = ?', chatId);

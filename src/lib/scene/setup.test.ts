@@ -20,7 +20,7 @@ describe('parseSceneSetup', () => {
 
   test('keeps a valid document', () => {
     const setup: SceneSetup = {
-      timePace: 'hour',
+      timePace: 'manual',
       stateMode: 'off',
       generateOpeningState: false,
       craft: DEFAULT_CRAFT,
@@ -36,14 +36,14 @@ describe('parseSceneSetup', () => {
   });
 
   test('a wrong-typed boolean falls back without disturbing the enums', () => {
-    const parsed = parseSceneSetup({ timePace: 'minute', generateOpeningState: 'yes' });
-    expect(parsed.timePace).toBe('minute');
+    const parsed = parseSceneSetup({ timePace: 'auto', generateOpeningState: 'yes' });
+    expect(parsed.timePace).toBe('auto');
     expect(parsed.generateOpeningState).toBe(DEFAULT_SCENE_SETUP.generateOpeningState);
   });
 
   test('ignores unknown keys rather than carrying them through', () => {
-    const parsed = parseSceneSetup({ timePace: 'hour', somethingElse: 1 });
-    expect(parsed).toEqual({ ...DEFAULT_SCENE_SETUP, timePace: 'hour' });
+    const parsed = parseSceneSetup({ timePace: 'manual', somethingElse: 1 });
+    expect(parsed).toEqual({ ...DEFAULT_SCENE_SETUP, timePace: 'manual' });
   });
 
   test('never throws, whatever it is handed', () => {
@@ -58,15 +58,15 @@ describe('parseSceneSetup', () => {
     // This is what the PATCH merge relies on: an invalid value in a patch must land on
     // the STORED value, not on the built-in default, or a typo would undo a choice.
     const stored: SceneSetup = {
-      timePace: 'hour',
+      timePace: 'manual',
       stateMode: 'manual',
       generateOpeningState: false,
       craft: DEFAULT_CRAFT,
     };
-    expect(parseSceneSetup({ timePace: 'bogus' }, { ...stored }).timePace).toBe('hour');
+    expect(parseSceneSetup({ timePace: 'bogus' }, { ...stored }).timePace).toBe('manual');
     expect(parseSceneSetup(null, { ...stored })).toEqual(stored);
     // And a valid value still wins over the fallback.
-    expect(parseSceneSetup({ timePace: 'minute' }, { ...stored }).timePace).toBe('minute');
+    expect(parseSceneSetup({ timePace: 'auto' }, { ...stored }).timePace).toBe('auto');
   });
 });
 
@@ -101,7 +101,7 @@ describe('parseSceneSetup — craft', () => {
 
   test('round-trips through JSON', () => {
     const setup: SceneSetup = {
-      timePace: 'hour',
+      timePace: 'manual',
       stateMode: 'manual',
       generateOpeningState: false,
       craft: {

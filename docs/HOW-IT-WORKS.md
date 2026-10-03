@@ -675,6 +675,51 @@ last in the head (`assemble.ts`), the latter replaces the built-in instruction o
 from `PresetConfig`, the defaults, and the editor — a control that does nothing is worse
 than no control.
 
+### 🐛 The clock did not move — fixed by taking the arithmetic away from the model
+
+Reported: the reader wrote *"10 minutes pass"* and the scene clock stayed at `22:02`,
+while the world-state panel showed `22:03`; and a plain exchange left the clock unchanged
+for eight messages, so an entire conversation took one minute.
+
+**Measured against the live cheap model (`gpt-oss-120b`), on the exact exchange from the
+report**, with the pre-fix prompt:
+
+| Exchange | Clock after one turn |
+|---|---|
+| `"You good now?"` / `"Both."` | **unchanged**, 3 of 3 runs |
+| `"Oh.. okay, thanks."` / `"She snorts."` | **unchanged** in 1 of 3 |
+| `"10 minutes pass"` (on the `minute` pace) | **unchanged or +1**, never +10 |
+
+The cause was the division of labour. The model was asked to *compute a new clock string*
+each turn — read the old one, decide how far the scene moved, and rewrite the date. A
+language model cannot reliably do date arithmetic, and asking it to decide **whether**
+time moved at all is worse: a conversation is minutes, and it kept returning the value it
+was shown.
+
+**The fix removes the arithmetic from the model entirely.** It now emits one new key,
+`elapsed` — an integer count of the minutes the exchange covers — and
+`src/lib/state/time.ts` adds that to the stored clock. That is deterministic and testable.
+`elapsed` is consumed before validation and never stored: it is an instruction about the
+clock, not a fact about the scene. An absolute time the reader wrote ("at eight o'clock")
+still wins outright and replaces the stored clock.
+
+The pace selector collapsed with it. `auto` / `minute` / `hour` / `scene` were all the
+same instruction with a different multiplier, and all four drifted; the reader is no
+longer asked to pick a dial that does not work. `timePace` is now `'auto' | 'manual'` —
+managed for you, or the reader keeps the clock. Stored rows naming a removed member
+degrade to the default per field, which `parseSceneSetup` already did.
+
+Measured after the fix, same model, same exchanges: **48/48 turns advanced**, and
+**0/36 omitted `elapsed`**. A stated duration lands on the right minute
+(`"10 minutes pass"` -> `22:12`), a vague one still moves (`"minutes pass"` -> `22:07`),
+a quiet exchange moves by a minute, and a night's sleep moves by eight hours. The
+regression tests are in `worker/src/state/update.test.ts` (the turn-level behaviour) and
+`src/lib/state/time.test.ts` (the arithmetic).
+
+The one remaining soft edge: a reader's own free-text clock (`"late evening"`) has no
+parseable time in it, so nothing is advanced and the value is left as written rather than
+replaced with a guess.
+
 ---
 
 ## 6. How Tessera compares

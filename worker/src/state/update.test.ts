@@ -154,23 +154,23 @@ const setupWith = (pace: SceneSetup['timePace']): SceneSetup => ({
 });
 
 describe('updateState: the pace rule', () => {
-  test.each([
-    ['auto', 'whatever the\n                exchange implies'],
-    ['minute', 'a minute per exchange'],
-    ['hour', 'an hour per exchange'],
-    ['scene', 'only when the exchange establishes that time has passed'],
-    ['manual', 'belongs to the reader'],
-  ] as const)('%s puts the right instruction to the cheap model', async (pace, expected) => {
+  test('the managed pace tells the model to count elapsed minutes, not do clock arithmetic', async () => {
     const { env, sent } = makeEnv();
     stubProvider(sent, '{}');
 
-    await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith(pace));
+    await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
 
     expect(sent).toHaveLength(1);
-    expect(sent[0].system).toContain(expected);
+    const system = sent[0].system;
+    // The key the model fills, and the fact that it is the count rather than the clock.
+    expect(system).toContain('"elapsed"');
+    expect(system).toContain('ALWAYS emitted');
+    expect(system).toContain('added to the stored clock for you');
+    // The clock itself is still described, for the absolute-time case.
+    expect(system).toContain('"time"');
     // And the schema is unchanged by the pace rule: the same allowed keys are described.
-    expect(sent[0].system).toContain('"outfits"');
-    expect(sent[0].system).toContain('"conditions"');
+    expect(system).toContain('"outfits"');
+    expect(system).toContain('"conditions"');
   });
 
   test('the manual prompt never tells the model to record or advance a clock', async () => {
@@ -186,32 +186,13 @@ describe('updateState: the pace rule', () => {
 
     const system = sent[0].system;
     expect(system).toContain('Never change');
+    expect(system).not.toContain('"elapsed"');
     expect(system).not.toContain('record it in full');
     expect(system).not.toContain('advance it as the');
-    expect(system).not.toContain('Advance it by');
-  });
-
-  test('minute and hour keep the wording that already worked', async () => {
-    // These two paces behaved correctly before the fix, so their text is the regression
-    // guard: the rewrite must not have changed what the model is told for them.
-    const minute = makeEnv();
-    stubProvider(minute.sent, '{}');
-    await updateState(minute.env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('minute'));
-
-    const hour = makeEnv();
-    stubProvider(hour.sent, '{}');
-    await updateState(hour.env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('hour'));
-
-    expect(minute.sent[0].system).toContain('roughly\n                one minute per exchange');
-    expect(minute.sent[0].system).toContain('Advance it by roughly');
-    expect(minute.sent[0].system).not.toContain('belongs to the reader');
-
-    expect(hour.sent[0].system).toContain('roughly\n                one hour per exchange');
-    expect(hour.sent[0].system).not.toContain('belongs to the reader');
   });
 
   test('no pace leaves a placeholder in the prompt', async () => {
-    for (const pace of ['auto', 'minute', 'hour', 'scene', 'manual'] as const) {
+    for (const pace of ['auto', 'manual'] as const) {
       const { env, sent } = makeEnv();
       stubProvider(sent, '{}');
       await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith(pace));
@@ -229,7 +210,7 @@ describe('updateState: the pace rule', () => {
     // An instruction the model is not being asked to follow must not be in the prompt.
     const off = makeEnv();
     stubProvider(off.sent, '{}');
-    await updateState(off.env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('scene'));
+    await updateState(off.env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
     expect(off.sent[0].system).not.toContain('"bonds"');
     expect(off.sent[0].system).not.toContain('"threads"');
 
@@ -239,7 +220,7 @@ describe('updateState: the pace rule', () => {
       on.env,
       'chat-1',
       { user: 'u', assistant: 'a' },
-      { ...setupWith('scene'), craft: { ...setupWith('scene').craft, bonds: true, threads: true } },
+      { ...setupWith('auto'), craft: { ...setupWith('auto').craft, bonds: true, threads: true } },
     );
     expect(on.sent[0].system).toContain('"bonds"');
     expect(on.sent[0].system).toContain('"threads"');
@@ -251,7 +232,7 @@ describe('updateState: the pace rule', () => {
     const { env, db, sent } = makeEnv();
     stubProvider(sent, '{"location":"the lantern room","outfits":{"Quill":"oilskin coat"}}');
 
-    const result = await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('scene'));
+    const result = await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
     expect(result.applied).toBe(true);
     expect(await loadState(env, 'chat-1')).toEqual({
       location: 'the lantern room',
@@ -265,7 +246,7 @@ describe('updateState: the pace rule', () => {
     const { env, sent } = makeEnv();
     stubProvider(sent, '{"location":"the lantern room","nonsense":true}');
 
-    const result = await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('scene'));
+    const result = await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
     expect(result.applied).toBe(false);
     expect(result.reason).toContain('nonsense');
     expect(await loadState(env, 'chat-1')).toEqual({});
@@ -275,9 +256,118 @@ describe('updateState: the pace rule', () => {
     const { env, sent } = makeEnv();
     stubProvider(sent, 'I think nothing changed.');
 
-    const result = await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('scene'));
+    const result = await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
     expect(result.applied).toBe(false);
     expect(await loadState(env, 'chat-1')).toEqual({});
+  });
+});
+
+/**
+ * The reported bug: the clock did not move. The model is now asked only to count the
+ * minutes the exchange covers, and the arithmetic is done here — so these are the tests
+ * that pin the behaviour the reader actually sees.
+ */
+describe('updateState: the clock advances', () => {
+  const withClock = (db: Database, time: string): void => {
+    db.run(
+      `INSERT INTO state (chat_id, json, updated_at) VALUES ('chat-1', ?, 0)
+       ON CONFLICT(chat_id) DO UPDATE SET json = excluded.json`,
+      [JSON.stringify({ time })] as never[],
+    );
+  };
+
+  test('a stated duration is added to the stored clock', async () => {
+    const { env, db, sent } = makeEnv();
+    withClock(db, 'Friday, April 11, 2025, 22:02');
+    stubProvider(sent, '{"elapsed":10}');
+
+    await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
+
+    expect((await loadState(env, 'chat-1')).time).toBe('Friday, April 11, 2025, 22:12');
+  });
+
+  test('a quiet exchange still moves the clock', async () => {
+    // The measured defect: "You good now?" / "Both." left the clock at 22:02 for several
+    // turns, so the reader saw eight messages pass in one minute. Any positive count moves
+    // it now, which is the whole point of separating the count from the arithmetic.
+    const { env, db, sent } = makeEnv();
+    withClock(db, 'Friday, April 11, 2025, 22:02');
+    stubProvider(sent, '{"elapsed":1}');
+
+    await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
+
+    expect((await loadState(env, 'chat-1')).time).toBe('Friday, April 11, 2025, 22:03');
+  });
+
+  test('an absolute time in the patch wins over the elapsed count', async () => {
+    // "at eight o'clock" is a fact, not a duration. Adding elapsed minutes to it would be
+    // wrong, so the stated clock replaces the stored one and `elapsed` is ignored.
+    const { env, db, sent } = makeEnv();
+    withClock(db, 'Friday, April 11, 2025, 22:02');
+    stubProvider(sent, '{"time":"Friday, April 11, 2025, 20:00","elapsed":598}');
+
+    await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
+
+    expect((await loadState(env, 'chat-1')).time).toBe('Friday, April 11, 2025, 20:00');
+  });
+
+  test('elapsed is never stored as a state key', async () => {
+    const { env, db, sent } = makeEnv();
+    withClock(db, 'Friday, April 11, 2025, 22:02');
+    stubProvider(sent, '{"elapsed":10,"location":"the lantern room"}');
+
+    const result = await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
+
+    expect(result.applied).toBe(true);
+    expect(await loadState(env, 'chat-1')).toEqual({
+      time: 'Friday, April 11, 2025, 22:12',
+      location: 'the lantern room',
+    });
+  });
+
+  test('an absurd elapsed count is clamped, not applied', async () => {
+    // A model that misreads a number must not throw the calendar a year forward.
+    const { env, db, sent } = makeEnv();
+    withClock(db, 'Friday, April 11, 2025, 22:02');
+    stubProvider(sent, '{"elapsed":999999}');
+
+    await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
+
+    // Capped at a week rather than at the number the model wrote.
+    expect((await loadState(env, 'chat-1')).time).toBe('Friday, April 18, 2025, 22:02');
+  });
+
+  test('an unparseable stored clock is left alone rather than replaced', async () => {
+    const { env, db, sent } = makeEnv();
+    withClock(db, 'late evening');
+    stubProvider(sent, '{"elapsed":10}');
+
+    await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
+
+    expect((await loadState(env, 'chat-1')).time).toBe('late evening');
+  });
+
+  test('manual never advances the clock, even if the model sends elapsed', async () => {
+    // The instruction says not to send `elapsed` under manual; this is the second guard,
+    // because the reader owning the clock is the one thing the pace setting promises.
+    const { env, db, sent } = makeEnv();
+    withClock(db, 'Friday, April 11, 2025, 22:02');
+    stubProvider(sent, '{"elapsed":10}');
+
+    await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('manual'));
+
+    expect((await loadState(env, 'chat-1')).time).toBe('Friday, April 11, 2025, 22:02');
+  });
+
+  test('an exchange with no clock yet and no absolute time leaves time unset', async () => {
+    const { env, sent } = makeEnv();
+    stubProvider(sent, '{"elapsed":10,"location":"the lantern room"}');
+
+    const result = await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
+
+    // The location change still lands; there is simply no clock to advance.
+    expect(result.applied).toBe(true);
+    expect(await loadState(env, 'chat-1')).toEqual({ location: 'the lantern room' });
   });
 });
 
@@ -298,7 +388,7 @@ describe('seedOpeningState', () => {
         name: 'Quill',
         description: 'A lighthouse keeper.',
       },
-      setupWith('scene'),
+      setupWith('auto'),
     );
 
     expect(result.applied).toBe(true);
@@ -322,7 +412,7 @@ describe('seedOpeningState', () => {
         name: 'Quill',
         description: 'A lighthouse keeper.',
       },
-      setupWith('scene'),
+      setupWith('auto'),
     );
 
     const system = sent[0].system;
@@ -366,7 +456,7 @@ describe('seedOpeningState', () => {
         name: 'Quill',
         description: '',
       },
-      setupWith('scene'),
+      setupWith('auto'),
     );
 
     expect(result.applied).toBe(false);
@@ -377,7 +467,7 @@ describe('seedOpeningState', () => {
     const { env, sent } = makeEnv();
     stubProvider(sent, '{}');
 
-    const result = await seedOpeningState(env, 'chat-1', '   ', { name: 'Q', description: '' }, setupWith('scene'));
+    const result = await seedOpeningState(env, 'chat-1', '   ', { name: 'Q', description: '' }, setupWith('auto'));
     expect(result.applied).toBe(false);
     expect(sent).toHaveLength(0);
   });
@@ -397,7 +487,7 @@ describe('seedOpeningState', () => {
         name: 'Q',
         description: '',
       },
-      setupWith('scene'),
+      setupWith('auto'),
     );
     expect(result.applied).toBe(false);
     expect(result.reason).toContain('provider down');

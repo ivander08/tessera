@@ -23,10 +23,10 @@ import { useToast } from './Toast';
  * rather than being stored, and showing the reader their own value would hide that.
  *
  * Time pace lives here rather than only in the start-a-scene wizard because it is the
- * setting a reader actually discovers is wrong mid-scene: at "minute by minute" a
- * conversation that runs all evening takes forty exchanges to get there. A setting that
- * decides how the scene reads, and can only be changed by starting a new scene, is a
- * setting that will be lived with rather than fixed.
+ * setting a reader actually discovers is wrong mid-scene: a scene whose clock has drifted
+ * is one they want to correct without starting over. The choice is now only managed vs.
+ * reader-owned — the old per-multiplier paces all drove the same broken instruction, and
+ * the clock is advanced by `advanceClock` rather than by the model.
  */
 export function CraftPanel({ chatId }: { chatId: string }) {
   const { data, error, loading, reload } = useAsync(
