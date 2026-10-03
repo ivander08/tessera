@@ -39,8 +39,27 @@ export function send<F extends { type: string }>(
 
 export interface PromptOptions {
   mode: 'send' | 'regenerate' | 'impersonate' | 'continue';
-  /** Set only for `send`: the row the user's message occupies, which is excluded. */
-  userSeq: number | null;
+  /**
+   * Exclude this row and everything after it from the history window.
+   *
+   * `null` keeps the whole visible path. Set for the two modes where the transcript
+   * continues PAST the point being written:
+   *
+   *  - `send` — the reader's message is not written yet, so nothing is cut; it arrives as
+   *    the tail instead.
+   *  - a recovery `continue` — the reader's row already exists and IS the target, and it is
+   *    passed as `userContent`, so including it would duplicate it.
+   *  - `regenerate` — the target reply and every turn after it are about to be replaced, so
+   *    the model must not read them. The client already hides them (`Chat.tsx` cuts the
+   *    visible list at the target); the prompt has to agree, or the model writes an early
+   *    turn while reading how the story turned out — the same defect as an unbounded world
+   *    state or memory, through the largest door of the three.
+   *
+   * Rows before this seq are the target's ANCESTORS on the path, which is what a re-roll
+   * should see. That holds by construction: a child is always inserted after its parent, so
+   * an ancestor's `seq` is always lower than its descendant's.
+   */
+  historyCutoff: number | null;
   /**
    * The row being re-rolled, whose world state must be read from BEFORE it.
    *
@@ -105,7 +124,7 @@ export async function buildPrompt(
   // than a guess. The floor keeps short chats whole and the ceiling keeps a single huge
   // message from being dropped — `computeWindowStart` has to SEE the message that does
   // not fit in order to decide where to re-anchor.
-  const cutoff = options.userSeq === null ? null : options.userSeq;
+  const cutoff = options.historyCutoff;
 
   // The budget is expressed in real prompt tokens, but `content_tokens` is a local
   // estimate with a per-model bias. Applying the stored factor keeps the budget honest

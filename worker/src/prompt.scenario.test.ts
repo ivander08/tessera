@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'bun:test';
 
 import { buildPrompt } from './prompt';
-import { stateSeqFor } from './turn';
+import { stateSeqFor, historyCutoffFor } from './turn';
 import type { EffectiveSettings } from './effective';
 import type { ChatRow } from './db';
 
@@ -378,7 +378,7 @@ describe('scenario: a fact from a regenerated-away turn', () => {
     // Writing at the end of B: only B's fact is true.
     const atEnd = await buildPrompt(env, chat, settings(40000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'Ivan dead',
       tailExtra: '',
@@ -389,7 +389,7 @@ describe('scenario: a fact from a regenerated-away turn', () => {
     // And writing B's early turn: neither is true yet, because B's turn 7b is still ahead.
     const atStart = await buildPrompt(env, chat, settings(40000), {
       mode: 'regenerate',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: b[1].seq,
       userContent: '',
       tailExtra: '',
@@ -410,7 +410,7 @@ describe('scenario: a fact from a regenerated-away turn', () => {
 
     const prompt = await buildPrompt(env, chat, settings(40000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'Ivan dead',
       tailExtra: '',
@@ -423,7 +423,7 @@ describe('scenario: a fact from a regenerated-away turn', () => {
     // And A's own early turn still does not see it, since turn 5 is ahead of turn 4.
     const early = await buildPrompt(env, chat, settings(40000), {
       mode: 'regenerate',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: a[0].seq,
       userContent: '',
       tailExtra: '',
@@ -440,7 +440,7 @@ describe('scenario: a fact from a regenerated-away turn', () => {
 
     const early = await buildPrompt(env, chat, settings(40000), {
       mode: 'regenerate',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: a[0].seq,
       userContent: '',
       tailExtra: '',
@@ -481,7 +481,7 @@ describe('scenario: a cast member from a regenerated-away turn', () => {
     // B is the visible transcript, so A's speaker is not in the room.
     const prompt = await buildPrompt(env, chat, settings(40000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
@@ -495,7 +495,7 @@ describe('scenario: a cast member from a regenerated-away turn', () => {
     exec(db, `UPDATE messages SET active = 0 WHERE id = 'b4'`);
     const restored = await buildPrompt(env, chat, settings(40000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
@@ -581,7 +581,7 @@ describe('scenario: supersession by a turn that is later discarded', () => {
 
     const prompt = await buildPrompt(env, chat, settings(40000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'brass key',
       tailExtra: '',
@@ -602,7 +602,7 @@ describe('scenario: supersession by a turn that is later discarded', () => {
 
     const prompt = await buildPrompt(env, chat, settings(40000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'brass key',
       tailExtra: '',
@@ -625,7 +625,7 @@ describe('scenario: supersession by a turn that is later discarded', () => {
     swap('t20b', 't20');
     const regenerated = await buildPrompt(env, chat, settings(40000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'brass key',
       tailExtra: '',
@@ -636,7 +636,7 @@ describe('scenario: supersession by a turn that is later discarded', () => {
     swap('t20', 't20b');
     const original = await buildPrompt(env, chat, settings(40000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'brass key',
       tailExtra: '',
@@ -653,7 +653,7 @@ describe('scenario: supersession by a turn that is later discarded', () => {
 
     const prompt = await buildPrompt(env, chat, settings(40000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'brass key',
       tailExtra: '',
@@ -677,13 +677,83 @@ describe('scenario: supersession by a turn that is later discarded', () => {
 
     const prompt = await buildPrompt(env, chat, settings(40000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'brass key',
       tailExtra: '',
     });
 
     expect(promptText(prompt)).not.toContain('FACT_ADA');
+  });
+});
+
+describe('scenario: a regenerate does not read the turns it replaces', () => {
+  /**
+   * The largest door of this whole class. The client hides the turns after the target
+   * (`Chat.tsx` cuts the visible list), and the world state, memories, facts and cast are
+   * all bounded now — but the raw TEXT of the replaced turns was still going to the model.
+   * Writing turn 3 while reading turns 4-9 means writing an early scene with knowledge of
+   * how the story turned out.
+   */
+  function seedNineTurns(db: Database): { chat: ChatRow; seqs: number[] } {
+    const chat = seedChat(db);
+    const rows = seedConversation(db, 9);
+    return { chat, seqs: rows.map((row) => row.seq) };
+  }
+
+  test('the replaced turns are absent from the prompt', async () => {
+    const { db, env } = makeEnv();
+    const { chat, seqs } = seedNineTurns(db);
+
+    const prompt = await buildPrompt(env, chat, settings(40000), {
+      mode: 'regenerate',
+      historyCutoff: seqs[2],
+      stateSeq: seqs[2],
+      userContent: '',
+      tailExtra: '',
+    });
+
+    const text = promptText(prompt);
+    // Everything before the target is the scene being re-rolled, and is still there.
+    expect(text).toContain('turn 1 of the scene');
+    expect(text).toContain('turn 2 of the scene');
+    // The target and everything after it are being replaced, so none of it is readable.
+    expect(text).not.toContain('turn 4 of the scene');
+    expect(text).not.toContain('turn 9 of the scene');
+  });
+
+  test('a forward turn still reads the whole transcript', async () => {
+    // The other half: cutting must not become a general truncation.
+    const { db, env } = makeEnv();
+    const { chat } = seedNineTurns(db);
+
+    const prompt = await buildPrompt(env, chat, settings(40000), {
+      mode: 'send',
+      historyCutoff: null,
+      stateSeq: null,
+      userContent: 'and then',
+      tailExtra: '',
+    });
+
+    const text = promptText(prompt);
+    expect(text).toContain('turn 1 of the scene');
+    expect(text).toContain('turn 9 of the scene');
+  });
+
+  test('only regenerate and a recovery continue cut the window', () => {
+    // The wiring, not the helper: `buildPrompt` only ever receives the result, so a test
+    // that drives it alone keeps passing if `turn.ts` computes the wrong value.
+    const target = { seq: 42 };
+
+    expect(historyCutoffFor('regenerate', target, false)).toBe(42);
+    expect(historyCutoffFor('regenerate', null, false)).toBeNull();
+    // A recovery continue passes the reader's row as the tail, so it must not repeat in
+    // the history.
+    expect(historyCutoffFor('continue', target, true)).toBe(42);
+    // A normal continue extends its target and reads it.
+    expect(historyCutoffFor('continue', target, false)).toBeNull();
+    expect(historyCutoffFor('send', target, false)).toBeNull();
+    expect(historyCutoffFor('impersonate', target, false)).toBeNull();
   });
 });
 
@@ -714,7 +784,7 @@ describe('scenario: regenerating an early turn', () => {
 
     const prompt = await buildPrompt(env, chat, settings(40000), {
       mode: 'regenerate',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: rows[2].seq,
       userContent: '',
       tailExtra: '',
@@ -744,7 +814,7 @@ describe('scenario: regenerating an early turn', () => {
 
     const prompt = await buildPrompt(env, chat, settings(40000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'what happens now',
       tailExtra: '',
@@ -768,7 +838,7 @@ describe('scenario: deleting a turn and returning to an earlier version', () => 
     // Before: the late scene is a valid memory and is injected.
     const before = await buildPrompt(env, chat, settings(40000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'what happens now',
       tailExtra: '',
@@ -785,7 +855,7 @@ describe('scenario: deleting a turn and returning to an earlier version', () => 
 
     const after = await buildPrompt(env, chat, settings(40000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'what happens now',
       tailExtra: '',
@@ -809,7 +879,7 @@ describe('scenario: deleting a turn and returning to an earlier version', () => 
 
     const original = await buildPrompt(env, chat, settings(40000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'what happens now',
       tailExtra: '',
@@ -824,7 +894,7 @@ describe('scenario: deleting a turn and returning to an earlier version', () => 
     );
     const without = await buildPrompt(env, chat, settings(40000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'what happens now',
       tailExtra: '',
@@ -840,7 +910,7 @@ describe('scenario: deleting a turn and returning to an earlier version', () => 
     );
     const restored = await buildPrompt(env, chat, settings(40000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'what happens now',
       tailExtra: '',
@@ -873,7 +943,7 @@ describe('scenario: a regenerated-away version must not be recalled', () => {
 
     const prompt = await buildPrompt(env, chat, settings(40000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'lighthouse',
       tailExtra: '',
@@ -887,7 +957,7 @@ describe('scenario: a regenerated-away version must not be recalled', () => {
     exec(db, `UPDATE messages SET active = 1 WHERE id = 'discarded'`);
     const control = await buildPrompt(env, chat, settings(40000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'lighthouse',
       tailExtra: '',
@@ -917,7 +987,7 @@ describe('scenario: the fixture actually populates every memory tier', () => {
 
     const prompt = await buildPrompt(env, chat, settings(40000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'what happens now',
       tailExtra: '',

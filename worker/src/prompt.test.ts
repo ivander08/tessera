@@ -235,7 +235,7 @@ describe('buildPrompt reads a bounded window', () => {
 
     const prompt = await buildPrompt(env, chat, settings(2000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
@@ -279,7 +279,7 @@ describe('buildPrompt reads a bounded window', () => {
 
     const prompt = await buildPrompt(env, chat, settings(2000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
@@ -300,7 +300,7 @@ describe('buildPrompt reads a bounded window', () => {
 
     const prompt = await buildPrompt(env, chat, settings(2000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
@@ -325,7 +325,7 @@ describe('buildPrompt reads a bounded window', () => {
 
     const prompt = await buildPrompt(env, chat, settings(2000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
@@ -355,7 +355,7 @@ describe('buildPrompt reads a bounded window', () => {
     exec(db, 'UPDATE chats SET window_start_seq = ? WHERE id = ?', seqs[100], CHAT_ID);
     chat.window_start_seq = seqs[100];
 
-    const options = { mode: 'send' as const, userSeq: null, stateSeq: null, userContent: 'hello', tailExtra: '' };
+    const options = { mode: 'send' as const, historyCutoff: null, stateSeq: null, userContent: 'hello', tailExtra: '' };
     const first = await buildPrompt(env, chat, settings(4000), options);
     const second = await buildPrompt(env, chat, settings(4000), options);
 
@@ -374,7 +374,7 @@ describe('buildPrompt reads a bounded window', () => {
 
     await buildPrompt(env, chat, settings(40000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
@@ -431,7 +431,7 @@ describe('buildPrompt: the cast and includeNames', () => {
 
     const prompt = await buildPrompt(env, chat, settings(4000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
@@ -448,7 +448,7 @@ describe('buildPrompt: the cast and includeNames', () => {
 
     const prompt = await buildPrompt(env, chat, settings(4000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
@@ -474,7 +474,7 @@ describe('buildPrompt: the cast and includeNames', () => {
 
     const prompt = await buildPrompt(env, chat, settings(4000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
@@ -491,7 +491,7 @@ describe('buildPrompt: the cast and includeNames', () => {
     const chat = seedChat(db, 0);
     seedChain(db, 4);
 
-    const options = { mode: 'send' as const, userSeq: null, stateSeq: null, userContent: 'hello', tailExtra: '' };
+    const options = { mode: 'send' as const, historyCutoff: null, stateSeq: null, userContent: 'hello', tailExtra: '' };
     const before = await buildPrompt(env, chat, settings(4000), options);
 
     seedCast(db, ['Olivia']);
@@ -511,7 +511,7 @@ describe('buildPrompt: the cast and includeNames', () => {
 
     const prompt = await buildPrompt(env, chat, { ...settings(4000), includeNames: true }, {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
@@ -534,7 +534,7 @@ describe('buildPrompt: the cast and includeNames', () => {
 
     const prompt = await buildPrompt(env, chat, settings(4000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
@@ -555,7 +555,7 @@ describe('buildPrompt: the cast and includeNames', () => {
     exec(db, "UPDATE messages SET speaker = 'Olivia' WHERE id = 'm2'");
 
     const withNames = { ...settings(4000), includeNames: true };
-    const options = { mode: 'send' as const, userSeq: null, stateSeq: null, userContent: 'hello', tailExtra: '' };
+    const options = { mode: 'send' as const, historyCutoff: null, stateSeq: null, userContent: 'hello', tailExtra: '' };
 
     const before = await buildPrompt(env, chat, withNames, options);
     const beforeRow = before.messages.find((m) => m.content === 'Olivia: line 2 of the scene');
@@ -578,7 +578,7 @@ describe('buildPrompt: the cast and includeNames', () => {
  * tests pin both halves and the fact that they are in the two different regions.
  */
 describe('the craft block reaches the prompt', () => {
-  const options = { mode: 'send' as const, userSeq: null, stateSeq: null, userContent: 'hello', tailExtra: '' };
+  const options = { mode: 'send' as const, historyCutoff: null, stateSeq: null, userContent: 'hello', tailExtra: '' };
 
   function setSceneSetup(db: Database, craft: unknown): void {
     exec(
@@ -693,7 +693,7 @@ describe('the world state is read as of the turn, not as of now', () => {
     // Re-roll the reply at m1.
     const prompt = await buildPrompt(env, chat, settings(8000), {
       mode: 'regenerate',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: seqs[1],
       userContent: '',
       tailExtra: '',
@@ -717,7 +717,7 @@ describe('the world state is read as of the turn, not as of now', () => {
 
     const prompt = await buildPrompt(env, chat, settings(8000), {
       mode: 'regenerate',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: seqs[1],
       userContent: '',
       tailExtra: '',
@@ -739,7 +739,7 @@ describe('the world state is read as of the turn, not as of now', () => {
 
     const prompt = await buildPrompt(env, chat, settings(8000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
@@ -759,7 +759,7 @@ describe('the world state is read as of the turn, not as of now', () => {
 
     const prompt = await buildPrompt(env, chat, settings(8000), {
       mode: 'regenerate',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: seqs[0],
       userContent: '',
       tailExtra: '',
@@ -778,7 +778,7 @@ describe('the world state is read as of the turn, not as of now', () => {
 
     const prompt = await buildPrompt(env, chat, settings(8000), {
       mode: 'send',
-      userSeq: null,
+      historyCutoff: null,
       stateSeq: null,
       userContent: 'hello',
       tailExtra: '',

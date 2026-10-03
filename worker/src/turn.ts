@@ -186,7 +186,10 @@ async function runTurn(
   // and is the target, so it is reused rather than reserved.
   const reserved = mode === 'send' ? reserveUserMessage() : null;
   const userId = reserved?.id ?? null;
-  const userSeq = answeringPendingUser ? target!.seq : null;
+  // The history window must stop where the transcript stops. For a recovery `continue` the
+  // reader's row is the tail rather than history, and for a `regenerate` the target and
+  // everything after it are being replaced. See `historyCutoffFor`.
+  const historyCutoff = historyCutoffFor(mode, target, answeringPendingUser);
 
   // The reply answers the reader's message when there is one, so it is that row's child
   // rather than the position the reader's message occupies.
@@ -205,7 +208,7 @@ async function runTurn(
   try {
     const prompt = await buildPrompt(env, chat, settings, {
       mode,
-      userSeq,
+      historyCutoff,
       stateSeq,
       // A recovery `continue` has no new text, but the prompt's tail needs the reader's
       // message — that is what the reply is answering. Without it the model would be
@@ -423,6 +426,33 @@ export function stateSeqFor(
   target: { seq: number } | null,
 ): number | null {
   return mode === 'regenerate' ? (target?.seq ?? null) : null;
+}
+
+/**
+ * The row at which the history window must stop.
+ *
+ * `null` keeps the whole visible path — that is `send` and `impersonate`, which append to
+ * the end of the transcript and have nothing after them to exclude.
+ *
+ * `regenerate` cuts at the target, because the reply being re-rolled and every turn after it
+ * are about to be replaced. The client already hides them from the transcript; the prompt
+ * has to agree, or the model writes an early turn while reading how the story turned out.
+ *
+ * A recovery `continue` also cuts at the target: that reader row already exists and is
+ * passed as the tail, so leaving it in the history would send it twice.
+ *
+ * Exported as a pure rule beside `resolveAttachment` for the same reason — the bug it
+ * prevents is a correct-looking value computed at the wrong moment, which a test of
+ * `buildPrompt` alone cannot catch because `buildPrompt` only ever receives the result.
+ */
+export function historyCutoffFor(
+  mode: TurnMode,
+  target: { seq: number } | null,
+  answeringPendingUser: boolean,
+): number | null {
+  if (mode === 'regenerate') return target?.seq ?? null;
+  if (answeringPendingUser) return target?.seq ?? null;
+  return null;
 }
 
 export function resolveAttachment(
