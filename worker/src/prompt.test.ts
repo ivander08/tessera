@@ -229,6 +229,7 @@ describe('buildPrompt reads a bounded window', () => {
     const prompt = await buildPrompt(env, chat, settings(2000), {
       mode: 'send',
       userSeq: null,
+      stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
     });
@@ -272,6 +273,7 @@ describe('buildPrompt reads a bounded window', () => {
     const prompt = await buildPrompt(env, chat, settings(2000), {
       mode: 'send',
       userSeq: null,
+      stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
     });
@@ -292,6 +294,7 @@ describe('buildPrompt reads a bounded window', () => {
     const prompt = await buildPrompt(env, chat, settings(2000), {
       mode: 'send',
       userSeq: null,
+      stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
     });
@@ -316,6 +319,7 @@ describe('buildPrompt reads a bounded window', () => {
     const prompt = await buildPrompt(env, chat, settings(2000), {
       mode: 'send',
       userSeq: null,
+      stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
     });
@@ -344,7 +348,7 @@ describe('buildPrompt reads a bounded window', () => {
     exec(db, 'UPDATE chats SET window_start_seq = ? WHERE id = ?', seqs[100], CHAT_ID);
     chat.window_start_seq = seqs[100];
 
-    const options = { mode: 'send' as const, userSeq: null, userContent: 'hello', tailExtra: '' };
+    const options = { mode: 'send' as const, userSeq: null, stateSeq: null, userContent: 'hello', tailExtra: '' };
     const first = await buildPrompt(env, chat, settings(4000), options);
     const second = await buildPrompt(env, chat, settings(4000), options);
 
@@ -364,6 +368,7 @@ describe('buildPrompt reads a bounded window', () => {
     await buildPrompt(env, chat, settings(40000), {
       mode: 'send',
       userSeq: null,
+      stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
     });
@@ -420,6 +425,7 @@ describe('buildPrompt: the cast and includeNames', () => {
     const prompt = await buildPrompt(env, chat, settings(4000), {
       mode: 'send',
       userSeq: null,
+      stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
     });
@@ -436,6 +442,7 @@ describe('buildPrompt: the cast and includeNames', () => {
     const prompt = await buildPrompt(env, chat, settings(4000), {
       mode: 'send',
       userSeq: null,
+      stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
     });
@@ -461,6 +468,7 @@ describe('buildPrompt: the cast and includeNames', () => {
     const prompt = await buildPrompt(env, chat, settings(4000), {
       mode: 'send',
       userSeq: null,
+      stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
     });
@@ -476,7 +484,7 @@ describe('buildPrompt: the cast and includeNames', () => {
     const chat = seedChat(db, 0);
     seedChain(db, 4);
 
-    const options = { mode: 'send' as const, userSeq: null, userContent: 'hello', tailExtra: '' };
+    const options = { mode: 'send' as const, userSeq: null, stateSeq: null, userContent: 'hello', tailExtra: '' };
     const before = await buildPrompt(env, chat, settings(4000), options);
 
     seedCast(db, ['Olivia']);
@@ -497,6 +505,7 @@ describe('buildPrompt: the cast and includeNames', () => {
     const prompt = await buildPrompt(env, chat, { ...settings(4000), includeNames: true }, {
       mode: 'send',
       userSeq: null,
+      stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
     });
@@ -519,6 +528,7 @@ describe('buildPrompt: the cast and includeNames', () => {
     const prompt = await buildPrompt(env, chat, settings(4000), {
       mode: 'send',
       userSeq: null,
+      stateSeq: null,
       userContent: 'hello',
       tailExtra: '',
     });
@@ -538,7 +548,7 @@ describe('buildPrompt: the cast and includeNames', () => {
     exec(db, "UPDATE messages SET speaker = 'Olivia' WHERE id = 'm2'");
 
     const withNames = { ...settings(4000), includeNames: true };
-    const options = { mode: 'send' as const, userSeq: null, userContent: 'hello', tailExtra: '' };
+    const options = { mode: 'send' as const, userSeq: null, stateSeq: null, userContent: 'hello', tailExtra: '' };
 
     const before = await buildPrompt(env, chat, withNames, options);
     const beforeRow = before.messages.find((m) => m.content === 'Olivia: line 2 of the scene');
@@ -561,7 +571,7 @@ describe('buildPrompt: the cast and includeNames', () => {
  * tests pin both halves and the fact that they are in the two different regions.
  */
 describe('the craft block reaches the prompt', () => {
-  const options = { mode: 'send' as const, userSeq: null, userContent: 'hello', tailExtra: '' };
+  const options = { mode: 'send' as const, userSeq: null, stateSeq: null, userContent: 'hello', tailExtra: '' };
 
   function setSceneSetup(db: Database, craft: unknown): void {
     exec(
@@ -625,5 +635,148 @@ describe('the craft block reaches the prompt', () => {
     const first = await buildPrompt(env, chat, settings(8000), options);
     const second = await buildPrompt(env, chat, settings(8000), options);
     expect(first.prefixHash).toBe(second.prefixHash);
+  });
+});
+
+/**
+ * The world state a turn is written against.
+ *
+ * The bug: regenerating an early reply fed the model the LIVE state, which describes the END
+ * of the scene. A character who had since walked out of the room was therefore written as
+ * being outside it, and the re-rolled reply had her walk back IN — a fact that was not true
+ * at that point in the story and that the reader had not written.
+ *
+ * The fix reads the newest snapshot at or before the turn's own seq. These tests pin that,
+ * and pin the fallback: a point with no snapshot yet must render NO state, never the live
+ * one, because the live one is precisely the wrong answer.
+ */
+describe('the world state is read as of the turn, not as of now', () => {
+  /** Writes a state document for the chat and snapshots it onto one message. */
+  function setState(db: Database, json: string): void {
+    exec(
+      db,
+      `INSERT INTO state (chat_id, json, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(chat_id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at`,
+      CHAT_ID,
+      json,
+      Date.now(),
+    );
+  }
+
+  function snapshot(db: Database, messageId: string, json: string): void {
+    exec(db, 'UPDATE messages SET state_json = ? WHERE id = ?', json, messageId);
+  }
+
+  /** The state segment of the assembled tail, or '' when none was rendered. */
+  function stateOf(prompt: { messages: Array<{ role: string; content: string }> }): string {
+    return prompt.messages.map((m) => m.content).join('\n');
+  }
+
+  test('a regenerate is written against the state before that turn, not the newest one', async () => {
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    const seqs = seedChain(db, 4);
+
+    // The state as of the turn BEFORE the reply being re-rolled: Sydney is in the gym.
+    snapshot(db, 'm0', JSON.stringify({ location: 'the gym', present: ['Sydney', 'Ivander'] }));
+    // The turn being re-rolled is what produced "she left". Its own snapshot carries that.
+    snapshot(db, 'm1', JSON.stringify({ location: 'the gym', away: { Sydney: 'down the hall' } }));
+    setState(db, JSON.stringify({ location: 'the hall', away: { Sydney: 'down the hall' } }));
+
+    // Re-roll the reply at m1.
+    const prompt = await buildPrompt(env, chat, settings(8000), {
+      mode: 'regenerate',
+      userSeq: null,
+      stateSeq: seqs[1],
+      userContent: '',
+      tailExtra: '',
+    });
+
+    const text = stateOf(prompt);
+    // The state before that turn: she is present, and NOT recorded as having left.
+    expect(text).toContain('Sydney');
+    expect(text).not.toContain('down the hall');
+  });
+
+  test('the reply being re-rolled does not see its own outcome', async () => {
+    // The precise defect: the snapshot ON a row is the state that row's turn produced, so
+    // "at or before" would hand the re-roll the very fact it is being rewritten to change.
+    // Strictly-before is what excludes it.
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    const seqs = seedChain(db, 4);
+
+    snapshot(db, 'm1', JSON.stringify({ away: { Sydney: 'down the hall' } }));
+
+    const prompt = await buildPrompt(env, chat, settings(8000), {
+      mode: 'regenerate',
+      userSeq: null,
+      stateSeq: seqs[1],
+      userContent: '',
+      tailExtra: '',
+    });
+
+    expect(stateOf(prompt)).not.toContain('down the hall');
+  });
+
+  test('a step forward still gets the live state, so the fix does not freeze the scene', async () => {
+    // The other half: reading a snapshot must not make the narrator ignore what has
+    // happened since. A normal turn is written against the end of the scene, which `null`
+    // selects.
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    seedChain(db, 4);
+
+    snapshot(db, 'm0', JSON.stringify({ location: 'the gym', present: ['Sydney'] }));
+    setState(db, JSON.stringify({ location: 'the hall', away: { Sydney: 'the gym' } }));
+
+    const prompt = await buildPrompt(env, chat, settings(8000), {
+      mode: 'send',
+      userSeq: null,
+      stateSeq: null,
+      userContent: 'hello',
+      tailExtra: '',
+    });
+
+    expect(stateOf(prompt)).toContain('the hall');
+  });
+
+  test('a point before any snapshot renders no state at all, never the live one', async () => {
+    // The live document describes the END of the scene. Offering it as "what was true then"
+    // is the exact failure being fixed, so an unrecorded point must render nothing.
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    const seqs = seedChain(db, 4);
+
+    setState(db, JSON.stringify({ location: 'the hall', away: { Sydney: 'the gym' } }));
+
+    const prompt = await buildPrompt(env, chat, settings(8000), {
+      mode: 'regenerate',
+      userSeq: null,
+      stateSeq: seqs[0],
+      userContent: '',
+      tailExtra: '',
+    });
+
+    const text = stateOf(prompt);
+    expect(text).not.toContain('the hall');
+    expect(text).not.toContain('Sydney');
+  });
+
+  test('stateSeq null renders the live state, which is the forward-turn case', async () => {
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    seedChain(db, 4);
+    setState(db, JSON.stringify({ location: 'the hall' }));
+
+    const prompt = await buildPrompt(env, chat, settings(8000), {
+      mode: 'send',
+      userSeq: null,
+      stateSeq: null,
+      userContent: 'hello',
+      tailExtra: '',
+    });
+
+    expect(stateOf(prompt)).toContain('the hall');
   });
 });

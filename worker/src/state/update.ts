@@ -382,6 +382,83 @@ export async function loadState(env: Env, chatId: string): Promise<WorldState> {
   return result.ok ? result.next : { ...EMPTY_STATE };
 }
 
+/**
+ * The world state to write one turn against.
+ *
+ * `beforeSeq === null` means "now": the live document, which is what a step forward needs.
+ *
+ * A number means "re-roll the row at this seq", and the state is read from BEFORE it. The
+ * snapshot on a row is the state its own turn PRODUCED (`updateState` snapshots onto the
+ * reply it just wrote), so including that row would hand the model the outcome of the very
+ * reply being rewritten. The reported failure was a character being walked back INTO a room
+ * by a regenerate: the scene said she had left it, that fact came from the turn being
+ * re-rolled, and feeding it back made her re-enter. Strictly-before is what excludes it.
+ *
+ * The snapshot is the newest one on the visible path strictly before `beforeSeq`. That is
+ * the rule migration `0011` documents ("a reader sees the most recent snapshot at or before
+ * it, which is exactly what was true at the time") applied to the prompt, which never did it.
+ *
+ * Walks the path rather than filtering by `seq` alone. `seq` is a global insert counter, not
+ * a transcript position, so an alternative written later can carry a HIGHER seq while
+ * sitting EARLIER on the path. Filtering by seq would return a snapshot from further down
+ * the scene. The walk takes the active chain, exactly as the history window does.
+ *
+ * A point with no snapshot — before the first recorded turn, or on rows written before
+ * snapshots existed — is answered with the EMPTY state, never the live one. The live
+ * document describes the END of the scene, and offering it as "what was true then" is the
+ * bug being fixed. `{ ...EMPTY_STATE }` is the honest answer for "nothing recorded yet", and
+ * the prompt renders no state block for it.
+ */
+export async function loadStateAt(
+  env: Env,
+  chatId: string,
+  beforeSeq: number | null,
+): Promise<WorldState> {
+  if (beforeSeq === null) return await loadState(env, chatId);
+
+  const row = await env.DB.prepare(
+    `WITH RECURSIVE path(id, seq, parent_id, state_json, depth) AS (
+       SELECT id, seq, parent_id, state_json, 0
+         FROM messages
+        WHERE chat_id = ?1
+          AND id = (
+            SELECT id FROM messages
+             WHERE chat_id = ?1 AND parent_id IS NULL AND active = 1 AND deleted = 0
+             ORDER BY seq DESC LIMIT 1
+          )
+       UNION ALL
+       SELECT m.id, m.seq, m.parent_id, m.state_json, path.depth + 1
+         FROM path
+         JOIN messages m ON m.parent_id = path.id
+        WHERE m.chat_id = ?1
+          AND m.active = 1
+          AND m.deleted = 0
+          AND m.seq = (
+            SELECT MAX(c.seq) FROM messages c
+             WHERE c.chat_id = ?1 AND c.parent_id = path.id AND c.active = 1 AND c.deleted = 0
+          )
+     )
+     SELECT state_json FROM path
+      WHERE state_json IS NOT NULL AND seq < ?2
+      ORDER BY depth DESC
+      LIMIT 1`,
+  )
+    .bind(chatId, beforeSeq)
+    .first<{ state_json: string }>();
+
+  if (!row) return { ...EMPTY_STATE };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.state_json);
+  } catch {
+    return { ...EMPTY_STATE };
+  }
+
+  const result = validatePatch(EMPTY_STATE, parsed);
+  return result.ok ? result.next : { ...EMPTY_STATE };
+}
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

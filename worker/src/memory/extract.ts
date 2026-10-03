@@ -91,8 +91,29 @@ export async function extractFacts(
   toSeq: number,
 ): Promise<ExtractionResult> {
   const { results: messages } = await env.DB.prepare(
-    `SELECT seq, role, content FROM messages
-      WHERE chat_id = ? AND seq BETWEEN ? AND ?
+    `WITH RECURSIVE path(seq, id, role, content, depth) AS (
+       SELECT seq, id, role, content, 0
+         FROM messages
+        WHERE chat_id = ?1
+          AND id = (
+            SELECT id FROM messages
+             WHERE chat_id = ?1 AND parent_id IS NULL AND active = 1 AND deleted = 0
+             ORDER BY seq DESC LIMIT 1
+          )
+       UNION ALL
+       SELECT m.seq, m.id, m.role, m.content, path.depth + 1
+         FROM path
+         JOIN messages m ON m.parent_id = path.id
+        WHERE m.chat_id = ?1
+          AND m.active = 1
+          AND m.deleted = 0
+          AND m.seq = (
+            SELECT MAX(c.seq) FROM messages c
+             WHERE c.chat_id = ?1 AND c.parent_id = path.id AND c.active = 1 AND c.deleted = 0
+          )
+     )
+     SELECT seq, role, content FROM path
+      WHERE seq BETWEEN ?2 AND ?3
       ORDER BY seq`,
   )
     .bind(chatId, fromSeq, toSeq)

@@ -457,6 +457,42 @@ describe('summarize', () => {
     expect(row.tokens).toBeGreaterThan(0);
   });
 
+  test('never summarizes an abandoned branch that shares the range', async () => {
+    // The bug: the source read filtered on `seq BETWEEN` alone, with no `active` check. A
+    // re-rolled turn leaves its old version in the table as `active = 0`, and because `seq`
+    // is an insert counter those rows sit INSIDE the range a later summary covers. Measured
+    // on a real chat: one summary had swallowed six inactive rows, so a discarded version of
+    // the scene was folded into memory as though it had happened.
+    const { env, db } = makeEnv();
+    const chatId = seedChat(db);
+    await configure(env);
+
+    seedMessage(db, chatId, 'The lantern is lit.');
+    seedMessage(db, chatId, 'The keeper is on the stairs.');
+
+    // A discarded alternative to the second position: same parent, inactive, and therefore
+    // not part of the scene. Its seq falls inside the covered range.
+    const parent = one<{ id: string }>(
+      db,
+      `SELECT parent_id AS id FROM messages WHERE chat_id = ? AND seq = 1`,
+      chatId,
+    );
+    exec(
+      db,
+      `INSERT INTO messages (id, chat_id, parent_id, role, content, active, created_at)
+       VALUES ('discarded', ?, ?, 'assistant', 'ABANDONED VERSION OF THE SCENE', 0, ?)`,
+      chatId,
+      parent?.id ?? null,
+      Date.now(),
+    );
+
+    await summarize(env, chatId, 1, 3);
+
+    const sent = JSON.stringify(captured?.body ?? {});
+    expect(sent).toContain('The keeper is on the stairs.');
+    expect(sent).not.toContain('ABANDONED VERSION OF THE SCENE');
+  });
+
   test('generates from source messages only, never from a previous summary', async () => {
     const { env, db } = makeEnv();
     const chatId = seedChat(db);

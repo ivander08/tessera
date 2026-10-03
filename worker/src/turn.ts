@@ -165,6 +165,18 @@ async function runTurn(
   // for a `continue` with no target, and a null there would root a row at the opening.
   const tail = await tailId(env, chat.id);
 
+  // The world state this turn is written against.
+  //
+  // A `regenerate` re-rolls a reply that already happened, so it must be written against the
+  // state BEFORE that reply — the live document knows how the scene turned out, and feeding
+  // it to a re-roll is what walked a character back into a room she had already left. The
+  // snapshot on a row is the state that row's own turn produced, so `loadStateAt` reads
+  // strictly before this seq.
+  //
+  // Every other mode is a step forward and takes the live state, which `null` means. That is
+  // the same value the prompt used before this existed, so nothing but the re-roll changes.
+  const stateSeq = mode === 'regenerate' ? (target?.seq ?? null) : null;
+
   // Where a new row attaches, and where the model's output attaches. Both are decided by
   // one pure function so the rules can be asserted without a provider.
   const { parentId, replyParentId } = resolveAttachment(mode, target, tail);
@@ -202,6 +214,7 @@ async function runTurn(
     const prompt = await buildPrompt(env, chat, settings, {
       mode,
       userSeq,
+      stateSeq,
       // A recovery `continue` has no new text, but the prompt's tail needs the reader's
       // message — that is what the reply is answering. Without it the model would be
       // asked to continue a conversation whose last user turn it cannot see.
