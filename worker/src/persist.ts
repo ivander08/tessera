@@ -14,31 +14,59 @@ import type { Role } from '../../src/lib/prompt/types';
  */
 
 /**
- * The id and seq a reader's message WILL have, without writing it.
+ * The id a reader's message WILL have, before the row is written.
  *
- * A turn needs the row's id before the provider is called — the reply is parented to it —
- * but writing it that early is what made Stop impossible to implement honestly. A Worker
- * cannot do database work after the client disconnects: the isolate is torn down, and any
- * cleanup attempted after an abort dies with "Network connection lost". So the row is
- * written by the SUCCESS path only, and this hands out the id the reply will point at.
- *
- * `seq` is only needed for the prompt's windowing, which happens before the write, so the
- * caller passes the tail's seq and the real one is assigned by SQLite on insert.
+ * A turn needs the id before the provider is called, because the reply is parented to it.
+ * The row itself lands immediately after — see `insertUserMessage` — and this hands out the
+ * id that row will carry.
  */
 export function reserveUserMessage(): { id: string } {
   return { id: crypto.randomUUID() };
 }
 
 /**
- * Writes the reader's message, and the reply that answers it, in one batch.
+ * Writes the reader's own message, on its own, BEFORE the provider is called.
  *
- * Both rows land together or neither does, which is what makes Stop mean "the scene is
- * unchanged" rather than "the scene has my message in it and no answer".
+ * It goes up front because it must outlive the turn it starts. A Worker cannot do database
+ * work after the client disconnects — the isolate is torn down and a write attempted after
+ * an abort dies with "Network connection lost" — so anything not already committed when the
+ * connection drops is gone for good. That is the reported failure: the reader sends a long
+ * message, presses Stop or loses signal, and their own text disappears along with the reply
+ * it never got.
+ *
+ * `active = 1` is passed explicitly so the new row is the visible one on the path, matching
+ * what `addVersion` does, rather than depending on the column default.
+ */
+export async function insertUserMessage(
+  env: Env,
+  chatId: string,
+  message: {
+    id: string;
+    content: string;
+    parentId: string | null;
+  },
+): Promise<void> {
+  const now = Date.now();
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO messages (id, chat_id, parent_id, role, content, content_tokens, active, created_at)
+       VALUES (?, ?, ?, 'user', ?, ?, 1, ?)`,
+    ).bind(message.id, chatId, message.parentId, message.content, estimateTokens(message.content), now),
+    env.DB.prepare('UPDATE chats SET updated_at = ? WHERE id = ?').bind(now, chatId),
+  ]);
+}
+
+/**
+ * Writes the reply that answers the reader's message.
+ *
+ * Only the reply: the reader's row is already committed by `insertUserMessage` before the
+ * provider is called, so it cannot be taken away by however this turn ends. The reply is
+ * the part that is only written on success, because a discarded reply is not debris the
+ * reader wants to delete.
  */
 export async function persistTurn(
   env: Env,
   chatId: string,
-  user: { id: string; content: string; parentId: string | null } | null,
   reply: {
     content: string;
     parentId: string | null;
@@ -47,21 +75,11 @@ export async function persistTurn(
     costUsd: number | null;
     speaker?: string | null;
   },
-): Promise<{ userId: string | null; replyId: string }> {
+): Promise<{ replyId: string }> {
   const now = Date.now();
   const replyId = crypto.randomUUID();
-  const statements = [];
 
-  if (user) {
-    statements.push(
-      env.DB.prepare(
-        `INSERT INTO messages (id, chat_id, parent_id, role, content, content_tokens, created_at)
-         VALUES (?, ?, ?, 'user', ?, ?, ?)`,
-      ).bind(user.id, chatId, user.parentId, user.content, estimateTokens(user.content), now),
-    );
-  }
-
-  statements.push(
+  await env.DB.batch([
     env.DB.prepare(
       `INSERT INTO messages
          (id, chat_id, parent_id, role, content, content_tokens, prompt_tokens,
@@ -82,10 +100,8 @@ export async function persistTurn(
       reply.speaker ?? null,
       now,
     ),
-  );
+    env.DB.prepare('UPDATE chats SET updated_at = ? WHERE id = ?').bind(now, chatId),
+  ]);
 
-  statements.push(env.DB.prepare('UPDATE chats SET updated_at = ? WHERE id = ?').bind(now, chatId));
-
-  await env.DB.batch(statements);
-  return { userId: user?.id ?? null, replyId };
+  return { replyId };
 }
