@@ -475,10 +475,10 @@ describe('state block: weather', () => {
   });
 
   /**
-   * Shedding is by priority, not by size: notes go first, then inventory, conditions,
-   * weather, cast, location, time. A budget too tight for the whole block therefore drops
-   * the LOWEST-priority section that is present, whatever its length — so weather goes
-   * before the cast list even when the cast list is what does not fit.
+   * Shedding is by priority, not by size: bonds and threads go first, then conditions,
+   * outfits, away, weather, cast, location, time. A budget too tight for the whole block
+   * therefore drops the LOWEST-priority section that is present, whatever its length — so
+   * weather goes before the cast list even when the cast list is what does not fit.
    */
   test('sheds weather before the cast list', () => {
     const state = {
@@ -499,8 +499,6 @@ describe('state block: weather', () => {
       location: 'The Compass Rose',
       weather: 'Overcast',
       present: ['Ada'],
-      inventory: ['tube'],
-      notes: ['something'],
     };
     const tight = renderStateBlock(state, 20);
     expect(tight).toContain('Date/Time: late evening');
@@ -540,9 +538,9 @@ describe('state block: characters elsewhere', () => {
 /**
  * Outfits: what each character is wearing.
  *
- * The field exists because a flat `inventory` cannot say whose coat is whose — "a coat"
- * is not information. Every assertion here is about the two properties that make it
- * usable: it is per-character, and it renders identically every turn.
+ * Keyed by name rather than held in a flat list, because a flat list cannot say whose coat
+ * is whose — "a coat" is not information. Every assertion here is about the two properties
+ * that make it usable: it is per-character, and it renders identically every turn.
  */
 describe('world state: outfits', () => {
   test('accepts a name -> outfit map', () => {

@@ -285,8 +285,8 @@ function TurnState({
   if (message.role !== 'assistant') return null;
   if (!state) return null;
 
-  // Only the fields that move. Conditions and notes change constantly and would make this
-  // line unusable.
+  // Only the fields that move. Conditions change constantly and would make this line
+  // unusable.
   const parts = [state.location, state.time, state.weather]
     .map((part) => part?.trim())
     .filter((part): part is string => !!part && part.length > 0);
