@@ -19,7 +19,6 @@ export interface WorldState {
   weather?: string;
   /** Characters currently in the scene. */
   present?: string[];
-  inventory?: string[];
   /**
    * Characters who are NOT where the scene is, and where they are instead.
    *
@@ -50,7 +49,6 @@ export interface WorldState {
    * merge would make it impossible to clear one.
    */
   outfits?: Record<string, string>;
-  notes?: string[];
   /**
    * Character-to-character relationship values.
    *
@@ -218,36 +216,39 @@ export function validatePatch(current: WorldState, patch: unknown): ValidationRe
         break;
       }
 
+      // Removed fields. Ignored so a stored document from before their removal still loads
+      // instead of collapsing to EMPTY_STATE.
+      //
+      // The default branch REJECTS an unknown key, and that is right for a model proposing
+      // one. It is wrong here: `loadState` and `loadStateAt` parse a stored document through
+      // this same function, so a legacy row carrying `inventory` or `notes` would fail
+      // validation and be replaced by `{ ...EMPTY_STATE }` — silently wiping the time, place
+      // and cast the reader is still in the middle of. Both keys are ignored rather than
+      // applied, which is the only place a deleted key must not reject.
+      //
+      // `inventory` and `notes` were removed because neither had an owner or a rule for
+      // retirement: an item picked up in one scene was still being injected a week later,
+      // and nothing could ever remove one entry. Measured on the live cheap model, a
+      // fifteen-turn scene accumulated ten inventory items and not one was ever dropped.
       case 'inventory':
-      case 'notes': {
-        if (value === null) {
-          delete next[key];
-          break;
-        }
-        const list = stringList(value);
-        if (!list) {
-          return {
-            ok: false,
-            reason: `"${key}" must be an array of strings or null, got ${describe(value)}`,
-          };
-        }
-        next[key] = list;
-        break;
-      }
+      case 'notes':
+        continue;
 
       case 'conditions': {
         if (value === null) {
           delete next.conditions;
           break;
         }
-        const map = stringMap(value);
+        const map = nullableStringMap(value);
         if (!map) {
           return {
             ok: false,
             reason: `"conditions" must be an object with string values or null, got ${describe(value)}`,
           };
         }
-        next.conditions = map;
+        const merged = mergeNameMap(next.conditions as Record<string, string> | undefined, map);
+        if (Object.keys(merged).length > 0) next.conditions = merged;
+        else delete next.conditions;
         break;
       }
 
@@ -256,18 +257,20 @@ export function validatePatch(current: WorldState, patch: unknown): ValidationRe
           delete next.outfits;
           break;
         }
-        // Same shape as `conditions`: an object of names to strings. Empty-string values
-        // are KEPT here and dropped at render time by `renderOutfits`, exactly as
-        // `renderAway` and `renderConditions` do — making `stringMap` drop them would
-        // change those two as well.
-        const map = stringMap(value);
+        // Same shape as `conditions`: an object of names to strings, where an explicit
+        // `null` removes one entry. Empty-string values are KEPT here and dropped at render
+        // time by `renderOutfits`, exactly as `renderAway` and `renderConditions` do —
+        // making the reader drop them would change those two as well.
+        const map = nullableStringMap(value);
         if (!map) {
           return {
             ok: false,
             reason: `"outfits" must be an object with string values or null, got ${describe(value)}`,
           };
         }
-        next.outfits = map;
+        const merged = mergeNameMap(next.outfits as Record<string, string> | undefined, map);
+        if (Object.keys(merged).length > 0) next.outfits = merged;
+        else delete next.outfits;
         break;
       }
 
@@ -280,13 +283,19 @@ export function validatePatch(current: WorldState, patch: unknown): ValidationRe
         if (!map) {
           return { ok: false, reason: `"bonds" must be an object or null, got ${describe(value)}` };
         }
-        const bonds: Record<string, { bond?: number; sparks?: number; grudge?: number }> = {};
+        const bonds: Record<string, { bond?: number; sparks?: number; grudge?: number } | null> = {};
         for (const [pair, entry] of Object.entries(map)) {
+          // An explicit null on a pair removes it, which is what the panel sends when the
+          // reader deletes a relationship row.
+          if (entry === null) {
+            bonds[sortPair(pair)] = null;
+            continue;
+          }
           const fields = asRecord(entry);
           if (!fields) {
             return {
               ok: false,
-              reason: `"bonds.${pair}" must be an object, got ${describe(entry)}`,
+              reason: `"bonds.${pair}" must be an object or null, got ${describe(entry)}`,
             };
           }
           const out: { bond?: number; sparks?: number; grudge?: number } = {};
@@ -304,10 +313,16 @@ export function validatePatch(current: WorldState, patch: unknown): ValidationRe
             // with it.
             out[field] = Math.max(-20, Math.min(20, Math.round(raw)));
           }
-          if (Object.keys(out).length === 0) continue;
+          // A pair with no values is a pair the model raised without a number for. Kept as
+          // an empty object so the panel can show it, which is what the pre-merge code did
+          // by `continue`ing past it.
           bonds[sortPair(pair)] = out;
         }
-        if (Object.keys(bonds).length > 0) next.bonds = bonds;
+        const merged = mergeBonds(
+          next.bonds as Record<string, { bond?: number; sparks?: number; grudge?: number }> | undefined,
+          bonds,
+        );
+        if (Object.keys(merged).length > 0) next.bonds = merged;
         else delete next.bonds;
         break;
       }
@@ -342,7 +357,11 @@ export function validatePatch(current: WorldState, patch: unknown): ValidationRe
           }
           threads.push(status === undefined ? { text } : { text, status });
         }
-        if (threads.length > 0) next.threads = threads;
+        const merged = mergeThreads(
+          next.threads as Array<{ text: string; status?: 'open' | 'paid' | 'dropped' }> | undefined,
+          threads,
+        );
+        if (merged.length > 0) next.threads = merged;
         else delete next.threads;
         break;
       }
@@ -425,6 +444,97 @@ function stringMap(value: unknown): Record<string, string> | null {
   for (const [key, entry] of Object.entries(record)) {
     if (typeof entry !== 'string') return null;
     out[key] = entry;
+  }
+  return out;
+}
+
+/**
+ * A name -> string map where an explicit `null` means "this entry is gone".
+ *
+ * The deletion signal the merge needs. Without it, an entry could only be removed by
+ * clearing the whole field, which is what made these maps impossible to maintain.
+ */
+function nullableStringMap(value: unknown): Record<string, string | null> | null {
+  const record = asRecord(value);
+  if (!record) return null;
+
+  const out: Record<string, string | null> = {};
+  for (const [key, entry] of Object.entries(record)) {
+    if (entry === null) {
+      out[key] = null;
+      continue;
+    }
+    if (typeof entry !== 'string') return null;
+    out[key] = entry;
+  }
+  return out;
+}
+
+/**
+ * Merge a name-keyed map over what is already stored.
+ *
+ * The prompt tells the model to include an entry only when it CHANGED. Replacing the map
+ * wholesale contradicted that instruction: every entry the model correctly declined to
+ * restate was deleted. Measured on the live cheap model, three seeded conditions lost two
+ * of them inside a single turn, and an off-scene character's entry vanished with no way to
+ * tell that it had ever been there.
+ *
+ * An explicit `null` is the one way to remove an entry, which is what the panel sends when
+ * the reader deletes a line.
+ */
+function mergeNameMap(
+  current: Record<string, string> | undefined,
+  incoming: Record<string, string | null>,
+): Record<string, string> {
+  const out: Record<string, string> = { ...(current ?? {}) };
+  for (const [key, value] of Object.entries(incoming)) {
+    if (value === null) delete out[key];
+    else out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * Merge bonds, one pair and one value at a time.
+ *
+ * Two levels of merge, because the prompt describes two: include a PAIR only when the
+ * exchange changes it, and include only the VALUE that changed. A wholesale replace lost
+ * the pairs the model left out; replacing a pair's object lost the values it left out.
+ */
+function mergeBonds(
+  current: Record<string, { bond?: number; sparks?: number; grudge?: number }> | undefined,
+  incoming: Record<string, { bond?: number; sparks?: number; grudge?: number } | null>,
+): Record<string, { bond?: number; sparks?: number; grudge?: number }> {
+  const out: Record<string, { bond?: number; sparks?: number; grudge?: number }> = {
+    ...(current ?? {}),
+  };
+  for (const [pair, values] of Object.entries(incoming)) {
+    if (values === null) {
+      delete out[pair];
+      continue;
+    }
+    out[pair] = { ...(out[pair] ?? {}), ...values };
+  }
+  return out;
+}
+
+/**
+ * Merge plot threads, keyed by their text.
+ *
+ * A thread is identified by what it says, so restating it with a new status updates it and
+ * a thread the model does not mention is left alone. `dropped` threads are kept in the
+ * document rather than pruned: the renderer filters them out, so they cost no prompt
+ * tokens, and the panel still shows the reader what was abandoned.
+ */
+function mergeThreads(
+  current: Array<{ text: string; status?: 'open' | 'paid' | 'dropped' }> | undefined,
+  incoming: Array<{ text: string; status?: 'open' | 'paid' | 'dropped' }>,
+): Array<{ text: string; status?: 'open' | 'paid' | 'dropped' }> {
+  const out = [...(current ?? [])];
+  for (const thread of incoming) {
+    const at = out.findIndex((entry) => entry.text === thread.text);
+    if (at >= 0) out[at] = thread;
+    else out.push(thread);
   }
   return out;
 }

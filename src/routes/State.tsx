@@ -57,15 +57,16 @@ const GROUPS: Array<{ heading: string; fields: Field[] }> = [
       {
         key: 'outfits',
         label: 'Outfits',
-        hint: 'Character: what they are wearing. One per line.',
+        hint: 'Character: what they are wearing. One per line. Deleting a line removes that entry.',
         map: true,
       },
-      { key: 'inventory', label: 'Inventory', hint: 'Things being carried, one per line.', list: true },
+      {
+        key: 'conditions',
+        label: 'Conditions',
+        hint: 'Character: short condition — "bleeding", "wet through". Deleting a line removes it.',
+        map: true,
+      },
     ],
-  },
-  {
-    heading: 'Notes',
-    fields: [{ key: 'notes', label: 'What not to forget', hint: 'One per line.', list: true }],
   },
   {
     heading: 'Relationships and threads',
@@ -163,7 +164,7 @@ export default function State({
       } else if (field.map) {
         // Split on the FIRST colon only: an outfit can contain one ("a coat: navy"), and
         // a value that loses its tail is worse than a line that is skipped.
-        const entries: Record<string, string> = {};
+        const entries: Record<string, string | null> = {};
         for (const line of trimmed.split('\n')) {
           const at = line.indexOf(':');
           if (at < 0) continue;
@@ -171,6 +172,16 @@ export default function State({
           const text = line.slice(at + 1).trim();
           if (name.length === 0) continue;
           entries[name] = text;
+        }
+        // A line the reader deleted is sent as an explicit null. These maps MERGE, so an
+        // omitted key means "leave it alone" — without this, deleting a line in the panel
+        // would look like it worked and the entry would still be there on the next turn.
+        const stored = (state as Record<string, unknown>)[key];
+        if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
+          const kept = new Set(Object.keys(entries).map((name) => name.toLowerCase()));
+          for (const name of Object.keys(stored as Record<string, unknown>)) {
+            if (!kept.has(name.toLowerCase())) entries[name] = null;
+          }
         }
         if (Object.keys(entries).length === 0) continue;
         patch[key] = entries;
@@ -183,12 +194,26 @@ export default function State({
     // loop by key, and bonds/threads are not text — without this they would be silently
     // dropped and the edit would look like it worked.
     //
+    // Both MERGE now, so a row the reader removed has to be sent as an explicit removal:
+    // omitting it would mean "leave it alone" and it would reappear on the next turn.
+    //
     // Empty rows are dropped rather than sent: `validatePatch` rejects the whole patch on
     // an empty thread text, which would discard the reader's other edits with it. An
     // empty result clears the key, which is what emptying the panel means.
     if (structured.threads !== undefined) {
       const kept = structured.threads.filter((thread) => thread.text.trim().length > 0);
-      patch.threads = kept.length > 0 ? kept : null;
+      if (kept.length === 0) {
+        patch.threads = null;
+      } else {
+        // A thread the reader removed is marked `dropped`, which is the lifecycle state
+        // that already means "abandoned" and which the renderer filters out of the prompt.
+        // There is no null signal inside an array, so this is the honest one.
+        const present = new Set(kept.map((thread) => thread.text));
+        const dropped = (state.threads ?? [])
+          .filter((thread) => !present.has(thread.text))
+          .map((thread) => ({ text: thread.text, status: 'dropped' as const }));
+        patch.threads = [...kept, ...dropped];
+      }
     }
     if (structured.bonds !== undefined) {
       const kept: Bonds = {};
@@ -197,7 +222,16 @@ export default function State({
         if (names.length !== 2) continue;
         kept[pair] = values;
       }
-      patch.bonds = Object.keys(kept).length > 0 ? kept : null;
+      if (Object.keys(kept).length === 0) {
+        patch.bonds = null;
+      } else {
+        // Same reason as threads: a pair the reader removed is sent as an explicit null.
+        const removed: Record<string, null> = {};
+        for (const pair of Object.keys(state.bonds ?? {})) {
+          if (!(pair in kept)) removed[pair] = null;
+        }
+        patch.bonds = { ...kept, ...removed };
+      }
     }
 
     if (Object.keys(patch).length === 0) {

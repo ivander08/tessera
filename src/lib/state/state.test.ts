@@ -36,8 +36,6 @@ describe('validatePatch', () => {
       ['location', 42],
       ['time', { hour: 3 }],
       ['present', 'Ada'],
-      ['inventory', [1, 2]],
-      ['notes', 'a note'],
       ['conditions', { Ada: 3 }],
       ['conditions', ['Ada']],
     ];
@@ -67,21 +65,21 @@ describe('validatePatch', () => {
   });
 
   test('null clears a key', () => {
-    const current: WorldState = { location: 'the workshop', present: ['Ada'], notes: ['a'] };
-    const result = validatePatch(current, { location: null, notes: null });
+    const current: WorldState = { location: 'the workshop', present: ['Ada'], conditions: { Ada: 'tired' } };
+    const result = validatePatch(current, { location: null, conditions: null });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect('location' in result.next).toBe(false);
-    expect('notes' in result.next).toBe(false);
+    expect('conditions' in result.next).toBe(false);
     expect(result.next.present).toEqual(['Ada']);
   });
 
   test('never mutates the current state', () => {
-    const current: WorldState = { location: 'the workshop', present: ['Ada'], notes: ['a'] };
+    const current: WorldState = { location: 'the workshop', present: ['Ada'], conditions: { Ada: 'tired' } };
     const snapshot = structuredClone(current);
 
-    const result = validatePatch(current, { location: 'the gate', present: null, notes: ['b'] });
+    const result = validatePatch(current, { location: 'the gate', present: null, conditions: { Ada: 'calm' } });
     expect(result.ok).toBe(true);
     expect(current).toEqual(snapshot);
 
@@ -163,10 +161,99 @@ describe('validatePatch — bonds and threads', () => {
   });
 });
 
+/**
+ * The name-keyed maps MERGE, because the prompt tells the model to include an entry only
+ * when it CHANGED. Replacing the map wholesale contradicted that: every entry the model
+ * correctly declined to restate was deleted. Measured on the live cheap model, three
+ * seeded conditions lost two of them inside a single turn.
+ */
+describe('name-keyed maps merge rather than replace', () => {
+  test('an entry the patch does not mention is kept', () => {
+    const current: WorldState = {
+      conditions: { Ada: 'bleeding', Bram: 'calm', Cass: 'wet' },
+      outfits: { Ada: 'grey dress', Bram: 'fisherman knit' },
+    };
+    const result = validatePatch(current, {
+      conditions: { Ada: 'bandaged' },
+      outfits: { Bram: 'oilskin coat' },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.next.conditions).toEqual({ Ada: 'bandaged', Bram: 'calm', Cass: 'wet' });
+    expect(result.next.outfits).toEqual({ Ada: 'grey dress', Bram: 'oilskin coat' });
+  });
+
+  test('an explicit null removes exactly that entry', () => {
+    // The deletion signal. Without it, an entry could only be removed by clearing the
+    // whole field, which is what made these maps impossible to maintain.
+    const current: WorldState = { conditions: { Ada: 'bleeding', Bram: 'calm' } };
+    const result = validatePatch(current, { conditions: { Ada: null } });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.next.conditions).toEqual({ Bram: 'calm' });
+  });
+
+  test('removing the last entry drops the key entirely', () => {
+    const current: WorldState = { conditions: { Ada: 'bleeding' } };
+    const result = validatePatch(current, { conditions: { Ada: null } });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect('conditions' in result.next).toBe(false);
+  });
+
+  test('a bond merges per pair AND per value', () => {
+    // The prompt describes two levels: include a pair only when it changed, and include
+    // only the value that changed. Both levels have to merge or one of them is lost.
+    const current: WorldState = {
+      bonds: { 'Ada|Bram': { bond: 4, sparks: 2 }, 'Ada|Cass': { grudge: 6 } },
+    };
+    const result = validatePatch(current, { bonds: { 'Ada|Bram': { bond: 7 } } });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.next.bonds).toEqual({
+      'Ada|Bram': { bond: 7, sparks: 2 },
+      'Ada|Cass': { grudge: 6 },
+    });
+  });
+
+  test('an explicit null on a bond pair removes it', () => {
+    const current: WorldState = { bonds: { 'Ada|Bram': { bond: 4 }, 'Ada|Cass': { grudge: 6 } } };
+    const result = validatePatch(current, { bonds: { 'Ada|Bram': null } });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.next.bonds).toEqual({ 'Ada|Cass': { grudge: 6 } });
+  });
+
+  test('threads merge by text, and a thread the patch omits is kept', () => {
+    const current: WorldState = {
+      threads: [{ text: 'the letter' }, { text: 'the debt', status: 'open' }],
+    };
+    const result = validatePatch(current, { threads: [{ text: 'the debt', status: 'paid' }] });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.next.threads).toEqual([
+      { text: 'the letter' },
+      { text: 'the debt', status: 'paid' },
+    ]);
+  });
+
+  test('a new thread is appended rather than replacing the list', () => {
+    const current: WorldState = { threads: [{ text: 'the letter' }] };
+    const result = validatePatch(current, { threads: [{ text: 'the key' }] });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.next.threads).toEqual([{ text: 'the letter' }, { text: 'the key' }]);
+    }
+  });
+});
+
 describe('renderStateBlock', () => {
   test('returns an empty string for an empty state', () => {
     expect(renderStateBlock({})).toBe('');
-    expect(renderStateBlock({ location: '', present: [], notes: ['  '] })).toBe('');
+    expect(renderStateBlock({ location: '', present: [], conditions: { Ada: '  ' } })).toBe('');
   });
 
   test('is deterministic under differing key insertion order', () => {
@@ -174,14 +261,12 @@ describe('renderStateBlock', () => {
       time: 'dusk',
       location: 'the workshop',
       present: ['Ada', 'Bram'],
-      inventory: ['lamp', 'key'],
       conditions: { Ada: 'bleeding', Bram: 'calm' },
-      notes: ['the door is barred'],
+      outfits: { Ada: 'apron' },
     };
     const b: WorldState = {
-      notes: ['the door is barred'],
+      outfits: { Ada: 'apron' },
       conditions: { Bram: 'calm', Ada: 'bleeding' },
-      inventory: ['lamp', 'key'],
       present: ['Ada', 'Bram'],
       location: 'the workshop',
       time: 'dusk',
@@ -194,40 +279,39 @@ describe('renderStateBlock', () => {
     expect(first).toContain('Conditions: Ada (bleeding); Bram (calm)');
   });
 
-  test('drops notes before location when over budget', () => {
+  test('drops conditions before location when over budget', () => {
     const state: WorldState = {
       location: 'the workshop',
-      notes: ['a note that costs tokens', 'another note that costs tokens'],
+      conditions: { Ada: 'bleeding badly and holding the door shut' },
     };
 
     const full = renderStateBlock(state);
     const count = (text: string): number => text.length;
 
-    // A budget that fits location but not location + notes.
+    // A budget that fits location but not location + conditions.
     const budget = 'World state:\nLocation: the workshop'.length;
     expect(full.length).toBeGreaterThan(budget);
 
     const trimmed = renderStateBlock(state, budget, count);
     expect(trimmed).toContain('Location: the workshop');
-    expect(trimmed).not.toContain('Notes:');
+    expect(trimmed).not.toContain('Conditions:');
   });
 
   test('sheds in priority order and keeps at least one section', () => {
     const state: WorldState = {
       location: 'the workshop',
       present: ['Ada'],
-      inventory: ['lamp'],
       conditions: { Ada: 'bleeding' },
-      notes: ['something'],
+      outfits: { Ada: 'an ink-stained apron with three pockets' },
     };
 
     const count = (text: string): number => text.length;
-    const withoutNotes = renderStateBlock({ ...state, notes: [] });
-    const kept = renderStateBlock(state, withoutNotes.length, count);
+    const withoutConditions = renderStateBlock({ ...state, conditions: {} });
+    const kept = renderStateBlock(state, withoutConditions.length, count);
 
     expect(kept).toContain('Location: the workshop');
     expect(kept).toContain('Present: Ada');
-    expect(kept).not.toContain('Notes:');
+    expect(kept).not.toContain('Conditions:');
 
     // Even at an impossible budget the block is never empty.
     expect(renderStateBlock(state, 1, count).length).toBeGreaterThan(0);
@@ -237,7 +321,9 @@ describe('renderStateBlock', () => {
     const state: WorldState = {
       location: 'the workshop',
       present: Array.from({ length: 40 }, (_, i) => `Character ${i}`),
-      notes: Array.from({ length: 200 }, (_, i) => `Note number ${i} with a fair amount of text.`),
+      conditions: Object.fromEntries(
+        Array.from({ length: 200 }, (_, i) => [`Character ${i}`, `condition number ${i} with a fair amount of text.`]),
+      ),
     };
     expect(estimateTokens(renderStateBlock(state))).toBeLessThanOrEqual(800);
   });
@@ -278,11 +364,27 @@ describe('world state: weather and cast hygiene', () => {
     if (result.ok) expect(result.next.present).toEqual([]);
   });
 
-  test('does not apply the name filter to inventory or notes', () => {
-    // "me" is a bad character name but a plausible note or inventory entry in prose.
-    const result = validatePatch({}, { inventory: ['a map of me'] });
+  test('the removed fields are ignored rather than rejected', () => {
+    // `loadState` and `loadStateAt` parse the stored document through this same validator.
+    // A stored row from before the removal must still load, with everything else intact,
+    // rather than collapsing to EMPTY_STATE and wiping the scene the reader is in.
+    const stored: unknown = JSON.parse(
+      '{"inventory":["a map of me"],"notes":["a note"],"location":"the workshop","present":["Ada"]}',
+    );
+    const result = validatePatch({}, stored);
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.next.inventory).toEqual(['a map of me']);
+    if (result.ok) {
+      expect(result.next.location).toBe('the workshop');
+      expect(result.next.present).toEqual(['Ada']);
+      expect('inventory' in result.next).toBe(false);
+      expect('notes' in result.next).toBe(false);
+    }
+  });
+
+  test('a patch that re-proposes a removed key does not take the rest of the patch down', () => {
+    const result = validatePatch({}, { inventory: ['x'], notes: ['y'], weather: 'rain' });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.next).toEqual({ weather: 'rain' });
   });
 });
 
@@ -457,13 +559,18 @@ describe('world state: outfits', () => {
     expect(validatePatch({}, { outfits: { Sydney: 3 } }).ok).toBe(false);
   });
 
-  test('replaces the whole map rather than merging into it', () => {
-    // Merging would make it impossible to clear one character: the model is told to
-    // include a character only when their clothing changes, so an absent name means
-    // "unknown", and a merge would keep the stale value forever.
-    const result = validatePatch({ outfits: { A: 'x' } }, { outfits: { B: 'y' } });
+  test('merges into the map rather than replacing it, and null removes one entry', () => {
+    // This used to assert the opposite, on the reasoning that a merge "would make it
+    // impossible to clear one character". That reasoning was wrong twice over: it made
+    // every entry the model declined to restate disappear, and clearing one is exactly
+    // what an explicit null is for.
+    const result = validatePatch({ outfits: { A: 'x', C: 'z' } }, { outfits: { B: 'y' } });
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.next.outfits).toEqual({ B: 'y' });
+    if (result.ok) expect(result.next.outfits).toEqual({ A: 'x', C: 'z', B: 'y' });
+
+    const removed = validatePatch({ outfits: { A: 'x', B: 'y' } }, { outfits: { A: null } });
+    expect(removed.ok).toBe(true);
+    if (removed.ok) expect(removed.next.outfits).toEqual({ B: 'y' });
   });
 
   test('clears with null', () => {

@@ -170,6 +170,10 @@ describe('updateState: the pace rule', () => {
     expect(system).toContain('"outfits"');
     expect(system).toContain('"conditions"');
     expect(system).not.toContain('"elapsed"');
+    // The two removed fields are gone from the schema the model is shown, so it is never
+    // asked to fill a field nothing reads and nothing can retire.
+    expect(system).not.toContain('"inventory"');
+    expect(system).not.toContain('"notes"');
   });
 
   test('the manual prompt never tells the model to record or advance a clock', async () => {

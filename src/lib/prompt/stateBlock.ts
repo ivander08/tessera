@@ -26,10 +26,8 @@ type SectionKey =
   | 'away'
   | 'conditions'
   | 'outfits'
-  | 'inventory'
   | 'bonds'
-  | 'threads'
-  | 'notes';
+  | 'threads';
 
 interface Section {
   key: SectionKey;
@@ -46,8 +44,6 @@ const DROP_ORDER: SectionKey[] = [
   // least proven.
   'threads',
   'bonds',
-  'notes',
-  'inventory',
   'conditions',
   // Between a condition note and who is present: an outfit is more useful to the
   // narrator than a condition, less load-bearing than the cast list.
@@ -118,14 +114,8 @@ function collect(state: WorldState, options: { bonds?: boolean; threads?: boolea
   const weather = state.weather?.trim() ?? '';
   add('weather', weather.length > 0 ? `Weather: ${weather}` : '');
 
-  const names: Array<[SectionKey, string, string[] | undefined]> = [
-    ['present', 'Present', state.present],
-    ['inventory', 'Inventory', state.inventory],
-  ];
-  for (const [key, label, value] of names) {
-    const entries = (value ?? []).map((entry) => entry.trim()).filter((entry) => entry.length > 0);
-    add(key, entries.length > 0 ? `${label}: ${entries.join(', ')}` : '');
-  }
+  const present = (state.present ?? []).map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  add('present', present.length > 0 ? `Present: ${present.join(', ')}` : '');
 
   // Rendered right after `present`, because the two answer the same question — who is in
   // the room — and a narrator that reads only one of them writes the other person into
@@ -161,11 +151,6 @@ function collect(state: WorldState, options: { bonds?: boolean; threads?: boolea
       .map((thread) => `- [${thread.status ?? 'open'}] ${thread.text}`);
     add('threads', threadLines.length > 0 ? `Threads:\n${threadLines.join('\n')}` : '');
   }
-
-  // Notes are whole sentences, so they get their own lines rather than being
-  // comma-joined into a fragment.
-  const notes = (state.notes ?? []).map((note) => note.trim()).filter((note) => note.length > 0);
-  add('notes', notes.length > 0 ? `Notes:\n${notes.map((note) => `- ${note}`).join('\n')}` : '');
 
   return out;
 }

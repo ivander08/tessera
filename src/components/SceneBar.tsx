@@ -78,9 +78,6 @@ export function SceneBar({ state, onOpen }: { state: WorldState | undefined; onO
                 }
               />
             )}
-            {state?.inventory && state.inventory.length > 0 && (
-              <Rest label="Carrying" value={`${state.inventory.length}`} />
-            )}
             {outfitCount > 0 && <Rest label="Outfits" value={`${outfitCount}`} />}
           </span>
 

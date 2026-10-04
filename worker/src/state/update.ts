@@ -55,14 +55,14 @@ const SYSTEM = [
   '  "away"       object mapping a character name -> where they are instead, for',
   '                anyone who has left the scene. Use this when someone departs:',
   '                move them out of "present" and into "away" in the same reply.',
-  '  "inventory"  array of notable items a character is carrying',
-  '  "conditions" object mapping character name -> short condition, e.g. {"Ada":"bleeding"}',
+  '  "conditions" object mapping character name -> short condition, e.g. {"Ada":"bleeding"}.',
+  '                Include only the characters whose condition changed. Set an entry to',
+  '                null to remove it once it no longer applies.',
   '  "outfits"    object mapping character name -> what they are wearing right now, e.g.',
   '                {"Sydney":"school uniform, blazer open"}. Include a character only when',
   '                their clothing is established or changes. Record what the text says:',
   '                colours, layers, notable items. Do not invent an outfit, and do not',
-  '                restate one that has not changed.',
-  '  "notes"      array of short factual notes worth remembering{{BONDS_KEY}}{{THREADS_KEY}}',
+  '                restate one that has not changed.{{BONDS_KEY}}{{THREADS_KEY}}',
   '',
   'Rules:',
   '- Emit a key ONLY when the exchange actually establishes a new value for it.',
@@ -76,10 +76,12 @@ const SYSTEM = [
   '  "the user" and "someone" are not names, and they make the cast list useless.',
   '- A character cannot be both present and away. Leaving is one change: remove them',
   '  from "present" and add them to "away". Returning is the reverse.',
-  '- "inventory" is what someone is CARRYING, not what happens to be in the room.',
   '- "outfits" is what a character is WEARING, not what they own or what is in the room.',
   '  A character who changes clothes gets a new entry; one who does not is left alone.',
-  '- Arrays replace the previous array entirely when present.',
+  '- "conditions" and "outfits" MERGE with what is already recorded: an entry you do not',
+  '  mention is left exactly as it was, so never restate an unchanged one. To remove an',
+  '  entry, set it to null. To remove the whole field, set the field to null.',
+  '- "present" replaces the previous list entirely when present.',
   '- Reply with the JSON object only. No prose, no explanation, no markdown fence.',
 ].join('\n');
 
@@ -143,7 +145,7 @@ const BONDS_KEY = [
   '                by a pipe — to {"bond": -20..20, "sparks": 0..20, "grudge": 0..20}.',
   '                bond is trust and affection, sparks is attraction, grudge is resentment.',
   '                Include a pair only when the exchange changes it, and include only the',
-  '                value that changed.',
+  '                value that changed. A pair you do not mention keeps its recorded values.',
 ].join('\n');
 
 /** The `threads` key description, spliced in only when `craft.threads` is on. */
@@ -152,7 +154,9 @@ const THREADS_KEY = [
   '                something the scene raised and has not resolved: an unanswered question,',
   '                a promised meeting, an object that will matter. Add one when the',
   '                exchange raises it; set "paid" when it is resolved, "dropped" when it',
-  '                is abandoned. Keep the text short and factual.',
+  '                is abandoned. Keep the text short and factual. Threads merge by their',
+  '                text, so a thread you do not mention is kept — never restate one',
+  '                unchanged, and never repeat the list to keep it alive.',
 ].join('\n');
 
 /** The recording rule for the Rules block, per pace. */
