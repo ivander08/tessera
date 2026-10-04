@@ -1,7 +1,7 @@
 import { complete, parseJsonReply } from '../cheap';
 import { EMPTY_STATE, validatePatch } from '../../../src/lib/state/schema';
 import { parseStateTime } from './time';
-import { loadPathTail } from '../branch';
+import { loadPathTail, visiblePathCte } from '../branch';
 import type { WorldState } from '../../../src/lib/state/schema';
 import type { SceneSetup } from '../../../src/lib/scene/setup';
 import type { StatePoint } from '../turn';
@@ -536,27 +536,7 @@ export async function loadStateAt(
   if (beforeSeq === null) return await loadState(env, chatId);
 
   const row = await env.DB.prepare(
-    `WITH RECURSIVE path(id, seq, parent_id, state_json, depth) AS (
-       SELECT id, seq, parent_id, state_json, 0
-         FROM messages
-        WHERE chat_id = ?1
-          AND id = (
-            SELECT id FROM messages
-             WHERE chat_id = ?1 AND parent_id IS NULL AND active = 1 AND deleted = 0
-             ORDER BY seq DESC LIMIT 1
-          )
-       UNION ALL
-       SELECT m.id, m.seq, m.parent_id, m.state_json, path.depth + 1
-         FROM path
-         JOIN messages m ON m.parent_id = path.id
-        WHERE m.chat_id = ?1
-          AND m.active = 1
-          AND m.deleted = 0
-          AND m.seq = (
-            SELECT MAX(c.seq) FROM messages c
-             WHERE c.chat_id = ?1 AND c.parent_id = path.id AND c.active = 1 AND c.deleted = 0
-          )
-     )
+    `${visiblePathCte('path', 'id, seq, parent_id, state_json')}
      SELECT state_json FROM path
       WHERE state_json IS NOT NULL AND seq < ?2
       ORDER BY depth DESC

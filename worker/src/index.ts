@@ -389,14 +389,11 @@ async function listChats(env: Env): Promise<Response> {
        UNION ALL
        SELECT path.chat_id, m.seq, m.id, m.parent_id, m.content, path.depth + 1
          FROM path
-         JOIN messages m ON m.chat_id = path.chat_id AND m.parent_id = path.id
-        WHERE m.active = 1
-          AND m.deleted = 0
-          AND m.seq = (
-            SELECT MAX(c2.seq) FROM messages c2
-             WHERE c2.chat_id = path.chat_id AND c2.parent_id = path.id
-               AND c2.active = 1 AND c2.deleted = 0
-          )
+         JOIN messages m ON m.seq = (
+           SELECT MAX(c2.seq) FROM messages c2
+            WHERE c2.chat_id = path.chat_id AND c2.parent_id = path.id
+              AND c2.active = 1 AND c2.deleted = 0
+         )
      )
      SELECT c.id, c.title, c.updated_at, c.character_id,
             ch.name AS character_name, ch.avatar AS character_avatar,

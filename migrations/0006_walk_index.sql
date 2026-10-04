@@ -19,6 +19,13 @@
 -- `seq` stays last so the index also orders siblings, which is what a position needs when
 -- the reader swipes. The old index is dropped rather than kept: it is a strict prefix of
 -- this one, so it costs writes on every message and saves nothing.
+--
+-- This index alone does NOT make the step a point lookup: it is used by the correlated
+-- `MAX(seq)` subquery, which runs once per scanned row. The step only becomes a point
+-- lookup when the recursive term joins on `m.seq = (SELECT MAX(c.seq) …)` rather than on
+-- `m.parent_id = <cte>.id` with `active`/`deleted` in the WHERE — with the latter the
+-- planner drives from `messages` and satisfies `chat_id`/`active` from `idx_messages_active`,
+-- which is quadratic again. See `visiblePathCte` in `worker/src/branch.ts`.
 DROP INDEX IF EXISTS idx_messages_parent;
 
 CREATE INDEX IF NOT EXISTS idx_messages_child ON messages(chat_id, parent_id, active, seq);

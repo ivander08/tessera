@@ -76,6 +76,49 @@ export const BRANCH_COLUMNS = `seq, id, parent_id, role, content, content_tokens
                                cost_usd, speaker, state_json, deleted, created_at`;
 
 /**
+ * The single-chat walk down the visible path, as a `WITH RECURSIVE` prefix.
+ *
+ * The recursive step joins on `m.seq = (SELECT MAX(c.seq) …)`, NOT on
+ * `m.parent_id = <cte>.id` with `active`/`deleted` in the WHERE. The two are
+ * equivalent — the subquery already restricts to this chat, and to active,
+ * undeleted children — but only the first plans as a point lookup.
+ *
+ * Written the second way, the planner drives the step from `messages` and
+ * satisfies `chat_id`/`active` from `idx_messages_active`, so every recursion
+ * step scans every active row in the chat: O(n²) in conversation length. On a
+ * 161-message chat that read 20,435 rows for a 139-row path, and 2.1M rows in
+ * six hours in production. With the join below it reads 418. Measured both
+ * ways; see `branch.test.ts`.
+ *
+ * `columns` is the CTE's column list, exactly as the callers need it; `depth`
+ * is appended. `?1` is always the chat id.
+ */
+export function visiblePathCte(name: string, columns: string): string {
+  const qualified = columns
+    .split(',')
+    .map((column) => `m.${column.trim()}`)
+    .join(', ');
+  return `WITH RECURSIVE ${name}(${columns}, depth) AS (
+    SELECT ${columns}, 0
+      FROM messages
+     WHERE chat_id = ?1
+       AND id = (
+         SELECT id FROM messages
+          WHERE chat_id = ?1 AND parent_id IS NULL AND active = 1 AND deleted = 0
+          ORDER BY seq DESC LIMIT 1
+       )
+    UNION ALL
+    SELECT ${qualified}, ${name}.depth + 1
+      FROM ${name}
+      JOIN messages m ON m.seq = (
+        SELECT MAX(c.seq) FROM messages c
+         WHERE c.chat_id = ?1 AND c.parent_id = ${name}.id
+           AND c.active = 1 AND c.deleted = 0
+      )
+  )`;
+}
+
+/**
  * The visible transcript, walked in the database.
  *
  * Starts at the active root and repeatedly takes the newest active child. `depth` orders
@@ -85,29 +128,12 @@ export const BRANCH_COLUMNS = `seq, id, parent_id, role, content, content_tokens
  * The `MAX(seq)` child is chosen per step rather than joining every active child and
  * sorting afterwards: the invariant is one active child, and this makes the walk terminate
  * on a single row even if the data disagrees.
+ *
+ * The recursive step is the shared one in `visiblePathCte`; see there for why the join
+ * has to be written on `m.seq` rather than `m.parent_id`.
  */
 const WALK = `
-  WITH RECURSIVE path(${BRANCH_COLUMNS}, depth) AS (
-    SELECT ${BRANCH_COLUMNS}, 0
-      FROM messages
-     WHERE chat_id = ?1
-       AND id = (
-         SELECT id FROM messages
-          WHERE chat_id = ?1 AND parent_id IS NULL AND active = 1 AND deleted = 0
-          ORDER BY seq DESC LIMIT 1
-       )
-    UNION ALL
-    SELECT ${BRANCH_COLUMNS.split(',').map((column) => `m.${column.trim()}`).join(', ')}, path.depth + 1
-      FROM path
-      JOIN messages m ON m.parent_id = path.id
-     WHERE m.chat_id = ?1
-       AND m.active = 1
-       AND m.deleted = 0
-       AND m.seq = (
-         SELECT MAX(c.seq) FROM messages c
-          WHERE c.chat_id = ?1 AND c.parent_id = path.id AND c.active = 1 AND c.deleted = 0
-       )
-  )
+  ${visiblePathCte('path', BRANCH_COLUMNS)}
   SELECT ${BRANCH_COLUMNS} FROM path ORDER BY depth
 `;
 
@@ -171,27 +197,7 @@ export async function loadPathTail(
  * different query, and the callers that inspect statements need to tell them apart.
  */
 const TAIL = `
-  WITH RECURSIVE tail_path(${BRANCH_COLUMNS}, depth) AS (
-    SELECT ${BRANCH_COLUMNS}, 0
-      FROM messages
-     WHERE chat_id = ?1
-       AND id = (
-         SELECT id FROM messages
-          WHERE chat_id = ?1 AND parent_id IS NULL AND active = 1 AND deleted = 0
-          ORDER BY seq DESC LIMIT 1
-       )
-    UNION ALL
-    SELECT ${BRANCH_COLUMNS.split(',').map((column) => `m.${column.trim()}`).join(', ')}, tail_path.depth + 1
-      FROM tail_path
-      JOIN messages m ON m.parent_id = tail_path.id
-     WHERE m.chat_id = ?1
-       AND m.active = 1
-       AND m.deleted = 0
-       AND m.seq = (
-         SELECT MAX(c.seq) FROM messages c
-          WHERE c.chat_id = ?1 AND c.parent_id = tail_path.id AND c.active = 1 AND c.deleted = 0
-       )
-  )
+  ${visiblePathCte('tail_path', BRANCH_COLUMNS)}
   SELECT ${BRANCH_COLUMNS} FROM (
     SELECT ${BRANCH_COLUMNS}, depth FROM tail_path
      WHERE (?2 IS NULL OR depth < (SELECT depth FROM tail_path p2 WHERE p2.id = ?2))
@@ -333,53 +339,11 @@ export async function pathSeqsAfter(
  * through a recursive CTE to answer a yes/no question would cost the read it is meant to
  * save.
  */
-export const VISIBLE_PATH_SEQ_CTE = `
-  WITH RECURSIVE path(seq, id, depth) AS (
-    SELECT seq, id, 0
-      FROM messages
-     WHERE chat_id = ?1
-       AND id = (
-         SELECT id FROM messages
-          WHERE chat_id = ?1 AND parent_id IS NULL AND active = 1 AND deleted = 0
-          ORDER BY seq DESC LIMIT 1
-       )
-    UNION ALL
-    SELECT m.seq, m.id, path.depth + 1
-      FROM path
-      JOIN messages m ON m.parent_id = path.id
-     WHERE m.chat_id = ?1
-       AND m.active = 1
-       AND m.deleted = 0
-       AND m.seq = (
-         SELECT MAX(c.seq) FROM messages c
-          WHERE c.chat_id = ?1 AND c.parent_id = path.id AND c.active = 1 AND c.deleted = 0
-       )
-  )
-`;
+export const VISIBLE_PATH_SEQ_CTE = visiblePathCte('path', 'seq, id');
 
 /** The same walk as `WALK`, narrowed to the seqs a summary still needs to cover. */
 const PATH_SEQS_AFTER = `
-  WITH RECURSIVE path(seq, id, depth) AS (
-    SELECT seq, id, 0
-      FROM messages
-     WHERE chat_id = ?1
-       AND id = (
-         SELECT id FROM messages
-          WHERE chat_id = ?1 AND parent_id IS NULL AND active = 1 AND deleted = 0
-          ORDER BY seq DESC LIMIT 1
-       )
-    UNION ALL
-    SELECT m.seq, m.id, path.depth + 1
-      FROM path
-      JOIN messages m ON m.parent_id = path.id
-     WHERE m.chat_id = ?1
-       AND m.active = 1
-       AND m.deleted = 0
-       AND m.seq = (
-         SELECT MAX(c.seq) FROM messages c
-          WHERE c.chat_id = ?1 AND c.parent_id = path.id AND c.active = 1 AND c.deleted = 0
-       )
-  )
+  ${visiblePathCte('path', 'seq, id')}
   SELECT seq FROM path WHERE seq > ?2 ORDER BY depth LIMIT ?3
 `;
 

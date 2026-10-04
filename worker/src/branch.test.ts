@@ -2,11 +2,13 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { readFileSync } from 'node:fs';
 import {
+  BRANCH_COLUMNS,
   loadAlternatives,
   loadPath,
   loadPathTail,
   pathSeqsAfter,
   tailId,
+  visiblePathCte,
   walkPath,
   type BranchRow,
 } from './branch';
@@ -660,6 +662,29 @@ describe('the walk as SQL', () => {
       expect(newest.map((row) => row.id)).toEqual(['hello', 'reply1']);
       const older = await loadPathTail(env, chatId, 2, newest[0].id);
       expect(older.map((row) => row.id)).toEqual(['opening']);
+    });
+  });
+
+  describe('the walk is a point lookup, not a scan of the chat', () => {
+    test('every column shape plans the recursive step by rowid', () => {
+      const { db } = makeDb();
+      const chatId = seedChat(db);
+      seed(db, chatId, 'm0', null);
+      for (let index = 1; index < 200; index += 1) {
+        seed(db, chatId, `m${index}`, `m${index - 1}`);
+      }
+
+      for (const columns of ['seq, id', BRANCH_COLUMNS, 'seq, id, role, content']) {
+        const sql = `${visiblePathCte('path', columns)} SELECT count(*) FROM path`;
+        const plan = (db.query(`EXPLAIN QUERY PLAN ${sql}`).all() as Array<{ detail: string }>)
+          .map((row) => row.detail)
+          .join('\n');
+        // The defect: the recursive step was driven from idx_messages_active, so every step
+        // scanned every active row in the chat. 20,435 rows read on a 139-row path in
+        // production, and 2.1M in six hours.
+        expect(plan).not.toContain('idx_messages_active');
+        expect(plan).toContain('INTEGER PRIMARY KEY');
+      }
     });
   });
 });
