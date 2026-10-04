@@ -145,6 +145,14 @@ export default function Chat() {
   const reduced = useReducedMotion();
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // True from `run` entry to its `finally`. A ref rather than `busy`: `busy` drops the
+  // instant an abort resolves, but the transcript has not reconciled yet — this closes
+  // that window to a second `run`.
+  const turnActive = useRef(false);
+  // True from the moment Stop is pressed until the stop→refetch settle finishes (overlay
+  // cleared by the refetch, or the 1500 ms fallback). Holds the composer button as Stop so
+  // clicks racing the settle cannot become a `continue` at a stale tail.
+  const [stopping, setStopping] = useState(false);
   // Whether the reader is at the live end of the transcript. Only then does new text
   // pull the view down; someone who scrolled back to reread a paragraph must not be
   // yanked forward by every token.
@@ -344,7 +352,10 @@ export default function Chat() {
   }, [pending, messages]);
 
   useEffect(() => {
-    if (pending?.settling && overlayStored) setPending(null);
+    if (pending?.settling && overlayStored) {
+      setPending(null);
+      setStopping(false);
+    }
   }, [pending?.settling, overlayStored]);
 
   // While settling, the stored copy and the overlay can both be true for one frame
@@ -527,6 +538,13 @@ export default function Chat() {
 
   const run = useCallback(
     async (mode: TurnMode, content: string, targetId: string | null, sent?: string) => {
+      // One turn at a time. `busy` also flips false the instant an abort resolves, while
+      // the stop→refetch gap is still reconciling — a second click in that window would
+      // otherwise start a new turn whose `targetId` (and whose idea of the tail) predates
+      // the refetch. The ref guard is immune to that stale frame.
+      if (turnActive.current) return;
+      turnActive.current = true;
+      setStopping(false);
       setBusy(true);
       setSendError(null);
       // A fresh turn supersedes the last reply's marker: it belongs to that reply, and the
@@ -578,6 +596,10 @@ export default function Chat() {
         }
       } finally {
         abortRef.current = null;
+        // Released before the settle timeout: a turn is over the moment its outcome is
+        // decided. The guard exists only to stop overlapping starts, not to gate the
+        // refetch, which `reload()` runs regardless.
+        turnActive.current = false;
         setBusy(false);
 
         // Three outcomes, and the reader's own line survives all of them: the server wrote
@@ -590,20 +612,20 @@ export default function Chat() {
           // gap; emptying `text` makes the assistant overlay yield while `sent` renders on.
           setPending((current) => (current ? { ...current, text: '', settling: true } : null));
           reload();
-          window.setTimeout(
-            () => setPending((current) => (current?.settling ? null : current)),
-            1500,
-          );
+          window.setTimeout(() => {
+            setStopping(false);
+            setPending((current) => (current?.settling ? null : current));
+          }, 1500);
         } else if (failed) {
           // A failure that produced no reply. The reader's row was still committed up
           // front, so refetch rather than blank the overlay — the same rule as Stop. No
           // cast reload: a failed turn introduced no speaker.
           setPending((current) => (current ? { ...current, settling: true } : null));
           reload();
-          window.setTimeout(
-            () => setPending((current) => (current?.settling ? null : current)),
-            1500,
-          );
+          window.setTimeout(() => {
+            setStopping(false);
+            setPending((current) => (current?.settling ? null : current));
+          }, 1500);
         } else {
           // Held, not cleared: the refetch below replaces the transcript with the stored
           // version, and clearing first would flash the pre-turn text back on screen.
@@ -617,10 +639,10 @@ export default function Chat() {
           castReload.current();
           // A refetch that returns the same transcript never trips the settle check, so the
           // overlay would stay up forever. The timeout is the guarantee that it comes down.
-          window.setTimeout(
-            () => setPending((current) => (current?.settling ? null : current)),
-            1500,
-          );
+          window.setTimeout(() => {
+            setStopping(false);
+            setPending((current) => (current?.settling ? null : current));
+          }, 1500);
         }
       }
     },
@@ -810,6 +832,11 @@ export default function Chat() {
     // Only the abort, so `run`'s `finally` owns every state transition. Clearing `pending`
     // here is what removed the reader's line before the server's own copy — written before
     // streaming began — had been refetched.
+    //
+    // `stopping` holds the composer through the settle: the abort resolves in milliseconds,
+    // but the transcript is stale until the refetch lands, and a click in that gap used to
+    // land on a freshly-mounted Continue button and fire a `continue` at the old tail.
+    setStopping(true);
     abortRef.current?.abort();
   }
 
@@ -1224,15 +1251,37 @@ export default function Chat() {
             aria-label="Message"
           />
 
-          {busy ? (
-            <button type="button" className="btn" onClick={stop}>
-              Stop
-            </button>
-          ) : (
-            <button type="submit" className="btn primary" disabled={busy}>
-              {draft.trim().length === 0 && lastAssistant ? 'Continue' : 'Send'}
-            </button>
-          )}
+          {/*
+              One button, two jobs: Stop while a turn streams, Send/Continue when idle.
+              It must stay the SAME element: mounting a `type="submit"` button the instant
+              `busy` drops put a submit button under a cursor that was pressing Stop — a
+              second click of a fast double-click submitted the empty composer, which fired
+              a `continue` at a transcript tail that had not reconciled yet.
+
+              "Stopping" extends past `busy`: the abort resolves immediately, but the
+              transcript stays unsettled until the refetch lands and the overlay comes
+              down. A click in that window is still a Stop click — the reader has not yet
+              seen their line settle — so the label holds and the click is absorbed.
+          */}
+          <button
+            type="button"
+            className={busy || stopping ? 'btn' : 'btn primary'}
+            onClick={() => {
+              if (busy || stopping) {
+                // Absorb extra clicks: aborting again is harmless, but falling through
+                // to `send` here re-fires the stale-tail `continue`.
+                stop();
+                return;
+              }
+              send();
+            }}
+          >
+            {busy || stopping
+              ? 'Stop'
+              : draft.trim().length === 0 && lastAssistant
+                ? 'Continue'
+                : 'Send'}
+          </button>
         </div>
       </form>
 

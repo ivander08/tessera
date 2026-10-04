@@ -235,13 +235,25 @@ export async function streamChat(
     throw new Error(`${res.status}: ${text.slice(0, 300)}`);
   }
 
-  for await (const event of parseSse(res.body)) {
-    let frame: ChatFrame;
-    try {
-      frame = JSON.parse(event.data) as ChatFrame;
-    } catch {
-      continue;
+  // The abort must reach the WIRE, not just the loop. Abandoning the generator leaves the
+  // body's reader alive — the connection stays half-open, and the Worker never sees its own
+  // `req.signal` fire. A stopped turn then keeps generating upstream and, if the reply
+  // completes before the provider notices, persists a reply the reader had already
+  // withdrawn: seventeen siblings under one user row, measured.
+  try {
+    for await (const event of parseSse(res.body)) {
+      let frame: ChatFrame;
+      try {
+        frame = JSON.parse(event.data) as ChatFrame;
+      } catch {
+        continue;
+      }
+      onFrame(frame);
     }
-    onFrame(frame);
+  } catch (cause) {
+    // Reader.cancel is what tears down the socket; a plain throw out of the iteration
+    // leaves it intact. Without this, Stop only stops the CLIENT.
+    if (options.signal?.aborted) await res.body.cancel().catch(() => {});
+    throw cause;
   }
 }
