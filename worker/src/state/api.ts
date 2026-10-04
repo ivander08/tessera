@@ -1,6 +1,6 @@
 import { badRequest, json, notFound, readJson } from '../http';
 import { validatePatch, type WorldState } from '../../../src/lib/state/schema';
-import { loadState } from './update';
+import { loadStateForViewer, stateAnchor } from './update';
 import { renderStateBlock } from '../../../src/lib/prompt/stateBlock';
 import { estimateTokens } from '../../../src/lib/tokenEstimate';
 import { loadSceneSetup } from '../scene';
@@ -19,7 +19,12 @@ import { loadSceneSetup } from '../scene';
  */
 
 export async function getState(env: Env, chatId: string): Promise<Response> {
-  const state = await loadState(env, chatId);
+  // The document the next turn will actually read: the visible path's newest snapshot, not
+  // the live row. The two disagree after a swipe, and showing the live row here while the
+  // transcript's scene line shows the path is what made a hand-corrected clock look
+  // unpersisted — the panel was editing one document and the transcript was displaying
+  // another.
+  const state = await loadStateForViewer(env, chatId);
   // The same setup the prompt builder reads, so the panel shows exactly what the model
   // sees — including which optional sections the craft toggles turn off.
   const setup = await loadSceneSetup(env, chatId);
@@ -60,22 +65,24 @@ export async function patchState(env: Env, req: Request): Promise<Response> {
     .first<{ id: string }>();
   if (!chat) return notFound('chat not found');
 
-  const current = await loadState(env, body.chatId);
+  // The edit merges over what the next turn will read, not over the live row: the live row
+  // is overwritten every turn and after a swipe can describe a version that has left the
+  // screen. Merging over it resurrected values from that version.
+  const current = await loadStateForViewer(env, body.chatId);
   const result = validatePatch(current, body.patch);
   if (!result.ok) return badRequest(result.reason);
 
-  // The corrected document must also land ON the visible path, at the tail. Every turn
-  // reads the path at its anchor, so a correction that lived only in the live row would be
-  // overwritten by the next turn — which would read the path, see the value the reader had
-  // just corrected, and re-derive the wrong world from it. Reported as "I fix the clock in
-  // the panel and the next reply moves it back".
-  const tail = await env.DB.prepare(
-    `SELECT seq FROM messages
-      WHERE chat_id = ?1 AND active = 1 AND deleted = 0
-      ORDER BY seq DESC LIMIT 1`,
-  )
-    .bind(body.chatId)
-    .first<{ seq: number }>();
+  // The corrected document must also land ON the visible path, on the newest scene line.
+  // Every turn reads the path at its anchor, so a correction that lived only in the live
+  // row would be overwritten by the next turn — which would read the path, see the value
+  // the reader had just corrected, and re-derive the wrong world from it. Reported as "I
+  // fix the clock in the panel and the next reply moves it back".
+  //
+  // The anchor is the newest assistant row rather than the tail: the scene line is drawn
+  // on replies, and between a send and its reply the tail is the reader's own row, which
+  // shows no line. The state the next turn reads is identical either way — a send reads the
+  // tail inclusive, so it inherits this snapshot.
+  const anchor = await stateAnchor(env, body.chatId);
 
   const statements = [
     env.DB.prepare(
@@ -83,10 +90,10 @@ export async function patchState(env: Env, req: Request): Promise<Response> {
        ON CONFLICT(chat_id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at`,
     ).bind(body.chatId, JSON.stringify(result.next), Date.now()),
   ];
-  if (tail) {
+  if (anchor) {
     statements.push(
-      env.DB.prepare('UPDATE messages SET state_json = ? WHERE chat_id = ? AND seq = ?')
-        .bind(JSON.stringify(result.next), body.chatId, tail.seq),
+      env.DB.prepare('UPDATE messages SET state_json = ? WHERE chat_id = ? AND id = ?')
+        .bind(JSON.stringify(result.next), body.chatId, anchor.id),
     );
   }
   await env.DB.batch(statements);
@@ -102,12 +109,15 @@ export async function clearState(env: Env, chatId: string): Promise<Response> {
   if (!chat) return notFound('chat not found');
 
   const empty: WorldState = {};
-  await env.DB.prepare(
-    `INSERT INTO state (chat_id, json, updated_at) VALUES (?, ?, ?)
-     ON CONFLICT(chat_id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at`,
-  )
-    .bind(chatId, JSON.stringify(empty), Date.now())
-    .run();
+  // The path snapshot goes with the live row, or the scene line would keep showing the
+  // document the reader just cleared while the panel showed nothing.
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO state (chat_id, json, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(chat_id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at`,
+    ).bind(chatId, JSON.stringify(empty), Date.now()),
+    env.DB.prepare('UPDATE messages SET state_json = NULL WHERE chat_id = ?').bind(chatId),
+  ]);
 
   return json({ ok: true, state: empty });
 }

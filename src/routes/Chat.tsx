@@ -164,6 +164,17 @@ export default function Chat() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
 
+  // A hand edit from the world-state panel, applied to the transcript before the refetch
+  // lands. The panel has already persisted it, so the refetch agrees; this is what makes the
+  // scene line and the bar move the instant Save is pressed rather than one round trip
+  // later. Cleared when the transcript changes, because the stored rows then carry it.
+  const [sceneOverride, setSceneOverride] = useState<{ id: string; state: WorldState } | null>(
+    null,
+  );
+  useEffect(() => {
+    setSceneOverride(null);
+  }, [data]);
+
   // Seeded from every transcript the server returns, and `older` is dropped with it.
   // Keyed on `data` because that is what changes on a reload: keeping the pages across a
   // refetch would splice turns the server has since re-windowed — after a turn the newest
@@ -227,12 +238,16 @@ export default function Chat() {
   const stateAt = useMemo(() => {
     const out = new Map<string, WorldState | null>();
     let current: WorldState | null = null;
+    let overriding = false;
     for (const message of path) {
       if (message.state) current = message.state;
-      out.set(message.id, current);
+      // The override lands on the row the panel wrote to and inherits forward from there,
+      // exactly as a stored snapshot on that row would.
+      if (sceneOverride && message.id === sceneOverride.id) overriding = true;
+      out.set(message.id, overriding && sceneOverride ? sceneOverride.state : current);
     }
     return out;
-  }, [path]);
+  }, [path, sceneOverride]);
 
   /**
    * Brings a message into the transcript and scrolls to it.
@@ -351,15 +366,11 @@ export default function Chat() {
    */
   const replaceTarget = overlay?.mode === 'regenerate' ? overlay.targetId : null;
 
-  // The scene chip in the bar. Fetched separately from the transcript so a slow state
-  // read never delays the conversation, and reloaded with it so a corrected value shows
-  // up as soon as the turn lands.
-  const state = useAsync(
-    () => apiJson<{ state: WorldState }>(`/api/state/${encodeURIComponent(id)}`),
-    [id],
-  );
-  const stateReload = useRef(state.reload);
-  stateReload.current = state.reload;
+  // The scene strip in the bar is derived from the transcript — the state in force at the
+  // bottom of the visible path — rather than fetched separately. It must agree with the
+  // scene line under the newest reply and with what the panel edits, and the transcript is
+  // the one place all three already read. A separate fetch was a second source of truth
+  // that a swipe or a hand edit moved out of step with the first.
 
   // Who is in the scene. Reloaded with the transcript, because a reply can introduce a
   // speaker and the new name has to render on the turn that introduced them.
@@ -579,12 +590,12 @@ export default function Chat() {
           // Held, not cleared: the refetch below replaces the transcript with the stored
           // version, and clearing first would flash the pre-turn text back on screen.
           setPending((current) => (current ? { ...current, settling: true } : null));
+          // One refetch brings back both the prose and the state engine's snapshot onto the
+          // new reply, so the scene strip and the newest scene line move together. A
+          // separate state fetch used to lag behind here, which is how the panel and the
+          // inline line came to disagree ("22:02 inline, 22:23 in the panel").
           reload();
-          // The state engine runs after a completed turn, so the scene bar is stale the
-          // moment the reply lands. Held in a ref because the callback identity changes
-          // every render and putting it in the deps would rebuild `run` continuously.
-          stateReload.current();
-          // Same reason: the reply may have introduced a speaker, so the cast is stale too.
+          // The reply may have introduced a speaker, so the cast is stale too.
           castReload.current();
           // A refetch that returns the same transcript never trips the settle check, so the
           // overlay would stay up forever. The timeout is the guarantee that it comes down.
@@ -817,6 +828,19 @@ export default function Chat() {
   // would append a paragraph to a version that is off screen.
   const tailMessage = path[path.length - 1];
 
+  // The scene as of the bottom of the visible path — the same value the newest scene line
+  // renders and the same document the next turn reads. Undefined on an empty chat.
+  const sceneNow = tailMessage ? (stateAt.get(tailMessage.id) ?? undefined) : undefined;
+
+  // A hand edit is persisted by the panel before this runs; the override makes the bar and
+  // the newest scene line move immediately, and the refetch below replaces it with the same
+  // stored value.
+  function onStateSaved(next: WorldState): void {
+    const anchor = [...path].reverse().find((message) => message.role === 'assistant') ?? tailMessage;
+    if (anchor) setSceneOverride({ id: anchor.id, state: next });
+    reload();
+  }
+
 
   return (
     <>
@@ -871,7 +895,7 @@ export default function Chat() {
       {/* The scene, always visible. This is the one fact about a roleplay scene you want
           while reading rather than by opening something — it is what tells you the
           narrator has drifted. Replaces the chip that only said "Set the scene". */}
-      <SceneBar state={state.data?.state} onOpen={() => setPanel('state')} />
+      <SceneBar state={sceneNow} onOpen={() => setPanel('state')} />
 
       <div className="transcript">
         {hasMore && (
@@ -1086,7 +1110,7 @@ export default function Chat() {
           }
           onClose={() => setPanel(null)}
         >
-          {panel === 'state' && <StatePanel embedded />}
+          {panel === 'state' && <StatePanel embedded onSaved={onStateSaved} />}
           {panel === 'cast' && <CastPanel chatId={id} onChanged={castReload.current} />}
           {panel === 'craft' && <CraftPanel chatId={id} />}
           {panel === 'memory' && <MemoryPanel embedded />}

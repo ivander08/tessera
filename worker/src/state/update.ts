@@ -1,5 +1,7 @@
 import { complete, parseJsonReply } from '../cheap';
 import { EMPTY_STATE, validatePatch } from '../../../src/lib/state/schema';
+import { parseStateTime } from './time';
+import { loadPathTail } from '../branch';
 import type { WorldState } from '../../../src/lib/state/schema';
 import type { SceneSetup } from '../../../src/lib/scene/setup';
 import type { StatePoint } from '../turn';
@@ -39,8 +41,16 @@ const SYSTEM = [
   '{{TIME_KEY}}',
   '  "location"   string  — where the scene is, as specifically as the exchange says:',
   '                "Sydney, on the coast" or "the scriptorium, sitting on the bed" is',
-  '                better than "indoors". Name the city or region when it is known.',
-  '  "weather"    string  — current weather, only when the exchange establishes it',
+  '                better than "indoors". Name the city or region when it is known. Never',
+  '                replace a specific stored location with a vaguer one — "gym" is a',
+  '                regression from "campus gymnasium bleachers, Universitas Tarumanagara".',
+  '                When the scene moves, name the new place at the same specificity.',
+  '  "weather"    string  — the sky and the air: temperature, wind, cloud, rain, humidity.',
+  '                Never smells, sounds, traffic or a market stall — those belong to the',
+  '                location, not the weather, and a smell recorded here is carried for the',
+  '                rest of the scene. When the scene changes place or moves to another day',
+  '                or night, restate "weather" if it would plausibly differ (indoors vs',
+  '                outdoors, midnight vs noon); otherwise leave it alone.',
   '  "present"    array of character NAMES currently in the scene',
   '  "away"       object mapping a character name -> where they are instead, for',
   '                anyone who has left the scene. Use this when someone departs:',
@@ -102,9 +112,17 @@ const TIME_KEY: Record<SceneSetup['timePace'], string> = {
     '                    stated skip — goes to 10-20 minutes, and a night\'s sleep is the next',
     '                    morning. Without a stated time, never add more than 5 minutes.',
     '                ALWAYS write it in exactly this format: "Weekday, Month D, YYYY, HH:MM"',
-    '                with a 24-hour clock — e.g. "Friday, April 11, 2025, 22:12". Never',
-    '                shorten it, never drop the year or the weekday, never use am/pm.',
-    '                Do not invent a fantasy calendar.',
+  '                with a 24-hour clock — e.g. "Friday, April 11, 2025, 22:12". Never',
+  '                shorten it, never drop the year or the weekday, never use am/pm.',
+  '                Do not invent a fantasy calendar.',
+  '                The clock NEVER moves backwards. A weekday, date or time of day the',
+  '                reader names that would land before the stored reading means its NEXT',
+  '                occurrence: from a stored "Friday, April 11, 2025, 22:38", a reader who',
+  '                says "On Thursday evening" means Thursday, April 17, 2025 — the coming',
+  '                Thursday, never the one that has already passed. Same for "tomorrow",',
+  '                "next week" and "the next morning": always forward from the stored',
+  '                reading. If the reader truly wants an earlier moment, they will set the',
+  '                clock by hand; never write one.',
   ].join('\n'),
   manual: [
     '  "time"       string  — the reader maintains this clock. Include the key ONLY when the',
@@ -165,7 +183,8 @@ const EXPLICIT_TIME_RULE: Record<SceneSetup['timePace'], string> = {
   auto: [
     "Regardless of the rule above: if the READER's own message states a clock time or a date",
     '("at eight o\'clock", "the next morning"), that stated time is the truth. Work it into',
-    '"time" as the new clock reading rather than adding to it.',
+    '"time" as the new clock reading rather than adding to it. It still never lands before',
+    'the stored reading: a weekday that has already passed this week means the coming one.',
   ].join('\n'),
   manual: [
     "Regardless of the rule above: if the READER's own message states a clock time or a date",
@@ -251,11 +270,39 @@ export async function updateState(
     const result = validatePatch(current, patch);
     if (!result.ok) return { applied: false, reason: result.reason };
 
+    // The clock never runs backwards. The prompt says so, but a model doing weekday
+    // arithmetic cannot be trusted to follow it — measured on the reported chat: from a
+    // stored "Friday, April 11, 2025, 22:38" the reader's "On Thursday evening" was
+    // recorded as Thursday, April 10, a day in the past. So the rule is enforced here,
+    // where it cannot be talked out of it, and only under the managed pace: `manual` means
+    // the reader owns the clock and may legitimately state an earlier moment, and a
+    // hand-edited document goes through `patchState`, never through this function.
+    //
+    // Only the time key is dropped; the rest of the patch still applies, because one bad
+    // field must not cost the exchange's real changes. A clock that will not parse (free
+    // text under `manual`, or an older document) cannot be compared, so the guard stands
+    // aside rather than rejecting a legitimate normalisation.
+    let next = result.next;
+    if (setup.timePace === 'auto' && next.time !== undefined && current.time !== undefined) {
+      const stored = parseStateTime(current.time);
+      const proposed = parseStateTime(next.time);
+      if (stored !== null && proposed !== null && proposed < stored) {
+        console.warn(
+          `[state] dropped a clock that moved backwards for chat=${chatId}: ` +
+            `"${current.time}" -> "${next.time}"`,
+        );
+        const withoutTime = { ...(patch as Record<string, unknown>) };
+        delete withoutTime.time;
+        const retried = validatePatch(current, withoutTime);
+        if (retried.ok) next = retried.next;
+      }
+    }
+
     await env.DB.prepare(
       `INSERT INTO state (chat_id, json, updated_at) VALUES (?, ?, ?)
        ON CONFLICT(chat_id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at`,
     )
-      .bind(chatId, JSON.stringify(result.next), Date.now())
+      .bind(chatId, JSON.stringify(next), Date.now())
       .run();
 
     // Snapshot onto the turn this state describes, so "where was I when this happened" is
@@ -265,7 +312,7 @@ export async function updateState(
     // null is the honest answer for "this state belongs to no turn".
     if (messageId) {
       await env.DB.prepare('UPDATE messages SET state_json = ? WHERE id = ?')
-        .bind(JSON.stringify(result.next), messageId)
+        .bind(JSON.stringify(next), messageId)
         .run();
     }
 
@@ -389,6 +436,43 @@ export async function loadStateForTurn(
 ): Promise<WorldState> {
   if (point.seq === null) return await loadState(env, chatId);
   return await loadStateAt(env, chatId, point.inclusive ? point.seq + 1 : point.seq);
+}
+
+/**
+ * The state as of the end of the visible path — the same document the next turn will read,
+ * which is what the viewer and a hand edit must operate on.
+ *
+ * The live row is a convenience copy, not the truth: every turn writes the path and reads
+ * the path, so after a swipe the live document can describe a version that is no longer on
+ * screen. Showing the reader the live row while the transcript's scene line shows the path
+ * is exactly the disagreement that made a corrected clock look unpersisted.
+ *
+ * Falls back to the live row only when the path records no snapshot at all — a chat whose
+ * rows predate snapshots, or whose newest snapshot was deleted. An empty document is the
+ * honest answer only when nothing anywhere records one.
+ */
+export async function loadStateForViewer(env: Env, chatId: string): Promise<WorldState> {
+  const [tail] = await loadPathTail(env, chatId, 1);
+  if (!tail) return await loadState(env, chatId);
+  const state = await loadStateAt(env, chatId, tail.seq + 1);
+  return Object.keys(state).length > 0 ? state : await loadState(env, chatId);
+}
+
+/**
+ * The row a hand edit is written onto: the newest scene line on the visible path.
+ *
+ * The scene line is drawn on the character's replies, so the correction belongs on the
+ * newest assistant row — not on the tail, which is the reader's own row between a send and
+ * its reply, and not on whatever row happens to hold the highest `seq`, which can be a row
+ * of a branch that was swiped away and is no longer on the path at all.
+ */
+export async function stateAnchor(env: Env, chatId: string): Promise<{ id: string } | null> {
+  // The walk is recursive over the whole path regardless of the limit, so a wide window
+  // costs no more than a narrow one and covers a run of reader rows (impersonation).
+  const rows = await loadPathTail(env, chatId, 400);
+  const newestFirst = [...rows].reverse();
+  const anchor = newestFirst.find((row) => row.role === 'assistant') ?? rows[rows.length - 1];
+  return anchor ? { id: anchor.id } : null;
 }
 
 /**

@@ -1,6 +1,6 @@
 import { getChat, getCharacter, getPersona } from './db';
 import { loadCast } from './cast';
-import { loadState } from './state/update';
+import { loadStateForViewer } from './state/update';
 import { loadPathTail, type BranchRow } from './branch';
 import { loadSceneSetup } from './scene';
 import { recall } from './memory/recall';
@@ -133,7 +133,10 @@ export async function chatConsultContext(
     chat.persona_id ? getPersona(env, chat.persona_id) : Promise.resolve(null),
     loadCast(env, chatId),
     loadSceneSetup(env, chatId),
-    loadState(env, chatId),
+    // The state as of the end of the visible path — what the narrator will be told next
+    // turn. The live row is overwritten every turn and after a swipe can describe a version
+    // that has left the screen, which would make the advice about a scene that is not there.
+    loadStateForViewer(env, chatId),
     loadPathTail(env, chatId, TRANSCRIPT_ROWS),
   ]);
 

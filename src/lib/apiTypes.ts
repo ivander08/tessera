@@ -52,8 +52,9 @@ export interface MessageRow {
   /**
    * The world state as of this turn, when one was recorded.
    *
-   * Null or absent for most rows: state only advances on a completed `send`, and only
-   * when something actually changed. A row without a snapshot inherits the most recent
+   * Null or absent for most rows: state advances on any completed turn that writes the
+   * character's prose — a send, a regenerate, a recovery continue — and only when the
+   * exchange actually changed something. A row without a snapshot inherits the most recent
    * one at or before it, which is what was true at the time.
    */
   state?: WorldState | null;

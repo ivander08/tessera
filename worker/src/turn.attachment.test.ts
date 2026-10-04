@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { resolveAttachment } from './turn';
+import { resolveAttachment, stateAdvancesOn } from './turn';
 
 /**
  * Where a turn's rows attach.
@@ -75,5 +75,34 @@ describe('resolveAttachment', () => {
   test('an empty chat resolves to the root for every mode that can reach it', () => {
     expect(resolveAttachment('send', null, null).parentId).toBeNull();
     expect(resolveAttachment('impersonate', null, null).parentId).toBeNull();
+  });
+});
+
+/**
+ * Which completed turns move the world state.
+ *
+ * The reported bug: a regenerated reply carried no snapshot, so its scene line showed the
+ * PREVIOUS turn's clock. On the chat under test the reader wrote "On Thursday evening" and
+ * one of the swipe variants still read "Friday, April 11, 22:38" — the version had replaced
+ * the scene, but the state had not moved with it.
+ */
+describe('stateAdvancesOn', () => {
+  test('a send and a recovery continue are the turns that complete', () => {
+    expect(stateAdvancesOn('send', false)).toBe(true);
+    expect(stateAdvancesOn('continue', true)).toBe(true);
+  });
+
+  test('a regenerate is a completed turn and advances state with it', () => {
+    expect(stateAdvancesOn('regenerate', false)).toBe(true);
+  });
+
+  test('a plain continue extends the same reply and does not re-run the engine', () => {
+    // The scene has not moved on; the new row inherits the target's snapshot.
+    expect(stateAdvancesOn('continue', false)).toBe(false);
+  });
+
+  test('impersonate writes the reader line and does not advance state', () => {
+    // Nothing in the world has happened yet; the reply to it is the turn that moves.
+    expect(stateAdvancesOn('impersonate', false)).toBe(false);
   });
 });

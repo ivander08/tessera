@@ -99,7 +99,18 @@ const ALL_FIELDS: Field[] = GROUPS.flatMap((group) => group.fields);
  * Edits are sent as a patch, so clearing a field and leaving it alone are distinct
  * operations rather than the same one.
  */
-export default function State({ embedded = false }: { embedded?: boolean } = {}) {
+export default function State({
+  embedded = false,
+  onSaved,
+}: {
+  embedded?: boolean;
+  /**
+   * Called with the stored document after a successful save or clear. The host uses it to
+   * move the scene bar and the newest scene line at once, instead of leaving them on the
+   * old value until the next turn's refetch.
+   */
+  onSaved?: (state: WorldState) => void;
+} = {}) {
   const { id = '' } = useParams();
   const { data, error, loading, reload } = useAsync(
     () => apiJson<StatePayload>(`/api/state/${encodeURIComponent(id)}`),
@@ -196,13 +207,17 @@ export default function State({ embedded = false }: { embedded?: boolean } = {})
     }
 
     try {
-      await apiJson(`/api/state/${encodeURIComponent(id)}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ chatId: id, patch }),
-      });
+      const saved = await apiJson<{ ok: boolean; state: WorldState }>(
+        `/api/state/${encodeURIComponent(id)}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ chatId: id, patch }),
+        },
+      );
       setEdits({});
       setStructured({});
       toast.success('World state saved. The next turn will use it.');
+      onSaved?.(saved.state);
       reload();
     } catch (cause) {
       toast.failure(messageOf(cause));
@@ -215,10 +230,14 @@ export default function State({ embedded = false }: { embedded?: boolean } = {})
     setBusy(true);
     setStatus(null);
     try {
-      await apiJson(`/api/state/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const cleared = await apiJson<{ ok: boolean; state: WorldState }>(
+        `/api/state/${encodeURIComponent(id)}`,
+        { method: 'DELETE' },
+      );
       setEdits({});
       setStructured({});
       toast.success('World state cleared.');
+      onSaved?.(cleared.state);
       reload();
     } catch (cause) {
       toast.failure(messageOf(cause));

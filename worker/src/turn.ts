@@ -318,12 +318,15 @@ async function runTurn(
       .first<{ seq: number }>();
     const replySeq = replyRow?.seq ?? 0;
 
-    // State advances only on a completed turn. Regenerating or continuing rewrites what
-    // the scene says, so folding it into state would record a draft as canon.
+    // State advances on any completed turn that writes the character's prose, including a
+    // regenerate. The reply that was just written IS the scene now — the version it
+    // replaced became a swipe alternative — and a version that carries no snapshot shows
+    // the PREVIOUS turn's clock on its scene line, which was reported as "I wrote 'On
+    // Thursday evening' and it still says Friday 22:38" while swiping through the variants.
     //
-    // The recovery `continue` is the exception: it completes the turn that was stopped, so
-    // it is the `send` it stands in for and advances state the same way. Without this the
-    // recovered turn would be the one turn in the chat that never touched the world state.
+    // The recovery `continue` completes the turn that was stopped, so it is the `send` it
+    // stands in for. `impersonate` writes the READER's line and changes nothing about the
+    // world; the reply to it is what advances state.
     //
     // This runs BEFORE the `done` frame, and that ordering is load-bearing. The turn's own
     // scene line is the snapshot this writes onto `messageId`, and the client refetches the
@@ -335,8 +338,14 @@ async function runTurn(
     //
     // `maybeUpdateState` never throws — every failure path returns `{ applied: false }` —
     // so a provider problem costs the snapshot, not the turn.
-    if (mode === 'send' || answeringPendingUser) {
-      const stateUser = answeringPendingUser ? target!.content : content;
+    if (stateAdvancesOn(mode, answeringPendingUser)) {
+      // A regenerate answers the reader's row the target replied to; that exchange is what
+      // the state engine must read, because `content` is empty for this mode.
+      const stateUser = answeringPendingUser
+        ? target!.content
+        : mode === 'regenerate'
+          ? await answeredUserText(env, chat.id, target!)
+          : content;
       try {
         await maybeUpdateState(
           env,
@@ -496,6 +505,40 @@ export function historyCutoffFor(
   if (mode === 'regenerate') return target?.seq ?? null;
   if (answeringPendingUser) return target?.seq ?? null;
   return null;
+}
+
+/**
+ * Whether a completed turn of this mode advances the world state.
+ *
+ * Every mode that writes the character's prose does: a `send` is the scene moving on, a
+ * regenerate is a new version of the scene that replaces the old one on screen, and a
+ * recovery `continue` finishes the turn that was stopped. A plain `continue` extends the
+ * same reply — the scene has not moved on — so its new row inherits the target's snapshot
+ * and re-running the engine would only double-count the minute. `impersonate` writes the
+ * READER's own line; nothing in the world has happened yet, and the reply to it is the
+ * turn that moves.
+ *
+ * Exported as a pure rule so the modes can be asserted without a provider, the same shape
+ * `statePointFor` uses. The bug it prevents is a scene line left showing the previous
+ * turn's clock on a regenerated version, which reads as the clock refusing to move.
+ */
+export function stateAdvancesOn(mode: TurnMode, answeringPendingUser: boolean): boolean {
+  return mode === 'send' || mode === 'regenerate' || answeringPendingUser;
+}
+
+/**
+ * The reader text a regenerate is answering: the content of the row the target replied to.
+ *
+ * A regenerate carries no new reader text of its own, so `content` is empty for it. The
+ * state engine still needs the exchange to read, and the reply being re-rolled answers its
+ * parent when that parent is a reader row. A target parented to another assistant row (a
+ * continuation, or a regenerated opening) has no reader line to offer, and an empty string
+ * is the honest answer.
+ */
+async function answeredUserText(env: Env, chatId: string, target: MessageRow): Promise<string> {
+  if (!target.parent_id) return '';
+  const parent = await loadMessage(env, chatId, target.parent_id);
+  return parent?.role === 'user' ? parent.content : '';
 }
 
 export function resolveAttachment(

@@ -419,6 +419,100 @@ describe('updateState: the clock advances', () => {
   });
 });
 
+/**
+ * The reported bug: the scene travelled BACKWARDS in time.
+ *
+ * The reader wrote "On Thursday evening" on a Friday-night scene, and the engine recorded
+ * "Thursday, April 10, 2025, 19:00" — the Thursday just past, a day before the stored
+ * Friday, April 11. A model doing weekday arithmetic cannot be trusted to pick "the coming
+ * Thursday", and nothing downstream checked it. The clock is now guarded in code: a
+ * proposal that parses to an instant before the stored one is dropped, and the rest of the
+ * patch still applies. The reader can still set an earlier time by hand — the panel writes
+ * through `patchState`, not through this function.
+ */
+describe('the clock never moves backwards', () => {
+  function seedTime(db: Database, json: Record<string, unknown>): void {
+    db.run(
+      `INSERT INTO state (chat_id, json, updated_at) VALUES ('chat-1', ?, 0)
+       ON CONFLICT(chat_id) DO UPDATE SET json = excluded.json`,
+      [JSON.stringify(json)] as never[],
+    );
+  }
+
+  test('a weekday the model places in the past is refused, and the rest of the patch applies', async () => {
+    const { env, db, sent } = makeEnv();
+    seedTime(db, { time: 'Friday, April 11, 2025, 22:38', location: 'dorm block entrance' });
+    stubProvider(sent, '{"time":"Thursday, April 10, 2025, 19:00","location":"the gym"}');
+
+    const result = await updateState(env, 'chat-1', { user: '*On Thursday evening.*', assistant: 'The gym.' }, setupWith('auto'));
+
+    expect(result.applied).toBe(true);
+    const stored = await loadState(env, 'chat-1');
+    expect(stored.time).toBe('Friday, April 11, 2025, 22:38');
+    // The other keys are not collateral: only the backwards clock is dropped.
+    expect(stored.location).toBe('the gym');
+  });
+
+  test('the next occurrence of a named weekday is accepted', async () => {
+    // What the prompt now asks for, and the value the guard must not touch: from a Friday
+    // the reader's "Thursday evening" is the coming Thursday.
+    const { env, db, sent } = makeEnv();
+    seedTime(db, { time: 'Friday, April 11, 2025, 22:38' });
+    stubProvider(sent, '{"time":"Thursday, April 17, 2025, 19:00"}');
+
+    await updateState(env, 'chat-1', { user: '*On Thursday evening.*', assistant: 'The gym.' }, setupWith('auto'));
+
+    expect((await loadState(env, 'chat-1')).time).toBe('Thursday, April 17, 2025, 19:00');
+  });
+
+  test('the prompt states the forward-only rule and the next-occurrence reading', async () => {
+    const { env, sent } = makeEnv();
+    stubProvider(sent, '{}');
+
+    await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
+
+    expect(sent[0].system).toContain('The clock NEVER moves backwards.');
+    expect(sent[0].system).toContain('Thursday, April 17, 2025');
+  });
+
+  test('manual pace records the reader-stated earlier time verbatim', async () => {
+    // Under `manual` the model only transcribes a time the reader authored, and the reader
+    // is allowed to say "earlier that morning". The guard is auto-pace policy.
+    const { env, db, sent } = makeEnv();
+    seedTime(db, { time: 'Friday, April 11, 2025, 22:38' });
+    stubProvider(sent, '{"time":"Friday, April 11, 2025, 07:00"}');
+
+    await updateState(env, 'chat-1', { user: 'Earlier that morning.', assistant: 'The scene rewinds.' }, setupWith('manual'));
+
+    expect((await loadState(env, 'chat-1')).time).toBe('Friday, April 11, 2025, 07:00');
+  });
+
+  test('a time the stored clock cannot be compared against is accepted', async () => {
+    // A free-text stored clock ("late evening") is normalised forward by the model; there is
+    // no instant to compare against, so the guard stands aside.
+    const { env, db, sent } = makeEnv();
+    seedTime(db, { time: 'late evening' });
+    stubProvider(sent, '{"time":"Friday, April 11, 2025, 21:00"}');
+
+    await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
+
+    expect((await loadState(env, 'chat-1')).time).toBe('Friday, April 11, 2025, 21:00');
+  });
+
+  test('weather is defined as sky and air, not street atmosphere', async () => {
+    // The stored value on the reported chat was "cool, still, motorbike exhaust, sweet rot
+    // of flower stall" — smells and a flower stall recorded as weather, then carried for
+    // forty turns because a patch only rewrites a key it emits.
+    const { env, sent } = makeEnv();
+    stubProvider(sent, '{}');
+
+    await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
+
+    expect(sent[0].system).toContain('smells');
+    expect(sent[0].system).toContain('not the');
+  });
+});
+
 describe('seedOpeningState', () => {
   test('writes the state the greeting implies', async () => {
     const { env, sent } = makeEnv();

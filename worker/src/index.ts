@@ -639,7 +639,8 @@ async function listMessages(env: Env, chatId: string, url: URL): Promise<Respons
       created_at: row.created_at,
       speaker: row.speaker,
       // The world state as of this turn, when one was recorded. Null for most rows: state
-      // only advances on a completed `send`, and only when something actually changed.
+      // advances on any completed turn that writes the character's prose — a send, a
+      // regenerate, a recovery continue — and only when the exchange changed something.
       state: parseSnapshot(row.state_json),
     };
     if (alternatives.length <= 1) return base;
@@ -676,7 +677,7 @@ async function listMessages(env: Env, chatId: string, url: URL): Promise<Respons
  *
  * Returns null for absent or unreadable JSON rather than throwing: a hand-edited row must
  * not be able to break the whole transcript, and a row with no snapshot is the normal case
- * — state only advances on a completed turn, and only when something changed.
+ * — state advances on a completed turn that writes prose, and only when something changed.
  */
 function parseSnapshot(json: string | null): WorldState | null {
   if (!json) return null;

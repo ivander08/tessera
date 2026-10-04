@@ -731,6 +731,50 @@ default per field, which `parseSceneSetup` already did.
 Regression tests are in `worker/src/state/update.test.ts`: the token budget, the
 every-turn emission, the free-text normalisation, and manual's refusal to move the clock.
 
+### 🐛 The clock ran backwards, and a hand edit did not stick
+
+Reported a second time, on a real chat, with three separate faults behind the one symptom
+("the time passage is still very off").
+
+**1. The model put a named weekday in the past.** The reader wrote `*On Thursday evening.*`
+on a scene stored as `Friday, April 11, 2025, 22:38`. The engine recorded
+`Thursday, April 10, 2025, 19:00` — the Thursday just *gone*, a day before the stored
+reading. A model doing weekday arithmetic cannot be trusted to choose the *coming*
+Thursday, so the rule is now enforced where it cannot be talked out of it: `updateState`
+parses both readings with `worker/src/state/time.ts` and, when the proposal is earlier than
+the stored clock under the `auto` pace, drops only the `time` key and applies the rest of
+the patch. `manual` is exempt — the reader owns that clock and may legitimately rewind.
+The prompt also spells out the forward-only rule and the next-occurrence reading, and the
+regression test sends the exact reported exchange.
+
+**2. A regenerated reply carried no snapshot.** `turn.ts` ran the state engine only on
+`send` and a recovery `continue`, on the reasoning that a regenerate is a draft. It is not:
+the variant replaces the previous one on screen and becomes the scene. So its scene line
+showed the *previous* turn's clock — the "I wrote On Thursday evening and it still says
+Friday 22:38" half of the report, seen while swiping the four versions. `stateAdvancesOn`
+now covers every mode that writes the character's prose, and a regenerate feeds the engine
+the reader row its target answered.
+
+**3. A hand edit did not move anything on screen, and merged over the wrong document.**
+`patchState` wrote the live row and the tail row correctly, but the client never refetched
+the transcript or the scene bar, so nothing moved until the next turn; and the panel read
+the *live* row while the transcript's scene line read the *path*, so after a swipe they
+described different versions. The viewer (`getState`), the merge base (`patchState`) and
+the consultant now all read the state at the end of the visible path — the same document
+the next turn reads — the correction lands on the newest assistant row (the scene line the
+reader is looking at, not whatever row holds the highest `seq`), the scene bar is derived
+from the transcript instead of a second fetch, and `StatePanel`'s `onSaved` moves the bar
+and the bottom scene line the instant Save is pressed.
+
+**Also fixed with it:** `weather` was defined as "whatever the exchange establishes", so
+the reported chat recorded `"cool, still, motorbike exhaust, sweet rot of flower stall"` —
+street smells carried as weather for forty turns. The key is now the sky and air only, with
+a rule to restate it when the scene changes place or day. `location` is told never to
+regress to a vaguer value ("gym" for a named campus gymnasium).
+
+Verified against the live model on the local worker: the reported exchange now stores
+`Thursday, April 17, 2025, 19:00`, and a regenerated variant carries its own snapshot.
+
 ---
 
 ## 6. How Tessera compares
