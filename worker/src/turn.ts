@@ -5,7 +5,7 @@ import { getProvider } from './providers';
 import type { NormalizedUsage, Provider } from './providers/types';
 import { badRequest, notFound, readJson } from './http';
 import { buildPrompt, send } from './prompt';
-import { persistTurn, reserveUserMessage } from './persist';
+import { insertUserMessage, persistTurn, reserveUserMessage } from './persist';
 import {
   addAlternativeRow,
   lastActiveMessage,
@@ -179,19 +179,28 @@ async function runTurn(
   // one pure function so the rules can be asserted without a provider.
   const { parentId, replyParentId } = resolveAttachment(mode, target, tail);
 
-  // The reader's message is NOT written yet. Writing it before the provider was called was
-  // the reason Stop could not be implemented honestly: a Worker cannot do database work
-  // after the client disconnects — the isolate is torn down mid-cleanup and the row is left
-  // on the visible path — so a stopped turn could never remove what it had already written.
+  // The reader's message is written BEFORE the provider is called, and the reply is written
+  // after. The ordering is the whole contract: the reader's own text must survive whatever
+  // happens to the turn it started.
   //
-  // Instead the id is reserved now, because the reply is parented to it, and BOTH rows are
-  // written together on the success path. Stop therefore means the scene is byte-identical
-  // to what it was, which is the only reading of the button a reader can trust.
+  // It has to be written now rather than at the end because a Worker cannot do database work
+  // after the client disconnects — the isolate is torn down mid-write and the row is lost
+  // with "Network connection lost". Anything not already committed when the connection drops
+  // is gone, which is exactly how a reader's long message used to vanish along with the reply
+  // it never got. Stop and a dropped connection both land here with the row already durable.
+  //
+  // The reply is the opposite case: it is written on the success path only, because a reply
+  // the reader discarded is not debris they then have to delete.
   //
   // The exception is a `continue` recovering a stopped turn: that reader row already exists
-  // and is the target, so it is reused rather than reserved.
+  // and is the target, so it is reused rather than reserved — and `send` is the only mode
+  // that carries new reader text, so only `send` reserves and inserts.
   const reserved = mode === 'send' ? reserveUserMessage() : null;
   const userId = reserved?.id ?? null;
+
+  if (userId) {
+    await insertUserMessage(env, chat.id, { id: userId, content, parentId });
+  }
   // The history window must stop where the transcript stops. For a recovery `continue` the
   // reader's row is the tail rather than history, and for a `regenerate` the target and
   // everything after it are being replaced. See `historyCutoffFor`.
@@ -201,14 +210,8 @@ async function runTurn(
   // rather than the position the reader's message occupies.
   const outputParentId = userId ?? replyParentId;
 
-  // Nothing has been written yet, so a failure has nothing to clean up. `failAfterPersist`
-  // survives only for the recovery-`continue` case, where the reader's row genuinely
-  // pre-exists — but even there it is left alone, because it is the reader's text and the
-  // next Continue answers it.
-
-  // Nothing is written until the reply is complete, so a failure simply reports itself.
-  // The old `failAfterPersist` existed to undo an early write; there is no longer one to
-  // undo, and a Worker cannot reliably do cleanup after a disconnect anyway.
+  // The reader's row is committed; a failure from here on simply reports itself. There is
+  // nothing to clean up: the reader's text is the reader's, and the next Continue answers it.
   const failTurn = (message: string, code: string): void => fail(controller, message, code);
 
   try {
@@ -251,7 +254,11 @@ async function runTurn(
 
     let response: Response;
     try {
-      response = await fetch(request.url, request.init);
+      // The client's abort is wired into the request itself, not just checked per frame in
+      // `pipeStream`. Without it, Stop on a quiet provider was only noticed when the next
+      // frame arrived — so a slow model kept generating for the rest of the reply, and a
+      // later Continue answered a turn that was still being written.
+      response = await fetch(request.url, { ...request.init, signal });
     } catch (error) {
       return failTurn(messageOf(error), 'network');
     }
@@ -269,10 +276,9 @@ async function runTurn(
       aborted,
     } = await pipeStream(controller, provider, response.body, signal);
 
-    // Stop: NOTHING is written. Not the partial reply, and not the reader's own message
-    // either — the scene is exactly as it was before the turn, which is the only reading of
-    // the button a reader can trust. Reporting an error here would be wrong too: pressing
-    // Stop is not a failure.
+    // Stop: NO reply is written, but the reader's own message stays — it was committed
+    // before the provider was called, and "Stop" means "I withdraw this reply", not "delete
+    // what I sent". Reporting an error here would be wrong too: Stop is not a failure.
     if (aborted) return;
 
     if (assistantText.length === 0) {
@@ -288,26 +294,19 @@ async function runTurn(
     // variant has no children, so the scene below it is shorter until it grows its own —
     // that is the model working as designed, not a defect.
     //
-    // Everything else writes a new step in the scene, and the reader's own row lands in the
-    // same batch so the two cannot come apart.
+    // Everything else writes a new step in the scene. The reader's own row is already
+    // committed — only the reply lands here.
     const messageId =
       mode === 'regenerate'
         ? await addAlternativeRow(env, chat.id, target!.id, assistantText)
         : (
-            await persistTurn(
-              env,
-              chat.id,
-              // The reader's row, written now rather than up front. Null for the modes that
-              // add no reader text.
-              userId ? { id: userId, content, parentId } : null,
-              {
-                content: assistantText,
-                parentId: outputParentId,
-                role: mode === 'impersonate' ? 'user' : 'assistant',
-                usage,
-                costUsd,
-              },
-            )
+            await persistTurn(env, chat.id, {
+              content: assistantText,
+              parentId: outputParentId,
+              role: mode === 'impersonate' ? 'user' : 'assistant',
+              usage,
+              costUsd,
+            })
           ).replyId;
 
     // The seq of the row just written. Provenance for anything derived from this reply —
