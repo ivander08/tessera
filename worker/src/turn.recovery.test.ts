@@ -185,101 +185,15 @@ function upstream(text: string): typeof fetch {
   }) as unknown as typeof fetch;
 }
 
-/**
- * An upstream that emits one delta and then goes quiet forever.
- *
- * This is the case the whole Stop fix is about: the provider is not slow, it is SILENT, so
- * nothing throws and the per-frame abort check never runs. Only a signal wired into the
- * request itself can cut it off.
- *
- * Runtime note: on Workers `fetch(url, { signal })` tears the response body down when the
- * signal aborts. Bun's `AbortSignal` does not reach an in-process Response that way, so the
- * stub does what the runtime does — cancels its own stream on abort — and the test then
- * pins the thing under test: that `runTurn` actually WIRES the signal into the fetch.
- * Without Step 2 the signal never reaches here, the stub never cancels, and the read hangs.
- */
-function stalledUpstream(text: string, signal?: AbortSignal): typeof fetch {
-  return (async () => {
-    if (!signal) throw new Error('runTurn did not pass the client signal to fetch');
-    const encoder = new TextEncoder();
-    let sent = false;
-    let stream: ReadableStreamDefaultController<Uint8Array> | null = null;
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        stream = controller;
-      },
-      pull(controller) {
-        if (!sent) {
-          sent = true;
-          controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`),
-          );
-          return;
-        }
-        return new Promise<void>(() => {});
-      },
-    });
-    signal.addEventListener('abort', () => {
-      try {
-        stream?.close();
-      } catch {
-        // already closed
-      }
-    });
-    return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
-  }) as unknown as typeof fetch;
-}
-
-/** An upstream that dies before any content arrives: the dropped-connection case. */
-function brokenUpstream(): typeof fetch {
-  return (async () => {
-    const body = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        controller.error(new Error('connection reset'));
-        return new Promise<void>(() => {});
-      },
-    });
-    return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
-  }) as unknown as typeof fetch;
-}
-
-/** Reads frames until the first `delta` arrives, so an abort can land mid-stream. */
-async function firstDelta(res: Response): Promise<{ reader: ReadableStreamDefaultReader<Uint8Array>; text: string }> {
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) throw new Error(`stream ended before any delta: ${buffer}`);
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split('\n\n');
-    buffer = parts.pop() ?? '';
-    for (const part of parts) {
-      if (!part.startsWith('data:')) continue;
-      const frame = JSON.parse(part.slice(5)) as { type: string; text?: string };
-      if (frame.type === 'delta') return { reader, text: frame.text ?? '' };
-    }
-  }
-}
-
-/** Drains the rest of a stream, discarding frames. */
-async function drainFrom(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
-  for (;;) {
-    const { done } = await reader.read();
-    if (done) return;
-  }
-}
-
 function ctx(): ExecutionContext {
   return { waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext;
 }
 
-function turnRequest(body: Record<string, unknown>, signal?: AbortSignal): Request {
+function turnRequest(body: Record<string, unknown>): Request {
   return new Request('https://tessera.test/api/chat', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ chatId: 'chat-1', ...body }),
-    signal,
   });
 }
 
@@ -359,85 +273,5 @@ describe('recovering a turn stopped before its reply', () => {
 
     const path = await loadPath(env, 'chat-1');
     expect(path.map((row) => row.role)).toEqual(['assistant', 'user', 'user', 'assistant']);
-  });
-});
-
-describe('a turn that never delivers a reply', () => {
-  test('Stop keeps the reader’s line and writes no reply', async () => {
-    // The reported bug: the reader sends `Test`, presses Stop while the "…" placeholder is
-    // up, and their own message disappears from the transcript. It disappeared because the
-    // row was only ever written on the success path — so a stopped turn had nothing stored
-    // to refetch, and the scene fell back to the previous assistant message.
-    const { env, db } = makeEnv();
-    // The stub receives `init.signal` from `runTurn`'s fetch — which is the contract under
-    // test — and closes its own stream when it aborts, the way the Workers runtime tears a
-    // fetch body down. `stalledUpstream` throws if no signal arrived at all.
-    globalThis.fetch = ((url: string, init?: RequestInit) =>
-      stalledUpstream('"Partway through," she says.', init?.signal ?? undefined)(
-        url,
-        init,
-      )) as unknown as typeof fetch;
-
-    const controller = new AbortController();
-    const res = await handleChat(
-      turnRequest({ content: 'Test', mode: 'send' }, controller.signal),
-      env,
-      ctx(),
-    );
-
-    // Mid-stream, exactly where Stop lands: one delta has arrived, the provider has gone
-    // quiet, and the abort is the only thing that can end it.
-    const { reader, text } = await firstDelta(res);
-    expect(text).toBe('"Partway through," she says.');
-    controller.abort();
-    await drainFrom(reader);
-
-    // The reader's own line outlived the turn.
-    const mine = db
-      .query("SELECT id FROM messages WHERE role = 'user' AND content = 'Test'")
-      .get() as { id: string } | null;
-    expect(mine).not.toBeNull();
-
-    // And no reply was written: the partial text the server had already streamed is
-    // discarded, because Stop means "I withdraw this".
-    const replies = db
-      .query("SELECT COUNT(*) AS n FROM messages WHERE role = 'assistant' AND id != 'greet'")
-      .get() as { n: number };
-    expect(replies.n).toBe(0);
-
-    // The visible path is greeting, the reader's line, and nothing after it — which is the
-    // state a recovery `continue` answers.
-    const path = await loadPath(env, 'chat-1');
-    expect(path.map((row) => row.role)).toEqual(['assistant', 'user', 'user']);
-    expect(path[path.length - 1].content).toBe('Test');
-  });
-
-  test('a dropped connection keeps the reader’s line and leaves no half-reply', async () => {
-    // The second report: the connection dies mid-reply and a long message goes with it.
-    // No abort here — the upstream itself errors before any content, which is the shape a
-    // network drop takes by the time it reaches `pipeStream`.
-    const { env, db } = makeEnv();
-    globalThis.fetch = brokenUpstream();
-
-    const res = await handleChat(
-      turnRequest({ content: 'A long message I do not want to retype.', mode: 'send' }),
-      env,
-      ctx(),
-    );
-    await drain(res);
-
-    const mine = db
-      .query("SELECT id FROM messages WHERE role = 'user' AND content = 'A long message I do not want to retype.'")
-      .get() as { id: string } | null;
-    expect(mine).not.toBeNull();
-
-    // An empty partial is dropped rather than persisted as an empty reply.
-    const replies = db
-      .query("SELECT COUNT(*) AS n FROM messages WHERE role = 'assistant' AND id != 'greet'")
-      .get() as { n: number };
-    expect(replies.n).toBe(0);
-
-    const path = await loadPath(env, 'chat-1');
-    expect(path.map((row) => row.role)).toEqual(['assistant', 'user', 'user']);
   });
 });

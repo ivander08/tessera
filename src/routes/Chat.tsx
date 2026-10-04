@@ -580,30 +580,12 @@ export default function Chat() {
         abortRef.current = null;
         setBusy(false);
 
-        // Three outcomes, and the reader's own line survives all of them: the server wrote
-        // it before streaming began, so the refetch below always brings it back. What
-        // differs is only what happens to the reply.
-        if (controller.signal.aborted) {
-          // Stop: the server discards the reply, so the streamed text must go — but the
-          // reader's own `sent` line stays on screen until the refetched transcript carries
-          // the row the server committed. `settling` keeps the overlay up for exactly that
-          // gap; emptying `text` makes the assistant overlay yield while `sent` renders on.
-          setPending((current) => (current ? { ...current, text: '', settling: true } : null));
-          reload();
-          window.setTimeout(
-            () => setPending((current) => (current?.settling ? null : current)),
-            1500,
-          );
-        } else if (failed) {
-          // A failure that produced no reply. The reader's row was still committed up
-          // front, so refetch rather than blank the overlay — the same rule as Stop. No
-          // cast reload: a failed turn introduced no speaker.
-          setPending((current) => (current ? { ...current, settling: true } : null));
-          reload();
-          window.setTimeout(
-            () => setPending((current) => (current?.settling ? null : current)),
-            1500,
-          );
+        // A failed or stopped turn has nothing stored to wait for, so the overlay goes now.
+        // Stop leaves the scene untouched — the server discards the partial — so there is
+        // nothing to refetch and no state to settle. Reloading here was what made the
+        // discarded text reappear a moment after Stop was pressed.
+        if (controller.signal.aborted || failed) {
+          setPending(null);
         } else {
           // Held, not cleared: the refetch below replaces the transcript with the stored
           // version, and clearing first would flash the pre-turn text back on screen.
@@ -807,10 +789,10 @@ export default function Chat() {
   }
 
   function stop() {
-    // Only the abort, so `run`'s `finally` owns every state transition. Clearing `pending`
-    // here is what removed the reader's line before the server's own copy — written before
-    // streaming began — had been refetched.
     abortRef.current?.abort();
+    abortRef.current = null;
+    setPending(null);
+    setBusy(false);
   }
 
   // Only the FIRST load gets a placeholder. `reload()` also sets `loading`, and swapping
