@@ -236,7 +236,36 @@ else
   fix "daemon-reload, enabled tessera.service and tessera-backup.timer"
 fi
 
-section "6. Caddy"
+section "6. Firewall"
+
+# TWO layers sit in front of this app, and the Lighthouse console only shows one of them.
+# ufw is the other, and its default policy is deny-incoming: with only 22 allowed, Caddy
+# binds :80 correctly and the site is still unreachable from the internet, timing out.
+# The failure looks exactly like a broken app, which is what makes it worth checking.
+if command -v ufw >/dev/null 2>&1; then
+  ufw_state="$(ufw status | head -1)"
+  if printf '%s' "$ufw_state" | grep -q inactive; then
+    ok "ufw is inactive (the Lighthouse console firewall is the only layer)"
+  else
+    for port in 80 443; do
+      if ufw status | grep -qE "^${port}/tcp"; then
+        ok "ufw allows ${port}/tcp"
+      else
+        apply "ufw allow ${port}/tcp" ufw allow "${port}/tcp"
+      fi
+    done
+    if ufw status | grep -qE '^80/tcp'; then
+      ok "port 80 reachable through ufw"
+    else
+      bad "port 80 is still blocked by ufw — the site will time out from outside"
+      FAILED=1
+    fi
+  fi
+else
+  skip "ufw not installed"
+fi
+
+section "7. Caddy"
 
 # The Ubuntu caddy package ships a default Caddyfile that is a STATIC FILE SERVER
 # (`root * /usr/share/caddy` + `file_server`), not a reverse proxy. Leaving it in place is
@@ -274,7 +303,7 @@ else
   FAILED=1
 fi
 
-section "7. SSH access for CI"
+section "8. SSH access for CI"
 
 if sudo -u "$DEPLOY_USER" test -s ~"$DEPLOY_USER"/.ssh/authorized_keys 2>/dev/null; then
   ok "$DEPLOY_USER has an authorized_keys file"
@@ -284,7 +313,7 @@ else
   FAILED=1
 fi
 
-section "8. Database"
+section "9. Database"
 
 if [ -f "$DATA_DIR/tessera.sqlite" ]; then
   ok "database present ($(du -h "$DATA_DIR/tessera.sqlite" | cut -f1))"
