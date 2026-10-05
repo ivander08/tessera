@@ -217,7 +217,45 @@ else
   fix "daemon-reload, enabled tessera.service and tessera-backup.timer"
 fi
 
-section "6. SSH access for CI"
+section "6. Caddy"
+
+# The Ubuntu caddy package ships a default Caddyfile that is a STATIC FILE SERVER
+# (`root * /usr/share/caddy` + `file_server`), not a reverse proxy. Leaving it in place is
+# a silent failure: `/` answers 200 from the placeholder index.html, `/api/health` 404s,
+# and nothing ever reaches the app. It reads as "the app is broken" when in fact the web
+# server never forwards to it — which is exactly how it was first deployed. Hence a
+# check, not just an install.
+if [ -f /etc/caddy/Caddyfile ] && grep -q 'reverse_proxy' /etc/caddy/Caddyfile; then
+  if cmp -s "$REPO_DIR/deploy/Caddyfile" /etc/caddy/Caddyfile; then
+    ok "Caddyfile is the Tessera one and current"
+  else
+    apply "install Caddyfile (differs from repo)" \
+      install -m 0644 "$REPO_DIR/deploy/Caddyfile" /etc/caddy/Caddyfile
+  fi
+else
+  apply "install Caddyfile (the package default was in place)" \
+    install -m 0644 "$REPO_DIR/deploy/Caddyfile" /etc/caddy/Caddyfile
+fi
+
+if grep -q 'flush_interval -1' /etc/caddy/Caddyfile; then
+  ok "SSE flush_interval -1 present"
+else
+  bad "Caddyfile has no 'flush_interval -1' — replies will arrive in one burst"
+  FAILED=1
+fi
+
+if $CHECK_ONLY; then
+  skip "caddy validate / reload"
+elif caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
+  systemctl reload caddy >/dev/null 2>&1 || systemctl restart caddy >/dev/null 2>&1 || true
+  fix "validated and reloaded caddy"
+else
+  bad "Caddyfile does not validate"
+  caddy validate --config /etc/caddy/Caddyfile || true
+  FAILED=1
+fi
+
+section "7. SSH access for CI"
 
 if sudo -u "$DEPLOY_USER" test -s ~"$DEPLOY_USER"/.ssh/authorized_keys 2>/dev/null; then
   ok "$DEPLOY_USER has an authorized_keys file"
@@ -227,7 +265,7 @@ else
   FAILED=1
 fi
 
-section "7. Database"
+section "8. Database"
 
 if [ -f "$DATA_DIR/tessera.sqlite" ]; then
   ok "database present ($(du -h "$DATA_DIR/tessera.sqlite" | cut -f1))"
