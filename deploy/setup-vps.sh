@@ -305,12 +305,75 @@ fi
 
 section "8. SSH access for CI"
 
-if sudo -u "$DEPLOY_USER" test -s ~"$DEPLOY_USER"/.ssh/authorized_keys 2>/dev/null; then
-  ok "$DEPLOY_USER has an authorized_keys file"
-else
-  bad "$DEPLOY_USER has NO authorized_keys — CI cannot log in"
-  echo "        add the CI public key: see docs/vps-deploy.md §4"
+# The deploy job authenticates as this user with a key pair. Every failure below produces
+# the SAME message from the runner — "Permission denied (publickey,password)" — so the
+# cause has to be found here rather than from the CI log.
+DEPLOY_HOME="$(getent passwd "$DEPLOY_USER" | cut -d: -f6)"
+AUTH_KEYS="$DEPLOY_HOME/.ssh/authorized_keys"
+
+if [ -z "$DEPLOY_HOME" ]; then
+  bad "$DEPLOY_USER has no home directory — sshd will refuse the login"
   FAILED=1
+else
+  ok "$DEPLOY_USER home is $DEPLOY_HOME"
+
+  # sshd refuses to read authorized_keys when StrictModes is on (the default) and the
+  # home directory, .ssh, or the file itself is group- or world-writable. This is the
+  # most common cause of "publickey rejected" after a key IS installed, because
+  # `chmod -R g+w` on a parent path is easy to do by accident.
+  home_mode="$(stat -c '%a' "$DEPLOY_HOME")"
+  case "$home_mode" in
+    *[2367][0-9]|*[0-9][2367]|*[2367])
+      bad "$DEPLOY_HOME is group/world writable (mode $home_mode) — sshd StrictModes will reject the key"
+      apply "chmod 0755 $DEPLOY_HOME" chmod 0755 "$DEPLOY_HOME"
+      ;;
+    *) ok "home mode $home_mode is StrictModes-safe" ;;
+  esac
+
+  if [ -f "$AUTH_KEYS" ] && [ -s "$AUTH_KEYS" ]; then
+    count="$(grep -c '^ssh-' "$AUTH_KEYS" 2>/dev/null || echo 0)"
+    ok "authorized_keys has $count key(s)"
+    # Fingerprints, so the key the runner holds can be compared against the one installed.
+    while read -r key; do
+      [ -n "$key" ] && ssh-keygen -lf "$key" 2>/dev/null | sed 's/^/        /' || true
+    done < <(grep '^ssh-' "$AUTH_KEYS" 2>/dev/null)
+
+    # A CRLF-contaminated key is invisible in an editor and rejected by sshd. Windows
+    # `Get-Content -Raw` produces exactly this when the value is pasted into a secret.
+    if grep -q $'\r' "$AUTH_KEYS"; then
+      bad "authorized_keys contains CR characters — sshd will not match it"
+      apply "strip CR from authorized_keys" sed -i 's/\r$//' "$AUTH_KEYS"
+    else
+      ok "authorized_keys has no CR characters"
+    fi
+
+    perms="$(stat -c '%a' "$AUTH_KEYS")"
+    if [ "$perms" = "600" ]; then
+      ok "authorized_keys mode 600"
+    else
+      bad "authorized_keys mode is $perms, must be 600"
+      apply "chmod 600 authorized_keys" chmod 600 "$AUTH_KEYS"
+    fi
+  else
+    bad "$DEPLOY_USER has NO authorized_keys — CI cannot log in"
+    echo "        add the CI public key: see docs/vps-deploy.md §4"
+    FAILED=1
+  fi
+fi
+
+# Whether sshd will accept a key login at all for this user. A locked password is fine
+# for key auth, but an expired account or a DenyUsers/AllowUsers line is not.
+if command -v sshd >/dev/null 2>&1; then
+  if sshd -T 2>/dev/null | grep -qE '^(allowusers|denyusers)'; then
+    ok "sshd has AllowUsers/DenyUsers configured"
+    sshd -T 2>/dev/null | grep -E '^(allowusers|denyusers)' | sed 's/^/        /'
+  else
+    ok "sshd has no AllowUsers/DenyUsers restriction"
+  fi
+fi
+
+if passwd -S "$DEPLOY_USER" 2>/dev/null | grep -qE ' (L|NP) '; then
+  ok "$DEPLOY_USER has no password (key-only login, expected)"
 fi
 
 section "9. Database"
