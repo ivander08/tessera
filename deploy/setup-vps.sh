@@ -1,0 +1,277 @@
+#!/usr/bin/env bash
+#
+# Converges a Tessera VPS from ANY partial state to a working one.
+#
+# The runbook's numbered steps assume a clean box. A box that was half-configured while
+# the runbook was still being corrected is not one, and re-reading the steps to work out
+# which half you are in is the confusing part. This script replaces that: every step
+# below is idempotent, so running it twice changes nothing the second time, and running
+# it on a half-done box finishes the job.
+#
+# It does NOT touch the database. /srv/tessera/data is left exactly as it is, so it is
+# safe to run after §6 has imported your data.
+#
+# Usage:
+#   sudo ./deploy/setup-vps.sh                  # converge everything
+#   sudo ./deploy/setup-vps.sh --check          # report only, change nothing
+#   sudo ./deploy/setup-vps.sh --token <token>  # also write /etc/tessera.env
+#
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SERVICE_USER=tessera
+DEPLOY_USER=tessera-deploy
+ENV_FILE=/etc/tessera.env
+DATA_DIR="$REPO_DIR/data"
+
+CHECK_ONLY=false
+TOKEN=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --check) CHECK_ONLY=true ;;
+    --token) shift; TOKEN="${1:-}" ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "run this with sudo" >&2
+  exit 1
+fi
+
+ok()   { printf '  \033[32mOK\033[0m    %s\n' "$1"; }
+fix()  { printf '  \033[33mFIX\033[0m   %s\n' "$1"; }
+skip() { printf '  \033[90m--\033[0m    %s\n' "$1"; }
+bad()  { printf '  \033[31mFAIL\033[0m  %s\n' "$1"; }
+section() { printf '\n\033[1m%s\033[0m\n' "$1"; }
+
+FAILED=0
+
+# Run a command, or report what would be run under --check.
+apply() {
+  local description="$1"; shift
+  if $CHECK_ONLY; then fix "$description"; else "$@"; fix "$description"; fi
+}
+
+section "1. Packages"
+
+for pkg in bun caddy sqlite3; do
+  if command -v "$pkg" >/dev/null 2>&1; then
+    ok "$pkg present ($(command -v "$pkg"))"
+  else
+    bad "$pkg MISSING — see docs/vps-deploy.md §2"
+    FAILED=1
+  fi
+done
+
+# The unit calls bun by absolute path, so a bun that only exists in ~/.bun is not enough.
+if [ -x /usr/local/bin/bun ]; then
+  ok "/usr/local/bin/bun present"
+else
+  bad "/usr/local/bin/bun missing — the systemd unit calls it by absolute path"
+  FAILED=1
+fi
+
+section "2. Users"
+
+if id "$SERVICE_USER" >/dev/null 2>&1; then
+  ok "user $SERVICE_USER exists"
+else
+  apply "create system user $SERVICE_USER" \
+    useradd --system --home-dir "$REPO_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
+fi
+
+if id "$DEPLOY_USER" >/dev/null 2>&1; then
+  ok "user $DEPLOY_USER exists"
+else
+  apply "create deploy user $DEPLOY_USER" \
+    useradd --create-home --shell /bin/bash "$DEPLOY_USER"
+fi
+
+# CI rsyncs as the deploy user into a tree owned by the service user, so it needs the
+# group. `usermod -aG` is idempotent — re-adding an existing membership is a no-op.
+apply "add $DEPLOY_USER to group $SERVICE_USER" \
+  usermod -aG "$SERVICE_USER" "$DEPLOY_USER"
+
+section "3. Ownership and permissions"
+
+# The service must READ the app (server/, dist/, migrations/) and WRITE only data/.
+# Getting this half-right is the failure the old runbook caused: it chowned only data/,
+# so the service could not read server/index.ts and died on startup.
+if $CHECK_ONLY; then
+  ls -ld "$REPO_DIR" "$DATA_DIR" 2>/dev/null || true
+else
+  install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0755 "$DATA_DIR"
+  chown -R "$SERVICE_USER:$SERVICE_USER" "$REPO_DIR"
+  # Group-write so the deploy user can rsync into it. `chmod -R g+w` on a tree owned by
+  # tessera:tessera grants that to group tessera, which is why the usermod above matters.
+  chmod -R g+w "$REPO_DIR"
+  fix "chown -R $SERVICE_USER:$SERVICE_USER $REPO_DIR"
+  fix "chmod -R g+w $REPO_DIR"
+fi
+
+if sudo -u "$SERVICE_USER" test -r "$REPO_DIR/server/index.ts" 2>/dev/null; then
+  ok "$SERVICE_USER can read server/index.ts"
+else
+  bad "$SERVICE_USER CANNOT read server/index.ts — the service will fail to start"
+  FAILED=1
+fi
+
+if sudo -u "$SERVICE_USER" test -w "$DATA_DIR" 2>/dev/null; then
+  ok "$SERVICE_USER can write data/"
+else
+  bad "$SERVICE_USER CANNOT write data/ — SQLite will fail"
+  FAILED=1
+fi
+
+if sudo -u "$DEPLOY_USER" test -w "$REPO_DIR" 2>/dev/null; then
+  ok "$DEPLOY_USER can write the tree (CI rsync)"
+else
+  bad "$DEPLOY_USER CANNOT write the tree — CI deploys will fail"
+  FAILED=1
+fi
+
+section "4. Environment file"
+
+if [ -f "$ENV_FILE" ]; then
+  ok "$ENV_FILE exists"
+  if grep -q '^TESSERA_TOKEN=.\+' "$ENV_FILE"; then
+    ok "TESSERA_TOKEN is set"
+  else
+    bad "TESSERA_TOKEN is empty — every request will 401"
+    FAILED=1
+  fi
+  if grep -q "^DATABASE_PATH=$DATA_DIR/tessera.sqlite" "$ENV_FILE"; then
+    ok "DATABASE_PATH points at $DATA_DIR/tessera.sqlite"
+  else
+    bad "DATABASE_PATH does not point at $DATA_DIR/tessera.sqlite:"
+    grep '^DATABASE_PATH=' "$ENV_FILE" | sed 's/^/        /'
+    FAILED=1
+  fi
+elif [ -n "$TOKEN" ]; then
+  if $CHECK_ONLY; then
+    fix "would write $ENV_FILE"
+  else
+    install -m 600 -o root -g root /dev/null "$ENV_FILE"
+    {
+      echo "TESSERA_TOKEN=$TOKEN"
+      echo "APP_NAME=Tessera"
+      echo "DATABASE_PATH=$DATA_DIR/tessera.sqlite"
+      echo "PORT=8787"
+    } > "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
+    fix "wrote $ENV_FILE"
+  fi
+else
+  bad "$ENV_FILE missing — re-run with --token <the existing token>"
+  FAILED=1
+fi
+
+section "5. systemd units"
+
+install_unit() {
+  local src="$1" dest="$2" mode="$3"
+  if [ -f "$dest" ] && cmp -s "$src" "$dest"; then
+    ok "$(basename "$dest") is current"
+  else
+    apply "install $(basename "$dest")" install -m "$mode" "$src" "$dest"
+  fi
+}
+
+install_unit "$REPO_DIR/deploy/tessera.service"        /etc/systemd/system/tessera.service        0644
+install_unit "$REPO_DIR/deploy/tessera-backup.service" /etc/systemd/system/tessera-backup.service 0644
+install_unit "$REPO_DIR/deploy/tessera-backup.timer"   /etc/systemd/system/tessera-backup.timer   0644
+install_unit "$REPO_DIR/deploy/tessera-backup.sh"      /usr/local/bin/tessera-backup              0755
+
+# The sudoers fragment hardcodes systemctl's path, and sudo matches that path as a
+# string — /bin/systemctl is a DIFFERENT string from /usr/bin/systemctl even though one
+# symlinks the other. The repo ships /usr/bin, but this box may differ, so the installed
+# copy is rewritten to whatever `command -v systemctl` actually prints.
+SYSTEMCTL="$(command -v systemctl)"
+if $CHECK_ONLY; then
+  fix "would install sudoers fragment allowing $SYSTEMCTL restart tessera"
+else
+  sed "s|/usr/bin/systemctl|$SYSTEMCTL|" "$REPO_DIR/deploy/tessera-deploy.sudoers" \
+    > /etc/sudoers.d/tessera-deploy
+  chmod 0440 /etc/sudoers.d/tessera-deploy
+  chown root:root /etc/sudoers.d/tessera-deploy
+  fix "installed sudoers fragment allowing $SYSTEMCTL restart tessera"
+fi
+
+if visudo -c -f /etc/sudoers.d/tessera-deploy >/dev/null 2>&1; then
+  ok "sudoers fragment parses"
+else
+  bad "sudoers fragment does NOT parse — CI cannot restart the service"
+  visudo -c -f /etc/sudoers.d/tessera-deploy || true
+  FAILED=1
+fi
+
+if $CHECK_ONLY; then
+  skip "systemctl daemon-reload / enable"
+else
+  systemctl daemon-reload
+  systemctl enable tessera.service >/dev/null 2>&1 || true
+  systemctl enable tessera-backup.timer >/dev/null 2>&1 || true
+  fix "daemon-reload, enabled tessera.service and tessera-backup.timer"
+fi
+
+section "6. SSH access for CI"
+
+if sudo -u "$DEPLOY_USER" test -s ~"$DEPLOY_USER"/.ssh/authorized_keys 2>/dev/null; then
+  ok "$DEPLOY_USER has an authorized_keys file"
+else
+  bad "$DEPLOY_USER has NO authorized_keys — CI cannot log in"
+  echo "        add the CI public key: see docs/vps-deploy.md §4"
+  FAILED=1
+fi
+
+section "7. Database"
+
+if [ -f "$DATA_DIR/tessera.sqlite" ]; then
+  ok "database present ($(du -h "$DATA_DIR/tessera.sqlite" | cut -f1))"
+  # Single quotes, not double: SQLite reads a double-quoted token as an IDENTIFIER, so
+  # `|| " chats, "` is a "no such column" error rather than a string. That error must also
+  # NOT be hidden, or a broken query reads as "the schema is missing".
+  if counts="$(sqlite3 "$DATA_DIR/tessera.sqlite" \
+        "SELECT (SELECT count(*) FROM chats) || ' chats, ' || (SELECT count(*) FROM messages) || ' messages'")"; then
+    ok "$counts"
+  else
+    bad "could not read the database — is it a valid SQLite file?"
+    FAILED=1
+  fi
+  for col in learned_at_seq superseded_at_seq; do
+    if sqlite3 "$DATA_DIR/tessera.sqlite" \
+         "SELECT group_concat(name) FROM pragma_table_info('facts')" | grep -q "$col"; then
+      ok "facts.$col present"
+    else
+      bad "facts.$col MISSING — migration 0014/0015 did not run"
+      FAILED=1
+    fi
+  done
+  if sqlite3 "$DATA_DIR/tessera.sqlite" "SELECT count(*) FROM messages_fts" >/dev/null 2>&1; then
+    ok "FTS5 search index present"
+  else
+    bad "messages_fts MISSING — full-text search will fail"
+    FAILED=1
+  fi
+else
+  bad "no database at $DATA_DIR/tessera.sqlite — run docs/vps-deploy.md §6"
+  FAILED=1
+fi
+
+section "Summary"
+
+if [ "$FAILED" -eq 0 ]; then
+  printf '  \033[32mAll checks passed.\033[0m\n\n'
+  echo "  Start the service:"
+  echo "    sudo systemctl restart tessera"
+  echo "    systemctl status tessera --no-pager"
+  echo "    curl -s localhost:8787/api/health"
+  echo
+  echo "  Then install the Caddyfile and reload Caddy (docs/vps-deploy.md §7)."
+else
+  printf '  \033[31mSome checks failed — fix the FAIL lines above.\033[0m\n'
+  exit 1
+fi

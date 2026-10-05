@@ -1,0 +1,9 @@
+# Shell scripts execute on Linux. A CRLF line ending makes bash fail with
+# `bad interpreter: /usr/bin/env bash^M`, which reads as a syntax error in the script
+# rather than what it actually is — an artifact of the machine it was checked out on.
+# Force LF so a script is runnable no matter which OS checked it out.
+*.sh text eol=lf
+
+# The Caddyfile is read by Caddy on Linux, which also has no use for CRLF.
+Caddyfile text eol=lf
+Caddyfile.* text eol=lf

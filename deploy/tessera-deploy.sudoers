@@ -1,4 +1,11 @@
 # Grants the GitHub Actions deploy user permission to restart only the Tessera unit
 # after an rsync, and nothing else. Install to /etc/sudoers.d/tessera-deploy with mode
 # 0440 and validate with `visudo -c -f /etc/sudoers.d/tessera-deploy`.
-tessera-deploy ALL=(root) NOPASSWD: /bin/systemctl restart tessera
+#
+# `/usr/bin/systemctl`, not `/bin/systemctl`. sudo matches the command path literally,
+# and on Ubuntu (checked on 22.04 and 24.04) systemctl lives in /usr/bin — `/bin` is a
+# symlink to it, but a symlinked path is a DIFFERENT string and sudo does not resolve it.
+# With the wrong path the deploy job fails at the last step with "command not allowed",
+# after the code has already been rsynced. Confirm with `command -v systemctl` on the
+# host and keep this line in sync with what it prints.
+tessera-deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart tessera

@@ -28,14 +28,30 @@ user with sudo; the privileged steps are marked.
 
 ## 2. Install bun, caddy and sqlite3
 
+First confirm your account has sudo; every step from here needs it. If it does not, ask
+the instance owner (the other user) to run the privileged commands.
+
 ```sh
-curl -fsSL https://bun.sh/install | bash
-sudo install -m 0755 ~/.bun/bin/bun /usr/local/bin/bun
+sudo -n true && echo "sudo OK" || echo "NO SUDO — stop and ask the instance owner"
 ```
+
+`unzip` is not optional: bun's installer hard-fails with `unzip is required to install
+bun` and exits, so installing it first is the difference between one command and a
+puzzling error.
 
 ```sh
 sudo apt-get update
-sudo apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl sqlite3
+sudo apt-get install -y unzip curl sqlite3
+curl -fsSL https://bun.sh/install | bash
+sudo install -m 0755 ~/.bun/bin/bun /usr/local/bin/bun
+bun --version
+```
+
+Caddy comes from its own apt repository, because the version in Ubuntu's archive is old
+enough to differ on the `flush_interval` directive the SSE stream depends on.
+
+```sh
+sudo apt-get install -y debian-keyring debian-archive-keyring apt-transport-https
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
 sudo apt-get update
@@ -57,12 +73,38 @@ bun run build
 `bun run build` typechecks and emits `dist/`. It is the only build: the app is web-only,
 and the SPA is same-origin with the API, so there is no API base URL to bake in.
 
-## 4. Create the service user and the environment file
+## 4. Create the service user and hand over the tree
+
+The unit runs as `tessera`, which must be able to **read** the app (`server/`, `dist/`,
+`migrations/`) and **write** only its data directory. The clone from §3 is owned by your
+login user, so the tree is handed over here — do not skip this, or the service fails at
+startup with a permission error on `server/index.ts`.
 
 ```sh
 sudo useradd --system --home-dir /srv/tessera --shell /usr/sbin/nologin tessera
 sudo mkdir -p /srv/tessera/data
-sudo chown -R tessera:tessera /srv/tessera/data
+sudo chown -R tessera:tessera /srv/tessera
+```
+
+CI deploys by rsyncing into `/srv/tessera` as `tessera-deploy`, so that account needs
+group write on the tree — and it needs a shell, unlike the service user.
+
+```sh
+sudo useradd --create-home --shell /bin/bash tessera-deploy
+sudo usermod -aG tessera tessera-deploy
+sudo chmod -R g+w /srv/tessera
+sudo -u tessera-deploy mkdir -p ~tessera-deploy/.ssh
+```
+
+Add the CI public key (the pair to the `VPS_SSH_KEY` secret) so the deploy job can log in:
+
+```sh
+sudo -u tessera-deploy tee ~tessera-deploy/.ssh/authorized_keys >/dev/null <<'EOF'
+ssh-ed25519 AAAA... your CI public key
+EOF
+sudo chmod 700 ~tessera-deploy/.ssh
+sudo chmod 600 ~tessera-deploy/.ssh/authorized_keys
+sudo chown -R tessera-deploy:tessera-deploy ~tessera-deploy/.ssh
 ```
 
 `/etc/tessera.env` holds the bearer token, so it is mode 600 and owned by root; systemd
@@ -83,12 +125,17 @@ Reuse the token already in the Cloudflare Worker secret so existing provider key
 decryptable; `TESSERA_TOKEN` is the key-encryption key, and changing it makes every
 stored provider key undecryptable. If you need a fresh one: `openssl rand -hex 32`.
 
+> **Order matters.** The clone in §3 happens as your login user, before the `tessera`
+> user exists. If you run §4's `chown` before §3, the clone fails. If you forget the
+> `chown` entirely, `systemctl start tessera` fails with
+> `Permission denied` on `/srv/tessera/server/index.ts`.
+
 ## 5. Install the units, timer and sudoers fragment
 
 From the repo's `deploy/` directory:
 
 ```sh
-sudo install -m 0644 deploy/tessera.service       /etc/systemd/system/tessera.service
+sudo install -m 0644 deploy/tessera.service        /etc/systemd/system/tessera.service
 sudo install -m 0644 deploy/tessera-backup.service /etc/systemd/system/tessera-backup.service
 sudo install -m 0644 deploy/tessera-backup.timer   /etc/systemd/system/tessera-backup.timer
 sudo install -m 0755 deploy/tessera-backup.sh      /usr/local/bin/tessera-backup
@@ -98,73 +145,97 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now tessera.service tessera-backup.timer
 ```
 
-The sudoers fragment grants the GitHub Actions user `tessera-deploy` the right to
-restart only the `tessera` unit after an rsync — nothing else. Create that user on the
-VPS and add its public key to `~tessera-deploy/.ssh/authorized_keys`; the CI deploy job
-uses the matching private key from the `VPS_SSH_KEY` secret.
+**Check the `systemctl` path in the sudoers fragment before you rely on it.** The file
+grants `/bin/systemctl restart tessera`; on Ubuntu `systemctl` is usually
+`/usr/bin/systemctl`, and sudo matches the path literally, so a mismatch means the CI
+restart silently fails with `command not allowed`. Confirm and fix if needed:
 
-## 6. Apply the migrations, then import the data
+```sh
+command -v systemctl
+# if that prints /usr/bin/systemctl, edit the fragment:
+sudo sed -i 's|/bin/systemctl|/usr/bin/systemctl|' /etc/sudoers.d/tessera-deploy
+sudo visudo -c -f /etc/sudoers.d/tessera-deploy
+```
 
-Pick **one** of the two paths. They are mutually exclusive: the migration loop creates
-the schema, so the import must then be data-only; a copied `.sqlite` file already carries
-its schema and must not be re-migrated.
+## 6. Get your data onto the VPS
 
-### Path A — start from an empty database (recommended)
+**Do not use `wrangler d1 export`.** It refuses any database containing FTS5 virtual
+tables (`X [ERROR] D1 Export error: cannot export databases with Virtual Tables (fts5)`),
+and Tessera has two — `messages_fts` and `facts_fts`. Before it fails it also **takes an
+exclusive lock on the live database**, which your still-running Worker needs. There is no
+flag that works around it.
 
-Migrations are plain SQL and apply in filename order. Apply **all** of them, including
-`0016_state_backfill.sql`: the test harnesses deliberately omit 0016, but production has
-it and the deployed state depends on it.
+The good news: you do not need D1 for this at all. `backup-2026-10-02/local.sqlite` is a
+complete SQLite copy of the database, schema and rows, taken straight from D1. Copying a
+file is the migration.
+
+### 6a. Decide whether you can accept the copy's age
+
+The file is from **2026-10-02**. Anything written in Tessera after that date exists only
+in D1. Check what you would lose:
+
+```sh
+cd C:\Users\Ivander\Documents\Projects\tessera
+sqlite3 backup-2026-10-02/local.sqlite \
+  "SELECT max(seq) AS last_seq, datetime(max(created_at)/1000,'unixepoch') AS last_write FROM messages"
+```
+
+If that timestamp is the last time you used the app, nothing is lost and you are done
+deciding. If you have written since, you have two choices:
+
+- **Accept the gap.** Simplest, if it is a handful of messages you can retype.
+- **Pull the missing rows through the D1 HTTP API**, which has no virtual-table
+  limitation and does not lock the database. Read those with
+  `wrangler d1 execute tessera-db --remote --json --command="SELECT ... FROM messages WHERE seq > <last_seq>"`
+  and insert them into the copied file. Ask before doing this — the tables have to be
+  reconciled together (`messages`, `chats`, `state`, `facts`, `summaries`), not one at a
+  time, or foreign keys and the visible-path walk will disagree.
+
+Everything below assumes the first choice.
+
+### 6b. Copy the file to the VPS
+
+```sh
+# from the dev machine
+scp backup-2026-10-02/local.sqlite ivander@<ip>:/tmp/tessera.sqlite
+```
+
+```sh
+# on the VPS — the data directory is owned by the service user
+sudo install -o tessera -g tessera -m 0644 /tmp/tessera.sqlite /srv/tessera/data/tessera.sqlite
+```
+
+### 6c. Apply the migrations the file is missing
+
+The copied file carries a `d1_migrations` table listing what already ran, so this loop
+applies only the remainder — expect `0014`, `0015` and `0016`.
+
+It must read that table rather than run a fixed list, because **the migrations are not
+re-runnable**: `0013` rebuilds the `presets` table and fails on a second pass. This is the
+one step where doing it "twice to be safe" causes the damage.
 
 ```sh
 cd /srv/tessera
 for f in $(ls migrations/*.sql | sort); do
-  echo "applying $f"
-  sqlite3 /srv/tessera/data/tessera.sqlite < "$f"
-done
-```
-
-Then export from D1 **without the schema** (`--no-schema`) and pipe the rows in. Without
-that flag the dump re-emits `CREATE TABLE` statements that now collide with the
-migrations above. `wrangler` needs your Cloudflare credentials, so run the export on your
-dev machine and copy the dump to the VPS:
-
-```sh
-# on the dev machine
-wrangler d1 export tessera-db --remote --no-schema --output=d1-dump.sql
-scp d1-dump.sql <ip>:/tmp/d1-dump.sql
-
-# on the VPS
-sqlite3 /srv/tessera/data/tessera.sqlite < /tmp/d1-dump.sql
-```
-
-### Path B — copy an existing SQLite file
-
-Because the schema and dialect are unchanged, a known-good local file is a straight copy.
-But **the copy may be behind on migrations**, and a backup taken before `0014` has no
-`learned_at_seq` on `facts` — the app then fails at runtime with `no such column`, not at
-startup. So after copying, apply whatever is missing.
-
-The file carries a `d1_migrations` table naming what has already run, so the loop below
-applies only the remainder. It is not re-runnable over an already-applied migration —
-`0013` rebuilds the `presets` table and errors on a second pass — which is exactly why the
-already-run set is read rather than a fixed list assumed.
-
-```sh
-cp backup-2026-10-02/local.sqlite /srv/tessera/data/tessera.sqlite
-
-for f in $(ls migrations/*.sql | sort); do
   name=$(basename "$f")
   if sqlite3 /srv/tessera/data/tessera.sqlite \
        "SELECT 1 FROM d1_migrations WHERE name = '$name'" | grep -q 1; then
-    echo "already applied: $name"
+    echo "already applied, skipping: $name"
     continue
   fi
   echo "applying $name"
-  sqlite3 /srv/tessera/data/tessera.sqlite < "$f"
+  sqlite3 /srv/tessera/data/tessera.sqlite < "$f" || { echo "FAILED on $name"; break; }
 done
 ```
 
-Verify the copy is at the current schema — both lines must print a column name:
+Each line must print either `already applied, skipping` or `applying`. A `FAILED` line
+means stop and read the error — do not re-run the loop.
+
+### 6d. Verify the schema is current
+
+Both commands must print a column name. If either prints nothing, the corresponding
+migration did not run, and the app will fail later with `no such column` rather than
+refusing to start.
 
 ```sh
 sqlite3 /srv/tessera/data/tessera.sqlite \
@@ -173,11 +244,31 @@ sqlite3 /srv/tessera/data/tessera.sqlite \
   "SELECT group_concat(name) FROM pragma_table_info('chat_cast')" | tr ',' '\n' | grep joined_seq
 ```
 
-Verify either path with:
+### 6e. Rebuild the search index
+
+`0016` rewrites rows, and a `wrangler`-produced file may carry an empty FTS index. Check,
+then rebuild if the first number is 0 while the second is not. `messages_fts` is an
+external-content table, so `rebuild` regenerates the index from `messages` — it does not
+touch or duplicate your data.
 
 ```sh
-sqlite3 /srv/tessera/data/tessera.sqlite "SELECT count(*), max(seq) FROM messages"
+sqlite3 /srv/tessera/data/tessera.sqlite "SELECT count(*) FROM messages_fts; SELECT count(*) FROM messages;"
+
+# only if messages_fts is empty and messages is not
+sqlite3 /srv/tessera/data/tessera.sqlite "INSERT INTO messages_fts(messages_fts) VALUES('rebuild');"
+sqlite3 /srv/tessera/data/tessera.sqlite "INSERT INTO facts_fts(facts_fts) VALUES('rebuild');"
 ```
+
+### 6f. Record the source counts, for the parity check in §11
+
+```sh
+sqlite3 /srv/tessera/data/tessera.sqlite \
+  "SELECT (SELECT count(*) FROM chats) AS chats, (SELECT count(*) FROM messages) AS messages, (SELECT max(seq) FROM messages) AS last_seq"
+```
+
+Write that line down. §11 compares the running app against it — matching counts are what
+prove the copy was complete, and they are meaningless if taken after the app has already
+written to the file.
 
 ## 7. Bring up over the IP and verify
 
