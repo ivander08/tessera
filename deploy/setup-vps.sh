@@ -334,9 +334,12 @@ else
     count="$(grep -c '^ssh-' "$AUTH_KEYS" 2>/dev/null || echo 0)"
     ok "authorized_keys has $count key(s)"
     # Fingerprints, so the key the runner holds can be compared against the one installed.
-    while read -r key; do
-      [ -n "$key" ] && ssh-keygen -lf "$key" 2>/dev/null | sed 's/^/        /' || true
+    while IFS= read -r key; do
+      [ -z "$key" ] && continue
+      printf '%s\n' "$key" > /tmp/.keyprobe.pub
+      ssh-keygen -lf /tmp/.keyprobe.pub 2>/dev/null | sed 's/^/        /' || true
     done < <(grep '^ssh-' "$AUTH_KEYS" 2>/dev/null)
+    rm -f /tmp/.keyprobe.pub
 
     # A CRLF-contaminated key is invisible in an editor and rejected by sshd. Windows
     # `Get-Content -Raw` produces exactly this when the value is pasted into a secret.
