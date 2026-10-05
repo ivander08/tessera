@@ -92,8 +92,14 @@ fi
 
 # CI rsyncs as the deploy user into a tree owned by the service user, so it needs the
 # group. `usermod -aG` is idempotent — re-adding an existing membership is a no-op.
-apply "add $DEPLOY_USER to group $SERVICE_USER" \
-  usermod -aG "$SERVICE_USER" "$DEPLOY_USER"
+# Only add when missing. `usermod -aG` is idempotent, but calling it unconditionally
+# printed FIX on every run, which makes the report useless as a "what changed" summary.
+if id -nG "$DEPLOY_USER" | tr ' ' '\n' | grep -qx "$SERVICE_USER"; then
+  ok "$DEPLOY_USER is in group $SERVICE_USER"
+else
+  apply "add $DEPLOY_USER to group $SERVICE_USER" \
+    usermod -aG "$SERVICE_USER" "$DEPLOY_USER"
+fi
 
 section "3. Ownership and permissions"
 
@@ -242,11 +248,11 @@ if [ -f /etc/caddy/Caddyfile ] && grep -q 'reverse_proxy' /etc/caddy/Caddyfile; 
   if cmp -s "$REPO_DIR/deploy/Caddyfile" /etc/caddy/Caddyfile; then
     ok "Caddyfile is the Tessera one and current"
   else
-    apply "install Caddyfile (differs from repo)" \
+    apply "install Caddyfile (differs from the repo copy)" \
       install -m 0644 "$REPO_DIR/deploy/Caddyfile" /etc/caddy/Caddyfile
   fi
 else
-  apply "install Caddyfile (the package default was in place)" \
+  apply "install Caddyfile (replacing the package's static file server)" \
     install -m 0644 "$REPO_DIR/deploy/Caddyfile" /etc/caddy/Caddyfile
 fi
 
