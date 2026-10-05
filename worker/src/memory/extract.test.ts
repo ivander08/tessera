@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
-import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, test } from 'bun:test';
 
+import { exec, makeTestEnv } from '../test/harness';
 import { extractFacts } from './extract';
 import { encryptKey } from '../../../src/lib/crypto';
 
@@ -23,33 +23,6 @@ import { encryptKey } from '../../../src/lib/crypto';
  *    replacement, which only has an id once it exists.
  */
 
-const MIGRATIONS = [
-  '0000_init.sql',
-  '0001_memory.sql',
-  '0002_state.sql',
-  '0003_presets.sql',
-  '0004_swipes_presets.sql',
-  '0005_branching.sql',
-  '0006_walk_index.sql',
-  '0007_scene_setup.sql',
-  '0008_cast.sql',
-  '0009_message_speaker.sql',
-  '0011_message_state.sql',
-  '0012_message_deleted.sql',
-
-  '0013_presets_authored.sql',
-
-  '0014_provenance.sql',
-
-
-  '0015_supersession_provenance.sql',
-];
-
-/** `bun-types` types the variadic form too narrowly; one seam keeps the cast out of call sites. */
-function exec(db: Database, sql: string, ...params: unknown[]): void {
-  db.run(sql, ...(params as never[]));
-}
-
 const realFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = realFetch;
@@ -64,10 +37,26 @@ function stubProvider(reply: string): void {
 }
 
 function makeEnv(): { env: Env; db: Database } {
-  const db = new Database(':memory:');
-  for (const name of MIGRATIONS) {
-    db.exec(readFileSync(new URL(`../../../migrations/${name}`, import.meta.url), 'utf8'));
-  }
+  const settings: Record<string, string> = { provider: 'openrouter', model: 'test/model' };
+  const { promise: keyPromise, resolve: resolveKey } = Promise.withResolvers<{
+    key_enc: Uint8Array;
+    iv: Uint8Array;
+  }>();
+  void encryptKey('sk-test', 'token').then(({ enc, iv }) =>
+    resolveKey({ key_enc: new Uint8Array(enc), iv: new Uint8Array(iv) }),
+  );
+
+  const { env, db } = makeTestEnv({
+    extra: { TESSERA_TOKEN: 'token' },
+    stub: (sql) => {
+      const trimmed = sql.replace(/\s+/g, ' ').trim();
+      if (trimmed.includes('FROM settings')) {
+        return { rows: Object.entries(settings).map(([key, value]) => ({ key, value })) };
+      }
+      if (trimmed.includes('FROM provider_keys')) return { row: keyPromise };
+      return undefined;
+    },
+  });
 
   const now = Date.now();
   exec(db,
@@ -83,56 +72,7 @@ function makeEnv(): { env: Env; db: Database } {
     now,
   );
 
-  const settings: Record<string, string> = { provider: 'openrouter', model: 'test/model' };
-  const { promise: keyPromise, resolve: resolveKey } = Promise.withResolvers<{
-    key_enc: Uint8Array;
-    iv: Uint8Array;
-  }>();
-  void encryptKey('sk-test', 'token').then(({ enc, iv }) =>
-    resolveKey({ key_enc: new Uint8Array(enc), iv: new Uint8Array(iv) }),
-  );
-
-  const DB = {
-    async batch(statements: Array<{ run: () => Promise<unknown> }>) {
-      const out = [];
-      for (const statement of statements) out.push(await statement.run());
-      return out;
-    },
-    prepare(sql: string) {
-      const trimmed = sql.replace(/\s+/g, ' ').trim();
-      let params: unknown[] = [];
-      const statement = {
-        bind(...values: unknown[]) {
-          params = values;
-          return statement;
-        },
-        async all() {
-          if (trimmed.includes('FROM settings')) {
-            return {
-              results: Object.entries(settings).map(([key, value]) => ({ key, value })),
-              success: true,
-              meta: {},
-            };
-          }
-          return { results: db.query(sql).all(...(params as never[])), success: true, meta: {} };
-        },
-        async first() {
-          if (trimmed.includes('FROM provider_keys')) return await keyPromise;
-          return db.query(sql).get(...(params as never[])) ?? null;
-        },
-        async run() {
-          const result = db.run(sql, ...(params as never[]));
-          return { success: true, meta: { changes: result.changes } };
-        },
-      };
-      return statement;
-    },
-  };
-
-  return {
-    env: { DB, APP_NAME: 'Tessera', TESSERA_TOKEN: 'token' } as unknown as Env,
-    db,
-  };
+  return { env, db };
 }
 
 function seedFact(db: Database, id: string, text: string): void {

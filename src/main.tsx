@@ -4,18 +4,8 @@ import { BrowserRouter } from 'react-router';
 import './index.css';
 import App from './App';
 import { ToastProvider } from './components/Toast';
-import { apiJson, apiOrigin } from './lib/api';
+import { apiJson } from './lib/api';
 import { applyTheme, parseTheme, DEFAULT_THEME, type Theme } from './lib/theme';
-import { assertNativeStreaming, isNativeShell } from './lib/native/sse';
-
-// The native shells wrap this same bundle. Check once, at startup, that replies will
-// actually stream — a buffered response body does not throw, it just makes the chat look
-// slow, so without this the failure is invisible until someone notices.
-if (isNativeShell()) {
-  const { ok, reason } = assertNativeStreaming();
-  if (ok) console.info(`[tessera] native shell: streaming OK, api at ${apiOrigin()}`);
-  else console.error(`[tessera] SSE will not stream — ${reason}`);
-}
 
 function Root() {
   const [theme, setTheme] = useState<Theme>(DEFAULT_THEME);

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { readFileSync } from 'node:fs';
 
+import { exec, makeTestEnv } from './test/harness';
 import { handleChat } from './chat';
 import { loadPath } from './branch';
 import { encryptKey } from '../../src/lib/crypto';
@@ -27,34 +27,7 @@ import { encryptKey } from '../../src/lib/crypto';
  * the exact error the reader was hitting.
  */
 
-const MIGRATIONS = [
-  '0000_init.sql',
-  '0001_memory.sql',
-  '0002_state.sql',
-  '0003_presets.sql',
-  '0004_swipes_presets.sql',
-  '0005_branching.sql',
-  '0006_walk_index.sql',
-  '0007_scene_setup.sql',
-  '0008_cast.sql',
-  '0009_message_speaker.sql',
-  '0011_message_state.sql',
-  '0012_message_deleted.sql',
-
-  '0013_presets_authored.sql',
-
-  '0014_provenance.sql',
-
-
-  '0015_supersession_provenance.sql',
-];
-
 const realFetch = globalThis.fetch;
-
-/** `bun-types` types the variadic form too narrowly; one seam keeps the cast out of call sites. */
-function exec(db: Database, sql: string, ...params: unknown[]): void {
-  db.run(sql, ...(params as never[]));
-}
 
 afterEach(() => {
   globalThis.fetch = realFetch;
@@ -62,10 +35,31 @@ afterEach(() => {
 
 /** A D1 stub over a real in-memory schema, so the walk and the writes are the real ones. */
 function makeEnv(): { env: Env; db: Database } {
-  const db = new Database(':memory:');
-  for (const name of MIGRATIONS) {
-    db.exec(readFileSync(new URL(`../../migrations/${name}`, import.meta.url), 'utf8'));
-  }
+  const { promise: keyPromise, resolve: resolveKey } = Promise.withResolvers<{
+    key_enc: Uint8Array;
+    iv: Uint8Array;
+  }>();
+  void encryptKey('sk-test', 'token').then(({ enc, iv }) =>
+    resolveKey({ key_enc: new Uint8Array(enc), iv: new Uint8Array(iv) }),
+  );
+
+  const settings: Record<string, string> = {
+    provider: 'openrouter',
+    model: 'test/model',
+    systemPrompt: 'You are a narrator.',
+  };
+
+  const { env, db } = makeTestEnv({
+    extra: { ASSETS: { fetch: async () => new Response('') }, TESSERA_TOKEN: 'token' },
+    stub: (sql) => {
+      const trimmed = sql.replace(/\s+/g, ' ').trim();
+      if (trimmed.includes('FROM settings')) {
+        return { row: null, rows: Object.entries(settings).map(([key, value]) => ({ key, value })) };
+      }
+      if (trimmed.includes('FROM provider_keys')) return { row: keyPromise };
+      return undefined;
+    },
+  });
 
   const now = Date.now();
   exec(db,
@@ -103,64 +97,7 @@ function makeEnv(): { env: Env; db: Database } {
     now,
   );
 
-  const { promise: keyPromise, resolve: resolveKey } = Promise.withResolvers<{
-    key_enc: Uint8Array;
-    iv: Uint8Array;
-  }>();
-  void encryptKey('sk-test', 'token').then(({ enc, iv }) =>
-    resolveKey({ key_enc: new Uint8Array(enc), iv: new Uint8Array(iv) }),
-  );
-
-  const settings: Record<string, string> = {
-    provider: 'openrouter',
-    model: 'test/model',
-    systemPrompt: 'You are a narrator.',
-  };
-
-  const DB = {
-    prepare(sql: string) {
-      let params: unknown[] = [];
-      const trimmed = sql.replace(/\s+/g, ' ').trim();
-      const statement = {
-        bind(...values: unknown[]) {
-          params = values;
-          return statement;
-        },
-        async first() {
-          if (trimmed.startsWith('SELECT * FROM chats')) {
-            return db.query('SELECT * FROM chats WHERE id = ?').get('chat-1');
-          }
-          if (trimmed.includes('FROM provider_keys')) return await keyPromise;
-          if (trimmed.startsWith('SELECT * FROM characters')) {
-            return db.query('SELECT * FROM characters WHERE id = ?').get('char-1');
-          }
-          if (trimmed.includes('FROM token_calibration')) return { factor: 1, samples: 0 };
-          if (trimmed.includes('FROM settings')) return null;
-          if (trimmed.includes('FROM state')) return null;
-          if (trimmed.includes('FROM chat_scene_setup')) return null;
-          return db.query(sql).get(...(params as never[])) ?? null;
-        },
-        async all() {
-          if (trimmed.includes('FROM settings')) {
-            return { results: Object.entries(settings).map(([key, value]) => ({ key, value })) };
-          }
-          return { results: db.query(sql).all(...(params as never[])), success: true, meta: {} };
-        },
-        async run() {
-          const result = db.run(sql, ...(params as never[]));
-          return { success: true, meta: { changes: result.changes } };
-        },
-      };
-      return statement;
-    },
-    async batch(statements: Array<{ run: () => Promise<unknown> }>) {
-      const out = [];
-      for (const statement of statements) out.push(await statement.run());
-      return out;
-    },
-  };
-
-  return { env: { DB, ASSETS: { fetch: async () => new Response('') }, APP_NAME: 'Tessera', TESSERA_TOKEN: 'token' } as unknown as Env, db };
+  return { env, db };
 }
 
 /** An upstream that streams a short reply, so a turn completes normally. */

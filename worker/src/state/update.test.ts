@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
-import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, test } from 'bun:test';
 
+import { exec, makeTestEnv } from '../test/harness';
 import { loadState, seedOpeningState, updateState } from './update';
 import { statePointFor } from '../turn';
 import { encryptKey } from '../../../src/lib/crypto';
@@ -17,37 +17,10 @@ import type { SceneSetup } from '../../../src/lib/scene/setup';
  * accepts it: the model's reply is untrusted input like any other.
  */
 
-const MIGRATIONS = [
-  '0000_init.sql',
-  '0001_memory.sql',
-  '0002_state.sql',
-  '0003_presets.sql',
-  '0004_swipes_presets.sql',
-  '0005_branching.sql',
-  '0006_walk_index.sql',
-  '0007_scene_setup.sql',
-  '0008_cast.sql',
-  '0009_message_speaker.sql',
-  '0011_message_state.sql',
-  '0012_message_deleted.sql',
-
-  '0013_presets_authored.sql',
-
-  '0014_provenance.sql',
-
-
-  '0015_supersession_provenance.sql',
-];
-
 const realFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = realFetch;
 });
-
-/** `bun-types` types the variadic form too narrowly; one seam keeps the cast out of call sites. */
-function exec(db: Database, sql: string, ...params: unknown[]): void {
-  db.run(sql, ...(params as never[]));
-}
 
 /** Captures each request body so the test can read the system prompt and user text. */
 interface Sent {
@@ -56,22 +29,6 @@ interface Sent {
 }
 
 function makeEnv(): { env: Env; db: Database; sent: Sent[] } {
-  const db = new Database(':memory:');
-  for (const name of MIGRATIONS) {
-    db.exec(readFileSync(new URL(`../../../migrations/${name}`, import.meta.url), 'utf8'));
-  }
-
-  const now = Date.now();
-  // `bun-types` types the variadic form too narrowly; the same seam the other worker
-  // tests use.
-  exec(db,
-    `INSERT INTO chats (id, character_id, persona_id, title, preset_id, window_start_seq,
-                        session_id, created_at, updated_at)
-     VALUES ('chat-1', NULL, NULL, 't', NULL, 0, 's', ?, ?)`,
-    now,
-    now,
-  );
-
   const settings: Record<string, string> = {
     provider: 'openrouter',
     model: 'test/model',
@@ -88,44 +45,29 @@ function makeEnv(): { env: Env; db: Database; sent: Sent[] } {
     resolveKey({ key_enc: new Uint8Array(enc), iv: new Uint8Array(iv) }),
   );
 
-  const DB = {
-    prepare(sql: string) {
+  const { env, db } = makeTestEnv({
+    extra: { TESSERA_TOKEN: 'token' },
+    stub: (sql) => {
       const trimmed = sql.replace(/\s+/g, ' ').trim();
-      let params: unknown[] = [];
-      const statement = {
-        bind(...values: unknown[]) {
-          params = values;
-          return statement;
-        },
-        async all() {
-          if (trimmed.includes('FROM settings')) {
-            return {
-              results: Object.entries(settings).map(([key, value]) => ({ key, value })),
-              success: true,
-              meta: {},
-            };
-          }
-          return { results: db.query(sql).all(...(params as never[])), success: true, meta: {} };
-        },
-        async first() {
-          if (trimmed.includes('FROM provider_keys')) return await keyPromise;
-          if (trimmed.includes('FROM token_calibration')) return { factor: 1, samples: 0 };
-          return db.query(sql).get(...(params as never[])) ?? null;
-        },
-        async run() {
-          const result = db.run(sql, ...(params as never[]));
-          return { success: true, meta: { changes: result.changes } };
-        },
-      };
-      return statement;
+      if (trimmed.includes('FROM settings')) {
+        return { rows: Object.entries(settings).map(([key, value]) => ({ key, value })) };
+      }
+      if (trimmed.includes('FROM provider_keys')) return { row: keyPromise };
+      if (trimmed.includes('FROM token_calibration')) return { row: { factor: 1, samples: 0 } };
+      return undefined;
     },
-  };
+  });
 
-  return {
-    env: { DB, APP_NAME: 'Tessera', TESSERA_TOKEN: 'token' } as unknown as Env,
-    db,
-    sent,
-  };
+  const now = Date.now();
+  exec(db,
+    `INSERT INTO chats (id, character_id, persona_id, title, preset_id, window_start_seq,
+                        session_id, created_at, updated_at)
+     VALUES ('chat-1', NULL, NULL, 't', NULL, 0, 's', ?, ?)`,
+    now,
+    now,
+  );
+
+  return { env, db, sent };
 }
 
 /** Stubs the provider with a fixed JSON reply, recording what was asked. */

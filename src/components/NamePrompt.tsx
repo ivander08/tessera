@@ -5,9 +5,8 @@ import { Modal } from './Modal';
  * Asks for a name, in the app's own sheet.
  *
  * Replaces `window.prompt`, which is a browser chrome dialog: it cannot be themed, it
- * blocks the whole page, it is suppressed entirely in some embedded webviews (the APK and
- * the Tauri shell both host this bundle), and on the desktop it is titled with the
- * origin — `localhost:8787 says` — which is not a sentence about the reader's character.
+ * blocks the whole page, and it is titled with the origin — `localhost:8787 says` — which
+ * is not a sentence about the reader's character.
  */
 export function NamePrompt({
   title,

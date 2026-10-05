@@ -4,6 +4,7 @@ import { forkCard } from '../../src/lib/cards/fork';
 import { asRecord, asString, asStringArray } from '../../src/lib/json';
 import type { CharacterCardJson, GreetingState, ParsedCard } from '../../src/lib/cards/types';
 import { estimateTokens } from '../../src/lib/tokenEstimate';
+import type { DbStatement } from './db/driver';
 
 /**
  * Characters: import, read, edit, fork, delete.
@@ -183,7 +184,7 @@ export async function updateCharacter(env: Env, req: Request): Promise<Response>
   }
 
   const now = Date.now();
-  const statements: D1PreparedStatement[] = [
+  const statements: DbStatement[] = [
     env.DB.prepare('UPDATE characters SET name = ?, card_json = ?, tokens = ? WHERE id = ?').bind(
       card.name,
       JSON.stringify(card),
@@ -242,7 +243,7 @@ export async function forkCharacter(env: Env, req: Request): Promise<Response> {
   const id = crypto.randomUUID();
   const now = Date.now();
 
-  const statements: D1PreparedStatement[] = [
+  const statements: DbStatement[] = [
     env.DB.prepare(
       `INSERT INTO characters (id, name, avatar, card_json, source_format, tokens, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,

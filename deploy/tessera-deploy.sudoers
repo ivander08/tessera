@@ -1,0 +1,4 @@
+# Grants the GitHub Actions deploy user permission to restart only the Tessera unit
+# after an rsync, and nothing else. Install to /etc/sudoers.d/tessera-deploy with mode
+# 0440 and validate with `visudo -c -f /etc/sudoers.d/tessera-deploy`.
+tessera-deploy ALL=(root) NOPASSWD: /bin/systemctl restart tessera

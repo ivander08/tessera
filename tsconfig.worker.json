@@ -17,6 +17,6 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": false
   },
-  "include": ["worker", "worker-configuration.d.ts"],
+  "include": ["worker"],
   "exclude": ["src/**/*.test.ts", "worker/**/*.test.ts"]
 }

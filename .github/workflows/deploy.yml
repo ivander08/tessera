@@ -38,12 +38,21 @@ jobs:
         run: bun test
 
       - name: Lint
-        run: bunx oxlint src worker
+        # `server` is the self-hosted entry point; it is linted with the rest rather than
+        # left out of CI because it is newer than the other two.
+        run: bunx oxlint src worker server
 
+  # Required repo secrets: VPS_HOST, VPS_USER, VPS_SSH_KEY.
+  # CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID can be deleted once D1 is retired.
   deploy:
     name: Deploy
     needs: check
     runs-on: ubuntu-latest
+    # Exposed as env so the run steps read $VPS_HOST/$VPS_USER without nested
+    # ${{ }} expressions inside quotes.
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
     steps:
       - uses: actions/checkout@v4
 
@@ -55,14 +64,42 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Build
-        # `build` typechecks and builds for the browser. Deliberately NOT `build:native`:
-        # that bakes the Worker origin into dist/, which is correct for the APK and wrong
-        # for the website, which is served BY the Worker.
+        # `build` typechecks and builds for the browser and produces dist/, which the
+        # deploy copies to the VPS. The server process there serves it statically.
         run: bun run build
 
-      - name: Deploy to Cloudflare
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy
+      - name: Set up SSH
+        run: |
+          sudo apt-get update && sudo apt-get install -y openssh-client rsync
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # Host key is pinned from the live server so a later MITM cannot silently
+          # harvest the deploy key.
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Copy to the server
+        # `--exclude data` is load-bearing: the live SQLite database and its WAL files
+        # live in /srv/tessera/data, and a deploy that overwrote them would destroy the
+        # app's only copy.
+        #
+        # `dist/` is deliberately NOT excluded. It is the built SPA and the server serves
+        # it statically, so excluding it would deploy an API with no website in front of
+        # it. It is gitignored but present in the runner's working tree, which is exactly
+        # why it has to be copied rather than rebuilt on the server.
+        run: |
+          rsync -az --delete \
+            --exclude '.git' --exclude 'node_modules' --exclude 'data' \
+            -e "ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes" \
+            ./ "$VPS_USER@$VPS_HOST:/srv/tessera/"
+
+      - name: Install dependencies and restart the service
+        run: |
+          ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes "$VPS_USER@$VPS_HOST" \
+            'cd /srv/tessera && /usr/local/bin/bun install --frozen-lockfile --production && sudo systemctl restart tessera'
+
+      - name: Verify the service is healthy
+        # The runner cannot reach the VPS loopback, so the health probe runs there.
+        run: |
+          ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes "$VPS_USER@$VPS_HOST" \
+            'sleep 2 && systemctl is-active tessera && curl -fsS http://127.0.0.1:8787/api/health'

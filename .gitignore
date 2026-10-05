@@ -17,11 +17,6 @@ out/
 # Secrets — never commit
 .env
 .env.*
-# `.env.native` holds only `VITE_API_BASE`, a public Worker URL — see its own header.
-# It is NOT a secret, and `src/lib/native/bundle.test.ts` hard-fails without it, so the
-# blanket `.env.*` rule above was turning every CI run red on a file that is meant to be
-# in the repo. The rule stays for the files that ARE secret (`.dev.vars`, `.env.local`).
-!.env.native
 !.env.example
 *.pem
 *.key
@@ -80,10 +75,3 @@ dist-ssr
 
 # Wrangler generated types are committed; local build info is not
 node_modules/.tmp/
-
-# Native wrapper build output and generated projects — regenerate with
-# `npx cap add android` / `cargo build`. See WRAPPERS.md.
-src-tauri/target/
-src-tauri/gen/
-android/
-ios/

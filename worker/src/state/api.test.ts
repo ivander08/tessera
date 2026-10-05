@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
-import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, test } from 'bun:test';
 
+import { exec, makeTestEnv } from '../test/harness';
 import { clearState, getState, patchState } from './api';
 
 /**
@@ -14,33 +14,15 @@ import { clearState, getState, patchState } from './api';
  * swipe describes a version that is no longer on screen.
  */
 
-const MIGRATIONS = [
-  '0000_init.sql',
-  '0001_memory.sql',
-  '0002_state.sql',
-  '0003_presets.sql',
-  '0004_swipes_presets.sql',
-  '0005_branching.sql',
-  '0006_walk_index.sql',
-  '0007_scene_setup.sql',
-  '0008_cast.sql',
-  '0009_message_speaker.sql',
-  '0011_message_state.sql',
-  '0012_message_deleted.sql',
-  '0013_presets_authored.sql',
-  '0014_provenance.sql',
-  '0015_supersession_provenance.sql',
-];
-
-function exec(db: Database, sql: string, ...params: unknown[]): void {
-  db.run(sql, ...(params as never[]));
-}
-
 function makeEnv(): { env: Env; db: Database } {
-  const db = new Database(':memory:');
-  for (const name of MIGRATIONS) {
-    db.exec(readFileSync(new URL(`../../../migrations/${name}`, import.meta.url), 'utf8'));
-  }
+  const { env, db } = makeTestEnv({
+    extra: { TESSERA_TOKEN: 'token' },
+    stub: (sql) => {
+      const trimmed = sql.replace(/\s+/g, ' ').trim();
+      if (trimmed.includes('FROM chat_scene_setup')) return { row: null };
+      return undefined;
+    },
+  });
 
   exec(
     db,
@@ -49,37 +31,7 @@ function makeEnv(): { env: Env; db: Database } {
      VALUES ('chat-1', NULL, NULL, 't', NULL, 0, 's', 0, 0)`,
   );
 
-  const DB = {
-    prepare(sql: string) {
-      const trimmed = sql.replace(/\s+/g, ' ').trim();
-      let params: unknown[] = [];
-      const statement = {
-        bind(...values: unknown[]) {
-          params = values;
-          return statement;
-        },
-        async all() {
-          return { results: db.query(sql).all(...(params as never[])), success: true, meta: {} };
-        },
-        async first() {
-          if (trimmed.includes('FROM chat_scene_setup')) return null;
-          return db.query(sql).get(...(params as never[])) ?? null;
-        },
-        async run() {
-          const result = db.run(sql, ...(params as never[]));
-          return { success: true, meta: { changes: result.changes } };
-        },
-      };
-      return statement;
-    },
-    batch: async (statements: Array<{ run: () => Promise<unknown> }>) => {
-      const out = [];
-      for (const statement of statements) out.push(await statement.run());
-      return out;
-    },
-  };
-
-  return { env: { DB, APP_NAME: 'Tessera', TESSERA_TOKEN: 'token' } as unknown as Env, db };
+  return { env, db };
 }
 
 function row(db: Database, id: string, parentId: string | null, role: string, state: unknown, active = 1): void {

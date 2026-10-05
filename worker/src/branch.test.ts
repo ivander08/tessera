@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { readFileSync } from 'node:fs';
 import {
   BRANCH_COLUMNS,
   loadAlternatives,
@@ -12,6 +11,7 @@ import {
   walkPath,
   type BranchRow,
 } from './branch';
+import { makeTestEnv } from './test/harness';
 
 /**
  * The transcript walk.
@@ -164,67 +164,8 @@ describe('walkPath', () => {
  * queries through a D1-shaped shim, so the SQL itself is what is under test.
  */
 describe('the walk as SQL', () => {
-  // Every migration, so the schema under test is the schema that ships. A partial set
-  // silently changes what the queries can do — 0004 alone cannot run without 0003.
-  const MIGRATIONS = [
-    '0000_init.sql',
-    '0001_memory.sql',
-    '0002_state.sql',
-    '0003_presets.sql',
-    '0004_swipes_presets.sql',
-    '0005_branching.sql',
-    '0006_walk_index.sql',
-  '0007_scene_setup.sql',
-  '0008_cast.sql',
-  '0009_message_speaker.sql',
-  '0011_message_state.sql',
-  '0012_message_deleted.sql',
-
-  '0013_presets_authored.sql',
-
-  '0014_provenance.sql',
-
-
-  '0015_supersession_provenance.sql',
-  ];
-
-  function makeDb() {
-    const db = new Database(':memory:');
-    for (const name of MIGRATIONS) {
-      db.exec(readFileSync(new URL(`../../migrations/${name}`, import.meta.url), 'utf8'));
-    }
-    const env = {
-      DB: {
-        prepare(sql: string) {
-          let params: unknown[] = [];
-          const statement = {
-            bind(...values: unknown[]) {
-              params = values;
-              return statement;
-            },
-            async all() {
-              return { results: db.query(sql).all(...(params as never[])), success: true, meta: {} };
-            },
-            async first() {
-              return db.query(sql).get(...(params as never[])) ?? null;
-            },
-            async run() {
-              const result = db.run(sql, ...(params as never[]));
-              return { success: true, meta: { changes: result.changes } };
-            },
-          };
-          return statement;
-        },
-        // D1's batch runs statements in one round trip. The shim has no round trip to
-        // save, so it runs them in order and returns one result per statement — which is
-        // what the caller reads.
-        async batch(statements: Array<{ all(): Promise<unknown> }>) {
-          const out = [];
-          for (const statement of statements) out.push(await statement.all());
-          return out;
-        },
-      },
-    } as unknown as Env;
+  function makeDb(): { db: Database; env: Env } {
+    const { env, db } = makeTestEnv();
     return { db, env };
   }
 

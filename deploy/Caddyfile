@@ -1,0 +1,36 @@
+# Tessera — bring-up over the VPS's public IP, before a domain exists.
+#
+# Automatic HTTPS is deliberately off here: Caddy only issues a Let's Encrypt
+# certificate for a hostname, and an IP literal has none, so with the default
+# config Caddy would try, fail, and never serve. The site is plain http://<ip>/
+# during bring-up — acceptable on a private network only, see docs/vps-deploy.md.
+#
+# Tencent Lighthouse ships its own firewall in the console. Ports 80 and 443 must
+# be opened there, not only in ufw, or the site is unreachable from outside.
+:80 {
+	reverse_proxy 127.0.0.1:8787 {
+		# REQUIRED. Caddy buffers proxied responses by default, which collapses the
+		# /api/chat SSE stream into a single burst delivered when the turn ends.
+		# -1 disables buffering so each token frame reaches the browser as it is
+		# written. Without this the UI looks frozen for the whole reply.
+		flush_interval -1
+	}
+}
+
+# --- Post-cutover form -----------------------------------------------------------------
+#
+# Once a domain's A record points at this IP, replace the `:80` site address above
+# with the hostname and add the global block. Caddy then obtains and renews the
+# Let's Encrypt certificate automatically. Nothing in the app changes and nothing
+# needs rebuilding: the SPA calls /api/* same-origin, so there is no API base URL
+# or CORS entry tied to the origin. Uncomment, swap in the real domain, reload.
+#
+# {
+# 	email you@example.com
+# }
+#
+# tessera.example.com {
+# 	reverse_proxy 127.0.0.1:8787 {
+# 		flush_interval -1
+# 	}
+# }

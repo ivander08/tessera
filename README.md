@@ -8,7 +8,7 @@
 
 Branching scenes · memory that does not rot · engine-authoritative world state
 
-<sub>One codebase → website, Android, desktop. No server you run.</sub>
+<sub>One codebase, one server you own. Web-only by choice.</sub>
 
 </div>
 
@@ -46,7 +46,7 @@ Underneath, three things run automatically while you read:
 | **The consultant** | An interview that drafts, critiques and token-costs a card, and writes it |
 | **Presets** | An authored document — system prompt, pre/post-history instructions, impersonation prompt, prefill, stop strings, sampler values — attached per chat |
 | **Cache efficiency** | The measured range in the research: a real client at 46.5% where 91.5% was achievable · a live hit-rate meter one tap from every chat |
-| **Platforms** | Website (PWA) · Android APK · Windows desktop. One TypeScript codebase; the Worker holds the key and runs the background jobs |
+| **Platforms** | A website (PWA-installable) served by your own Bun process, with the SQLite database as a local file. One TypeScript codebase; the server holds the key and runs the background jobs |
 
 ---
 
@@ -117,23 +117,25 @@ The full rationale, provider mechanics and anti-pattern list: [`docs/research/12
 
 ## Running it
 
-Prerequisites: `bun`, and a Cloudflare account (`bunx wrangler login`).
+Prerequisites: `bun`. The server needs no account anywhere — the database is a file and the model call is made with your own provider key.
 
 ```sh
 bun install
 
-# Local development
+# Development
 echo "TESSERA_TOKEN=$(openssl rand -hex 32)" > .dev.vars
-bun run db:migrate:local
-bun run worker:dev        # Worker + API on :8787
+bun run dev               # Vite on :5180, hot reload
 
-# Production
-bunx wrangler secret put TESSERA_TOKEN
-bun run db:migrate
-bun run deploy
+# Run the server itself, against a local database
+TESSERA_TOKEN=$(openssl rand -hex 32) bun run server   # http://127.0.0.1:8787
+
+# Production build
+bun run build             # typechecks and writes dist/
 ```
 
-Then open the deployed URL, paste the same token at `/setup`, and configure a provider key and model at `/settings`. **Tessera ships with no default model** — it refuses to send until both are chosen.
+Open the URL, paste the same token at `/setup`, and configure a provider key and model at `/settings`. **Tessera ships with no default model** — it refuses to send until both are chosen.
+
+Deploying to a VPS, including the systemd unit, the Caddy reverse proxy and the backup timer, is [`docs/vps-deploy.md`](docs/vps-deploy.md).
 
 ### Verify the cache meter rather than trusting it
 
@@ -141,9 +143,9 @@ The whole design rests on one claim: the prompt prefix is stable, so the provide
 
 Send ~20 turns in one chat and read the meter in the chat menu — it should be **above 80%**. Then temporarily prepend `Current time: ${Date.now()}` to the system prompt in `/settings` and send two more turns. **The hit rate must collapse toward zero.** If it does not, the meter is lying and every other number in the app is worthless. Revert afterwards.
 
-### The wrappers
+### Streaming
 
-`WRAPPERS.md` covers the native shells. The one thing worth knowing before touching them: both shells ship a way to silently break streaming, and neither throws. `CapacitorHttp` and `tauri-plugin-http` both buffer the response body, so replies simply arrive all at once at the end. Neither is enabled, and neither should be.
+The transcript is an SSE stream. One thing must not be configured away: whatever reverse proxy sits in front of the server must not buffer the response. Caddy buffers proxied responses by default, which collapses a turn into one burst delivered at the end, and `deploy/Caddyfile` sets `flush_interval -1` for exactly that reason. If replies ever arrive all at once, that is the first thing to check.
 
 ---
 
@@ -152,9 +154,9 @@ Send ~20 turns in one chat and read the meter in the chat menu — it should be 
 Four things that must not be "optimized" away:
 
 - **`src/lib/prompt/assemble.ts` is the load-bearing file.** Nothing that varies per turn may be emitted before `tailStart`. A memory block, a state block, or a recalled fact in the head invalidates the cache for every subsequent turn.
-- **`worker/src/chat.ts` never imports `js-tiktoken`.** The vocabulary is 2.3 MB and building its BPE map at module load exceeds a Worker's startup CPU budget, failing deployment outright. The Worker uses `src/lib/tokenEstimate.ts` with a per-model calibration factor; the browser gets the exact tokenizer on demand.
+- **`worker/src/chat.ts` never imports `js-tiktoken`.** The vocabulary is 2.3 MB and building its BPE map at module load would be paid on every server start. The worker uses `src/lib/tokenEstimate.ts` with a per-model calibration factor; the browser gets the exact tokenizer on demand.
 - **Never add `provider.order`, `provider.sort`, `provider.only`, or `provider.ignore`** to an OpenRouter request. Any of them pins the provider and silently disables sticky routing, which is the mechanism the cache depends on.
-- **Never enable `CapacitorHttp` or add `tauri-plugin-http`.** Both buffer the response body, so SSE stops streaming. See [`WRAPPERS.md`](WRAPPERS.md) §1.
+- **Never buffer the SSE response.** A reverse proxy that buffers turns the streaming transcript into a single delayed burst. See `deploy/Caddyfile`.
 
 <details>
 <summary><b>Research index — 20 documents, ~750 KB</b></summary>

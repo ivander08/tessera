@@ -1,4 +1,3 @@
-import { nativeFetch } from './native/sse';
 import { parseSse } from './sse';
 
 const TOKEN_KEY = 'tessera.token';
@@ -19,23 +18,9 @@ export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
 }
 
-/**
- * The Worker origin, when the app is NOT served by the Worker itself.
- *
- * In a browser tab the SPA is served by the Worker, so a relative `/api/...` is
- * already correct. In the Capacitor and Tauri shells the SPA is served from the
- * shell's own local origin (`https://localhost`, `tauri://localhost`), where a
- * relative path resolves to a server that does not exist. The shells therefore set
- * `VITE_API_BASE` at build time, and the Worker's CORS allowlist covers those origins.
- *
- * Read from `import.meta.env` so a plain `vite build` (browser) leaves it empty and
- * every existing relative call keeps working unchanged.
- */
-const API_BASE: string = (import.meta.env?.VITE_API_BASE as string | undefined)?.replace(/\/+$/, '') ?? '';
-
 /** Exposed so the UI can say where it is talking to when that is not obvious. */
 export function apiOrigin(): string {
-  return API_BASE.length > 0 ? API_BASE : window.location.origin;
+  return window.location.origin;
 }
 
 export class UnauthorizedError extends Error {
@@ -66,16 +51,7 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
 
   let res: Response;
   try {
-    // The webview's own fetch, never a shell's patched one: Tauri's plugin-http buffers
-    // the response body and Capacitor's CapacitorHttp does the same, either of which
-    // would turn a streamed reply into one lump at the end.
-    //
-    // `nativeFetch` rather than bare `fetch` is what actually delivers that. In a browser
-    // the two are the same function; under Capacitor the bridge may have overwritten
-    // `window.fetch` with the buffering one, and `nativeFetch` reaches past it to
-    // `window.CapacitorWebFetch`. The comment above described this intent for as long as
-    // the module existed while the call below ignored it.
-    res = await nativeFetch(`${API_BASE}${path}`, { ...init, headers });
+    res = await fetch(`${path}`, { ...init, headers });
   } catch (error) {
     throw new OfflineError(error instanceof Error ? error.message : String(error));
   }

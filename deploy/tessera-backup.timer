@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the Tessera database backup every six hours
+
+[Timer]
+# 00:17, 06:17, 12:17, 18:17 — off the hour so it does not pile onto other cron work.
+OnCalendar=*-*-* 00/6:17:00
+# If the box was down at the scheduled time, run once on the next boot instead of
+# skipping the window entirely.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

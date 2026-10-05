@@ -1,10 +1,10 @@
 import { Database } from 'bun:sqlite';
-import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, test } from 'bun:test';
 
 import { getSceneSetup, loadSceneSetup, maybeUpdateState, patchSceneSetup } from './scene';
 import { DEFAULT_SCENE_SETUP, type SceneSetup } from '../../src/lib/scene/setup';
 import { encryptKey } from '../../src/lib/crypto';
+import { exec, makeTestEnv, one } from './test/harness';
 
 /**
  * The scene-setup endpoints, against the real migrations.
@@ -15,67 +15,9 @@ import { encryptKey } from '../../src/lib/crypto';
  * creates one would break the ordinary case in a way that only shows up on real data.
  */
 
-const MIGRATIONS = [
-  '0000_init.sql',
-  '0001_memory.sql',
-  '0002_state.sql',
-  '0003_presets.sql',
-  '0004_swipes_presets.sql',
-  '0005_branching.sql',
-  '0006_walk_index.sql',
-  '0007_scene_setup.sql',
-  '0008_cast.sql',
-  '0009_message_speaker.sql',
-  '0011_message_state.sql',
-  '0012_message_deleted.sql',
-
-  '0013_presets_authored.sql',
-
-  '0014_provenance.sql',
-
-
-  '0015_supersession_provenance.sql',
-];
-
 function makeEnv(): { env: Env; db: Database } {
-  const db = new Database(':memory:');
-  for (const name of MIGRATIONS) {
-    db.exec(readFileSync(new URL(`../../migrations/${name}`, import.meta.url), 'utf8'));
-  }
-
-  const DB = {
-    prepare(sql: string) {
-      let params: unknown[] = [];
-      const statement = {
-        bind(...values: unknown[]) {
-          params = values;
-          return statement;
-        },
-        async all() {
-          return { results: db.query(sql).all(...(params as never[])), success: true, meta: {} };
-        },
-        async first() {
-          return db.query(sql).get(...(params as never[])) ?? null;
-        },
-        async run() {
-          const result = db.run(sql, ...(params as never[]));
-          return { success: true, meta: { changes: result.changes } };
-        },
-      };
-      return statement;
-    },
-  };
-
-  return { env: { DB, APP_NAME: 'Tessera' } as unknown as Env, db };
-}
-
-/** `bun-types` types the variadic form too narrowly; one seam keeps the cast out of call sites. */
-function exec(db: Database, sql: string, ...params: unknown[]): void {
-  db.run(sql, ...(params as never[]));
-}
-
-function one<T>(db: Database, sql: string, ...params: unknown[]): T | null {
-  return (db.query(sql).get(...(params as never[])) as T | undefined) ?? null;
+  const { env, db } = makeTestEnv();
+  return { env, db };
 }
 
 function seedChat(db: Database, id = 'chat-1'): string {
@@ -242,40 +184,21 @@ describe('scene setup: the state gate', () => {
       resolveKey({ key_enc: new Uint8Array(enc), iv: new Uint8Array(iv) }),
     );
 
-    const DB = {
-      prepare(sql: string) {
+    // The base env's own connection, so the rows the tests seeded are the rows the
+    // provider path reads. The three answers below are the ones the shim supplied by hand.
+    return makeTestEnv({
+      extra: { TESSERA_TOKEN: 'token' },
+      db,
+      stub: (sql) => {
         const trimmed = sql.replace(/\s+/g, ' ').trim();
-        let params: unknown[] = [];
-        const statement = {
-          bind(...values: unknown[]) {
-            params = values;
-            return statement;
-          },
-          async all() {
-            if (trimmed.includes('FROM settings')) {
-              return {
-                results: Object.entries(settings).map(([key, value]) => ({ key, value })),
-                success: true,
-                meta: {},
-              };
-            }
-            return { results: db.query(sql).all(...(params as never[])), success: true, meta: {} };
-          },
-          async first() {
-            if (trimmed.includes('FROM provider_keys')) return await keyPromise;
-            if (trimmed.includes('FROM token_calibration')) return { factor: 1, samples: 0 };
-            return db.query(sql).get(...(params as never[])) ?? null;
-          },
-          async run() {
-            const result = db.run(sql, ...(params as never[]));
-            return { success: true, meta: { changes: result.changes } };
-          },
-        };
-        return statement;
+        if (trimmed.includes('FROM settings')) {
+          return { rows: Object.entries(settings).map(([key, value]) => ({ key, value })) };
+        }
+        if (trimmed.includes('FROM provider_keys')) return { row: keyPromise };
+        if (trimmed.includes('FROM token_calibration')) return { row: { factor: 1, samples: 0 } };
+        return undefined;
       },
-    };
-
-    return { DB, APP_NAME: 'Tessera', TESSERA_TOKEN: 'token' } as unknown as Env;
+    }).env;
   }
 
   test("mode 'off' makes no provider call and writes nothing", async () => {

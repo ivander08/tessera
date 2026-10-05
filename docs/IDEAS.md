@@ -194,8 +194,8 @@ Small, high-frequency wins found while reading this codebase.
   `src/routes/Characters.tsx:92`, `src/routes/Personas.tsx:57`, `src/routes/Presets.tsx:144`.
   The `Modal`-based sheet now used for forking (`src/components/NamePrompt.tsx`) is the
   pattern; a confirmation needs only the two-button form of it. The native dialog is
-  suppressed outright in some embedded webviews, and both the APK and the Tauri shell host
-  this bundle.
+  suppressed outright in some embedded webviews, so the in-app sheet is the only form
+  that works everywhere.
 - **De-duplicate `/personas` by name.** The live database holds **four personas all named
   `Ivan`** (`GET /api/personas` returns 5 rows, 2 distinct names), so the picker in
   `src/components/PersonaMenu.tsx` shows four identical rows with different descriptions

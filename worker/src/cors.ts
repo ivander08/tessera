@@ -1,31 +1,21 @@
 /**
- * CORS for the native shells.
+ * CORS for local development.
  *
- * In a browser tab the SPA is served by this Worker, so `/api/*` is same-origin and no
- * CORS applies. The Capacitor and Tauri shells serve the app from their own local
- * origin (`https://localhost` and `tauri://localhost`), so every call crosses origins.
+ * In production the SPA is served by the same process as `/api/*`, so every call is
+ * same-origin and no CORS applies. The only cross-origin caller left is `vite dev`
+ * running the SPA on its own port while the API runs elsewhere, which is what the
+ * allowlist below exists for.
  *
  * `Authorization: Bearer …` is not a CORS-safelisted request header, so EVERY `/api/*`
  * call is preflighted. The preflight carries no `Authorization` header by design, which
  * is why it must be answered before the auth check — routing it through `isAuthorized`
- * would 401 every one of them and the native shells would simply never work.
+ * would 401 every one of them and the dev SPA would simply never work.
  *
  * The allowlist is explicit rather than `*`: the bearer token is the only credential, and
  * `*` would let any page on the internet drive this API from a user's browser.
  */
 
 const ALLOWED_ORIGINS: Record<string, true> = {
-  // Capacitor Android serves the bundled app from here.
-  'https://localhost': true,
-  // Tauri v2 on Windows. This is the DEFAULT scheme, and it is http, not https:
-  // `tauri-utils` documents `access-control-allow-origin: http://tauri.localhost`,
-  // and `https://` is only used when `app.windows[].useHttpsScheme` is set, which it
-  // is not. Omitting this entry makes every desktop API call fail CORS.
-  'http://tauri.localhost': true,
-  // Tauri v2 on macOS and Linux.
-  'tauri://localhost': true,
-  // Tauri v2 when `useHttpsScheme` is enabled.
-  'https://tauri.localhost': true,
   // `wrangler dev` serving the SPA to a second dev port (e.g. `vite` on 5180).
   // 5173 is Vite's default and belongs to whatever else is running on this machine;
   // this project claims its own port so `bun run dev` never collides. Keep in sync

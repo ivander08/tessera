@@ -9,13 +9,9 @@ import type { RecallHit } from '../../../src/lib/memoryTypes';
 /**
  * HTTP surface for the memory viewer (`src/routes/Memory.tsx`).
  *
- * Three route lines are needed in `worker/src/index.ts`:
- *
- *   const memoryMatch = /^\/api\/chats\/([^/]+)\/memory$/.exec(path);
- *   if (memoryMatch && method === 'GET') return listMemory(env, decodeURIComponent(memoryMatch[1]));
- *   if (path === '/api/memory/facts' && method === 'POST') return createFact(env, req);
- *   const memoryEntry = /^\/api\/memory\/(facts|summaries)\/([^/]+)$/.exec(path);
- *   if (memoryEntry) return mutateMemory(env, req, memoryEntry[1], decodeURIComponent(memoryEntry[2]));
+ * Three routes reach these functions, dispatched from `worker/src/index.ts` through
+ * `worker/src/api/memory.ts`: `GET /api/chats/:id/memory`, `POST /api/memory/facts`, and
+ * `PATCH`/`DELETE /api/memory/(facts|summaries)/:id`.
  *
  * Nothing here touches the prompt. Editing or deleting a memory changes only the
  * side tables; the message history is append-only and stays that way.

@@ -1,0 +1,30 @@
+[Unit]
+Description=Tessera
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=tessera
+Group=tessera
+WorkingDirectory=/srv/tessera
+
+# PORT=8787 in /etc/tessera.env is a loopback bind: Caddy is the only process that
+# talks to the app, and it reaches it over 127.0.0.1. Nothing should ever expose
+# 8787 on a public interface — TLS, compression and the SSE flush live in Caddy.
+EnvironmentFile=/etc/tessera.env
+ExecStart=/usr/local/bin/bun run /srv/tessera/server/index.ts
+Restart=always
+RestartSec=3
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+# SQLite runs in WAL mode, so every write touches not just the .sqlite file but also
+# its -wal and -shm siblings, and a checkpoint rewrites the main file. This names the
+# one directory the unit may write, so the database stays writable when the hardening
+# above is raised to ProtectSystem=strict.
+ReadWritePaths=/srv/tessera/data
+
+[Install]
+WantedBy=multi-user.target

@@ -1,9 +1,9 @@
 import { Database } from 'bun:sqlite';
-import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'bun:test';
 
 import { DEFAULT_KNOBS, loadChatSettings } from './db';
 import { kenari } from './providers/kenari';
+import { makeTestEnv } from './test/harness';
 
 /**
  * The sampler defaults, and the fact that they reach the provider's request body.
@@ -19,57 +19,10 @@ import { kenari } from './providers/kenari';
  * Both halves are asserted, because either one alone passes while the feature is dead: a
  * default that is computed but never spread, and a spread of a map that is still empty.
  */
-const MIGRATIONS = [
-  '0000_init.sql',
-  '0001_memory.sql',
-  '0002_state.sql',
-  '0003_presets.sql',
-  '0004_swipes_presets.sql',
-  '0005_branching.sql',
-  '0006_walk_index.sql',
-  '0007_scene_setup.sql',
-  '0008_cast.sql',
-  '0009_message_speaker.sql',
-  '0011_message_state.sql',
-  '0012_message_deleted.sql',
-
-  '0013_presets_authored.sql',
-
-  '0014_provenance.sql',
-
-
-  '0015_supersession_provenance.sql',
-];
-
-function makeEnv(): { env: Env; db: Database } {
-  const db = new Database(':memory:');
-  for (const name of MIGRATIONS) {
-    db.exec(readFileSync(new URL(`../../migrations/${name}`, import.meta.url), 'utf8'));
-  }
-  const DB = {
-    prepare(sql: string) {
-      let params: unknown[] = [];
-      const statement = {
-        bind(...values: unknown[]) {
-          params = values;
-          return statement;
-        },
-        async all() {
-          return { results: db.query(sql).all(...(params as never[])), success: true, meta: {} };
-        },
-        async first() {
-          return db.query(sql).get(...(params as never[])) ?? null;
-        },
-        async run() {
-          const result = db.run(sql, ...(params as never[]));
-          return { success: true, meta: { changes: result.changes } };
-        },
-      };
-      return statement;
-    },
-  };
-  return { env: { DB, APP_NAME: 'Tessera' } as unknown as Env, db };
-}
+const makeEnv = (): { env: Env; db: Database } => {
+  const { env, db } = makeTestEnv();
+  return { env, db };
+};
 
 function setSetting(db: Database, key: string, value: string): void {
   db.run(

@@ -1,0 +1,14 @@
+[Unit]
+Description=Tessera database backup
+# The backup must not run against a database the app has not created yet.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Supplies DATABASE_PATH; the script falls back to the default path if this is absent.
+EnvironmentFile=-/etc/tessera.env
+ExecStart=/usr/local/bin/tessera-backup
+
+[Install]
+WantedBy=multi-user.target
