@@ -125,6 +125,9 @@ Reuse the token already in the Cloudflare Worker secret so existing provider key
 decryptable; `TESSERA_TOKEN` is the key-encryption key, and changing it makes every
 stored provider key undecryptable. If you need a fresh one: `openssl rand -hex 32`.
 
+**`.dev.vars` is not authoritative** — it is a local dev file and can be stale. §6e shows
+how to test a candidate token against the exported key before trusting it.
+
 > **Order matters.** The clone in §3 happens as your login user, before the `tessera`
 > user exists. If you run §4's `chown` before §3, the clone fails. If you forget the
 > `chown` entirely, `systemctl start tessera` fails with
@@ -159,116 +162,107 @@ sudo visudo -c -f /etc/sudoers.d/tessera-deploy
 
 ## 6. Get your data onto the VPS
 
-**Do not use `wrangler d1 export`.** It refuses any database containing FTS5 virtual
-tables (`X [ERROR] D1 Export error: cannot export databases with Virtual Tables (fts5)`),
-and Tessera has two — `messages_fts` and `facts_fts`. Before it fails it also **takes an
-exclusive lock on the live database**, which your still-running Worker needs. There is no
-flag that works around it.
+The live database is the one behind the deployed Worker, so the data has to come out of
+D1. Two things make that awkward, and both have a clean answer.
 
-The good news: you do not need D1 for this at all. `backup-2026-10-02/local.sqlite` is a
-complete SQLite copy of the database, schema and rows, taken straight from D1. Copying a
-file is the migration.
+**`wrangler d1 export` refuses a database containing FTS5 virtual tables** —
+`X [ERROR] D1 Export error: cannot export databases with Virtual Tables (fts5)`. Tessera
+has two (`messages_fts`, `facts_fts`). The fix is **not** to drop them from production:
+`--table=<name>` scopes the export to one table, and a scoped export never includes the
+virtual tables, so it never trips the check. Export every real table that way.
 
-### 6a. Decide whether you can accept the copy's age
+**The dump writes blobs as hex literals** (`X'af82…'`), which is what
+`provider_keys.key_enc` and `iv` are. That round-trips correctly through `sqlite3`, so the
+stored provider key still decrypts on the server — but only under the same
+`TESSERA_TOKEN`. See §6e.
 
-The file is from **2026-10-02**. Anything written in Tessera after that date exists only
-in D1. Check what you would lose:
+### 6a. Export
 
-```sh
-cd C:\Users\Ivander\Documents\Projects\tessera
-sqlite3 backup-2026-10-02/local.sqlite \
-  "SELECT max(seq) AS last_seq, datetime(max(created_at)/1000,'unixepoch') AS last_write FROM messages"
-```
-
-If that timestamp is the last time you used the app, nothing is lost and you are done
-deciding. If you have written since, you have two choices:
-
-- **Accept the gap.** Simplest, if it is a handful of messages you can retype.
-- **Pull the missing rows through the D1 HTTP API**, which has no virtual-table
-  limitation and does not lock the database. Read those with
-  `wrangler d1 execute tessera-db --remote --json --command="SELECT ... FROM messages WHERE seq > <last_seq>"`
-  and insert them into the copied file. Ask before doing this — the tables have to be
-  reconciled together (`messages`, `chats`, `state`, `facts`, `summaries`), not one at a
-  time, or foreign keys and the visible-path walk will disagree.
-
-Everything below assumes the first choice.
-
-### 6b. Copy the file to the VPS
+Run on the dev machine, in the repo:
 
 ```sh
-# from the dev machine
-scp backup-2026-10-02/local.sqlite ivander@<ip>:/tmp/tessera.sqlite
+TABLES="chats messages characters character_assets chat_cast chat_scene_setup facts jobs personas presets provider_keys settings state summaries token_calibration"
+ARGS=""; for t in $TABLES; do ARGS="$ARGS --table=$t"; done
+bunx wrangler d1 export tessera-db --remote --skip-confirmation --no-schema $ARGS --output=d1-data.sql
 ```
+
+Confirm the dump matches the live database before going further:
 
 ```sh
-# on the VPS — the data directory is owned by the service user
-sudo install -o tessera -g tessera -m 0644 /tmp/tessera.sqlite /srv/tessera/data/tessera.sqlite
+for t in chats messages; do printf "%-10s %s\n" "$t" "$(grep -c "INSERT INTO \"$t\"" d1-data.sql)"; done
+bunx wrangler d1 execute tessera-db --remote --json --command="SELECT (SELECT count(*) FROM chats) AS c, (SELECT count(*) FROM messages) AS m"
 ```
 
-### 6c. Apply the migrations the file is missing
+### 6b. Copy it over
 
-The copied file carries a `d1_migrations` table listing what already ran, so this loop
-applies only the remainder — expect `0014`, `0015` and `0016`.
+```sh
+scp d1-data.sql ivander@<ip>:/tmp/d1-data.sql
+ls -la /tmp/d1-data.sql
+```
 
-It must read that table rather than run a fixed list, because **the migrations are not
-re-runnable**: `0013` rebuilds the `presets` table and fails on a second pass. This is the
-one step where doing it "twice to be safe" causes the damage.
+A 0-byte file means the copy failed; do not import it.
+
+### 6c. Migrate, then import
+
+Migrations create the schema — including the FTS tables, their six sync triggers, and the
+`rebuild` that populates the index. So search works with no manual step, and the import
+only has to supply rows.
 
 ```sh
 cd /srv/tessera
+
+# clears a stale file AND its -wal/-shm siblings. Leaving those behind is a classic way
+# to get a database that reads as subtly wrong.
+sudo rm -f /srv/tessera/data/tessera.sqlite*
+
 for f in $(ls migrations/*.sql | sort); do
-  name=$(basename "$f")
-  if sqlite3 /srv/tessera/data/tessera.sqlite \
-       "SELECT 1 FROM d1_migrations WHERE name = '$name'" | grep -q 1; then
-    echo "already applied, skipping: $name"
-    continue
-  fi
-  echo "applying $name"
-  sqlite3 /srv/tessera/data/tessera.sqlite < "$f" || { echo "FAILED on $name"; break; }
+  echo "applying $f"
+  sudo -u tessera sqlite3 /srv/tessera/data/tessera.sqlite < "$f" || { echo "FAILED $f"; break; }
 done
+
+sudo -u tessera sqlite3 /srv/tessera/data/tessera.sqlite < /tmp/d1-data.sql
 ```
 
-Each line must print either `already applied, skipping` or `applying`. A `FAILED` line
-means stop and read the error — do not re-run the loop.
-
-### 6d. Verify the schema is current
-
-Both commands must print a column name. If either prints nothing, the corresponding
-migration did not run, and the app will fail later with `no such column` rather than
-refusing to start.
+### 6d. Verify — this is the gate
 
 ```sh
-sqlite3 /srv/tessera/data/tessera.sqlite \
-  "SELECT group_concat(name) FROM pragma_table_info('facts')" | tr ',' '\n' | grep learned_at_seq
-sqlite3 /srv/tessera/data/tessera.sqlite \
-  "SELECT group_concat(name) FROM pragma_table_info('chat_cast')" | tr ',' '\n' | grep joined_seq
+sudo -u tessera sqlite3 /srv/tessera/data/tessera.sqlite \
+  "SELECT (SELECT count(*) FROM chats), (SELECT count(*) FROM messages), (SELECT max(seq) FROM messages)"
 ```
 
-### 6e. Rebuild the search index
+Must match the counts from §6a. Anything else is a partial import — **do not start the
+service on it.**
 
-`0016` rewrites rows, and a `wrangler`-produced file may carry an empty FTS index. Check,
-then rebuild if the first number is 0 while the second is not. `messages_fts` is an
-external-content table, so `rebuild` regenerates the index from `messages` — it does not
-touch or duplicate your data.
+### 6e. The token must be the one the keys were encrypted with
+
+`TESSERA_TOKEN` is not only the bearer token: it is the key-encryption key for
+`provider_keys`. A wrong one produces a server that starts cleanly, serves the UI, and
+then fails every message with *"The stored kenari key can no longer be decrypted because
+TESSERA_TOKEN changed."*
+
+**`.dev.vars` is not authoritative** — it is a local dev file and can be stale, so it is
+the wrong thing to copy the token from. Test the candidate tokens against the key that
+was actually exported:
 
 ```sh
-sqlite3 /srv/tessera/data/tessera.sqlite "SELECT count(*) FROM messages_fts; SELECT count(*) FROM messages;"
+cat > /tmp/keytest.ts <<'EOF'
+import { SqliteDb } from '/srv/tessera/worker/src/db/sqlite';
+import { loadProviderKey } from '/srv/tessera/worker/src/keys';
+const db = new SqliteDb('/srv/tessera/data/tessera.sqlite');
+for (const token of process.argv.slice(2)) {
+  const env = { DB: db, APP_NAME: 'Tessera', TESSERA_TOKEN: token } as Env;
+  const r = await loadProviderKey(env, 'kenari');
+  console.log(`${token.slice(0, 8)}…  ${r.ok ? 'DECRYPTS OK' : 'FAILED'}`);
+}
+db.close();
+EOF
 
-# only if messages_fts is empty and messages is not
-sqlite3 /srv/tessera/data/tessera.sqlite "INSERT INTO messages_fts(messages_fts) VALUES('rebuild');"
-sqlite3 /srv/tessera/data/tessera.sqlite "INSERT INTO facts_fts(facts_fts) VALUES('rebuild');"
+cd /srv/tessera && bun run /tmp/keytest.ts <token-a> <token-b>
 ```
 
-### 6f. Record the source counts, for the parity check in §11
-
-```sh
-sqlite3 /srv/tessera/data/tessera.sqlite \
-  "SELECT (SELECT count(*) FROM chats) AS chats, (SELECT count(*) FROM messages) AS messages, (SELECT max(seq) FROM messages) AS last_seq"
-```
-
-Write that line down. §11 compares the running app against it — matching counts are what
-prove the copy was complete, and they are meaningless if taken after the app has already
-written to the file.
+Put the token that prints `DECRYPTS OK` into `/etc/tessera.env`, and enter **that same
+token** in the browser at `/setup` — it is both the server's credential and the key that
+decrypts the provider key, so the two must agree.
 
 ## 7. Bring up over the IP and verify
 

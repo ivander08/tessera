@@ -75,3 +75,6 @@ dist-ssr
 
 # Wrangler generated types are committed; local build info is not
 node_modules/.tmp/
+
+# One-off D1 exports produced during the VPS migration.
+d1-data.sql
