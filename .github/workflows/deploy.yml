@@ -74,9 +74,27 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
+
+          # The key is printed as a FINGERPRINT, never as material. When the deploy fails
+          # with "Permission denied (publickey)", the two candidates are a secret that
+          # does not match the installed key and a secret that will not parse — and the
+          # runner cannot tell you which, because both look identical from there. This
+          # line makes the first case answerable: compare it against
+          #   ssh-keygen -lf ~/.ssh/tessera_deploy
+          # on the machine holding the key (or `ssh-keygen -lf` the key in CI's env).
+          echo "key fingerprint: $(ssh-keygen -lf ~/.ssh/id_ed25519 | awk '{print $2}')"
+          echo "key type/length: $(ssh-keygen -lf ~/.ssh/id_ed25519 | awk '{print $1, $4}')"
+          echo "private key has CR: $(grep -c $'\r' ~/.ssh/id_ed25519 || true)"
+          echo "line count: $(wc -l < ~/.ssh/id_ed25519)"
+
           # Host key is pinned from the live server so a later MITM cannot silently
           # harvest the deploy key.
           ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          # Proves authentication on its own line, so a later rsync failure is clearly
+          # not an SSH problem.
+          ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes \
+            "$VPS_USER@$VPS_HOST" 'echo SSH-OK: authenticated as $(whoami)'
 
       - name: Copy to the server
         # `--exclude data` is load-bearing: the live SQLite database and its WAL files
