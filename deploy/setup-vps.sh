@@ -126,10 +126,23 @@ else
   FAILED=1
 fi
 
-if sudo -u "$DEPLOY_USER" test -w "$REPO_DIR" 2>/dev/null; then
+# Setgid on directories so files rsync creates inherit the tessera group. Without it a
+# deploy writes files owned by the deploy user's own group, and the service cannot read
+# them — a failure that appears only on the *next* deploy, not this one.
+if ! $CHECK_ONLY; then
+  find "$REPO_DIR" -type d -exec chmod g+s {} + 2>/dev/null || true
+fi
+
+# The error output is NOT discarded. `sudo -u` can fail for reasons that have nothing to
+# do with permissions — a missing home directory, a PAM refusal, a bad sudoers entry — and
+# swallowing stderr turns every one of them into a misleading "cannot write".
+write_probe="$(sudo -u "$DEPLOY_USER" sh -c "id -nG; ls -ld '$REPO_DIR'; touch '$REPO_DIR/.write-probe' && echo PROBE-OK || echo PROBE-FAIL" 2>&1)"
+if printf '%s' "$write_probe" | grep -q PROBE-OK; then
   ok "$DEPLOY_USER can write the tree (CI rsync)"
+  $CHECK_ONLY || rm -f "$REPO_DIR/.write-probe"
 else
   bad "$DEPLOY_USER CANNOT write the tree — CI deploys will fail"
+  printf '%s\n' "$write_probe" | sed 's/^/        /'
   FAILED=1
 fi
 
