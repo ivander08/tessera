@@ -75,6 +75,16 @@ jobs:
           printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
 
+          # Echoed because a typo here is invisible and the failure is misleading: sshd
+          # reports "Invalid user tessera_deploy" in ITS log, while the runner only says
+          # "Permission denied (publickey,password)" — which reads as a key problem. An
+          # underscore where the account has a hyphen costs an hour.
+          echo "target: $VPS_USER@$VPS_HOST"
+          if ! printf '%s' "$VPS_USER" | grep -qE '^[a-z_][a-z0-9_-]*$'; then
+            echo "::error::VPS_USER contains characters no Linux account name uses"
+            exit 1
+          fi
+
           # The key is printed as a FINGERPRINT, never as material. When the deploy fails
           # with "Permission denied (publickey)", the two candidates are a secret that
           # does not match the installed key and a secret that will not parse — and the
