@@ -115,8 +115,16 @@ jobs:
         # it statically, so excluding it would deploy an API with no website in front of
         # it. It is gitignored but present in the runner's working tree, which is exactly
         # why it has to be copied rather than rebuilt on the server.
+        #
+        # `--omit-dir-times` is required, not cosmetic. `-a` implies `-t`, and setting a
+        # timestamp on a path needs OWNERSHIP of it, not write permission. The tree is
+        # owned by the `tessera` service user while CI authenticates as `tessera-deploy`,
+        # so every pre-existing directory fails with "failed to set times ... Operation
+        # not permitted" and rsync exits 23. The files are unaffected because CI creates
+        # them itself. `-rltz` rather than `-a` keeps the same transfer semantics without
+        # the ownership-dependent attribute.
         run: |
-          rsync -az --delete \
+          rsync -rltz --delete --omit-dir-times \
             --exclude '.git' --exclude 'node_modules' --exclude 'data' \
             -e "ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes" \
             ./ "$VPS_USER@$VPS_HOST:/srv/tessera/"
