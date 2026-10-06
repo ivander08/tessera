@@ -124,8 +124,14 @@ jobs:
         # them itself. `-rltz` rather than `-a` keeps the same transfer semantics without
         # the ownership-dependent attribute.
         run: |
+          # `.bun` joined the excludes for the same reason as `data`: the tree on the
+          # server contains `/srv/tessera/.bun` — root's bun cache from an install run
+          # as root — and the deploy user cannot delete it. `--delete` then failed on
+          # every file inside it (exit 23) and the deploy died before the restart step.
+          # The cache is a build artifact of `bun install`, which the next step reruns
+          # anyway; syncing it has no value and deleting it is not this job's job.
           rsync -rltz --delete --omit-dir-times \
-            --exclude '.git' --exclude 'node_modules' --exclude 'data' \
+            --exclude '.git' --exclude 'node_modules' --exclude 'data' --exclude '.bun' \
             -e "ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes" \
             ./ "$VPS_USER@$VPS_HOST:/srv/tessera/"
 
