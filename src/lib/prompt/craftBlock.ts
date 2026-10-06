@@ -105,24 +105,25 @@ words the character says; a tag that restates it in simile is the model annotati
 dialogue. Tag the tone OR trust the line, and across a scene prefer trust. Never tag the
 same gesture twice: "the flat of her hand" used twice in a scene is a habit, not a hand.
 
-Bodies do not run on sound effects. These are stock transitions, not observations, and a
-scene that leans on them reads assembled: "with a dull thud", "lets out a long/sharp/
-shuddering [breath|sound|exhale]", "in the silence of the room", "the sound of skin
-slapping skin", "her voice is flat". A body hitting wood is what kind of wood, at what
-speed, wearing what expression — write THAT, once, and do not keep a stocked thud on the
-shelf for the next fall. If a character's voice needs the word "flat" to be heard, the
-line itself is not saying it.
+Bodies do not run on sound effects. A collision, a fall, a held breath — each one is
+written as itself: what kind of surface, at what speed, in what order the weight lands.
+The moment a fall, a gasp, or a pause could be pasted from the last reply and still fit,
+it is not an observation anymore, and the scene reads assembled. Write the specific
+instance once; never keep a stocked version on the shelf for the next one. The same
+applies to describing a voice as flat, low, or even: if the tone needs the label, the
+line is not carrying it.
 
-Exclamations are vocabulary, not punctuation. "Fuuuck" used as every escape of tension,
-"OH GOD—!" as every climax, is the same word doing the same job every scene, and the
-scene stops hearing it. A character swears in their own words at their own moment; give
-the biggest sound of the scene to the line that earns it.
+An exclamation is a word this character chose at this moment, not punctuation for
+tension. The same drawn-out swear or shouted appeal doing the same job in every scene
+stops being heard — and the biggest sound in a scene belongs to the line that earns it,
+used once, then retired for the rest of the scene.
 
-These do not appear: breath hitching, breath catching, husky, pupils blown wide,
-pupils dilated, pupils wide — pupil dilation is banned in every wording, including
-"involuntary", "dark with", "blown", and reporting the pupil's size at all —
-predatory, ozone, a shiver ran down, shivers, shivering, barely above a whisper, the
-air was thick with, something shifted in.
+These do not appear: breath hitching, breath catching, husky, pupil dilation in any
+wording — reporting that a pupil or iris changed size, darkness, or focus is banned, the
+body shows attention through what the character looks at and does — predatory, ozone,
+the air was thick with, something shifted in. Cold shows as behaviour: a pulled-in
+shoulder, hands wrapped around a mug, skin tightening — never as the body shaking in
+any form.
 </craft_antislop>`;
 
 const INTERIORITY = `<craft_interiority>
