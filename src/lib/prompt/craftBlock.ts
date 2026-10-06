@@ -105,9 +105,24 @@ words the character says; a tag that restates it in simile is the model annotati
 dialogue. Tag the tone OR trust the line, and across a scene prefer trust. Never tag the
 same gesture twice: "the flat of her hand" used twice in a scene is a habit, not a hand.
 
+Bodies do not run on sound effects. These are stock transitions, not observations, and a
+scene that leans on them reads assembled: "with a dull thud", "lets out a long/sharp/
+shuddering [breath|sound|exhale]", "in the silence of the room", "the sound of skin
+slapping skin", "her voice is flat". A body hitting wood is what kind of wood, at what
+speed, wearing what expression — write THAT, once, and do not keep a stocked thud on the
+shelf for the next fall. If a character's voice needs the word "flat" to be heard, the
+line itself is not saying it.
+
+Exclamations are vocabulary, not punctuation. "Fuuuck" used as every escape of tension,
+"OH GOD—!" as every climax, is the same word doing the same job every scene, and the
+scene stops hearing it. A character swears in their own words at their own moment; give
+the biggest sound of the scene to the line that earns it.
+
 These do not appear: breath hitching, breath catching, husky, pupils blown wide,
-pupils dilated, predatory, ozone, a shiver ran down, barely above a whisper, the air
-was thick with, something shifted in.
+pupils dilated, pupils wide — pupil dilation is banned in every wording, including
+"involuntary", "dark with", "blown", and reporting the pupil's size at all —
+predatory, ozone, a shiver ran down, shivers, shivering, barely above a whisper, the
+air was thick with, something shifted in.
 </craft_antislop>`;
 
 const INTERIORITY = `<craft_interiority>
@@ -295,6 +310,12 @@ rather than improvising authority.
 const DIALOGUE_STATE = `<craft_dialogue>
 Each character speaks in their own recognizable idiolect: vocabulary, rhythm, and
 sentence shape come from their background and stay consistent across the scene.
+This is per CHARACTER, not per model. Two different people do not share a register just
+because they are both blunt: a bookbinder's bluntness is procedural, a sailor's is
+weathered, a clerk's is filed. Before any character speaks, know three things about how
+THEY alone talk — one word they would use that nobody else would, one they never would,
+and the length their patience runs — and let the line prove them. A side character is
+not the protagonist's voice with the volume changed.
 Current state bends the line without breaking the voice:
   anger      -> clipped syntax, hedges dropped, volume shown by word choice
   fear       -> fragments, false starts, sentences that restart

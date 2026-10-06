@@ -127,7 +127,7 @@ interface Scenario {
  * The block bans "breath hitching"; real prose writes "her breath hitched", and a literal
  * match would report clean on the exact construction the rule exists to stop.
  */
-const BANNED = /\b(breath hitch\w*|breath catch\w*|breath caught|husky|pupils?\b[^.!?\n]{0,20}\b(?:blown wide|dilated)|predatory|ozone|a shiver ran down|barely above a whisper|the air was thick with|something shifted in)\b/gi;
+const BANNED = /\b(breath hitch\w*|breath catch\w*|breath caught|husky|pupils?\b[^.!?\n]{0,20}\b(?:blown wide|dilated|wide|dark)|predatory|ozone|a shiver ran down|shiver\w*|barely above a whisper|the air was thick with|something shifted in)\b/gi;
 
 /** Three parallel items in one sentence: machine cadence. */
 const TRIAD = /\b\w+, \w+, and \w+/g;
