@@ -76,6 +76,9 @@ export function assemble(input: AssembleInput, countChatTokens: TokenCounter): A
   // And the vocalisation rule beside it, for the same measured reason: as an output-format
   // instruction it is ignored in the prefix and obeyed in the tail.
   pushIfNonEmpty(tail, 'system', input.tail.vocalisation);
+  // And the anti-repetition rules beside them — the rules the transcript showed being
+  // broken hardest from the prefix. See `renderAntiRepetition`.
+  pushIfNonEmpty(tail, 'system', input.tail.antiRepetition);
   pushIfNonEmpty(tail, 'system', input.tail.authorsNote);
   pushIfNonEmpty(tail, 'system', input.tail.postHistoryInstructions);
   // The mode's instruction, when the turn is not an ordinary reply. A system line rather

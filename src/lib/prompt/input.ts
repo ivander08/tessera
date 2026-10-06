@@ -55,6 +55,14 @@ export interface AssembleInput {
      * text produced the sounds. See `renderVocalisation`.
      */
     vocalisation?: string;
+    /**
+     * The anti-repetition rules, when the reader has either toggle on.
+     *
+     * Tail-only, and for the same measured reason as the two above: in the prefix these
+     * rules were the ones the transcript showed being broken hardest — stage business
+     * recurring verbatim across hundreds of turns. See `renderAntiRepetition`.
+     */
+    antiRepetition?: string;
     authorsNote?: string;
     /** Card `post_history_instructions`. Tail-only: cannot perturb the cached prefix. */
     postHistoryInstructions?: string;

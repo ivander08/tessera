@@ -120,6 +120,10 @@ export async function extractFacts(
     ? existing.map((fact, index) => `[${index + 1}] ${fact.text}`).join('\n')
     : '(none yet)';
 
+  // 1400, not 700. A cheap model that reasons before answering spends its allowance in
+  // `reasoning_content` and returns an empty `content`; 700 was exhausted by every
+  // extract on a real chat (see `scheduleMemory` for what that cost). The floor leaves
+  // headroom for a model that still thinks past the flag.
   const reply = await complete(env, {
     system: SYSTEM,
     user: [
@@ -131,7 +135,7 @@ export async function extractFacts(
       '',
       'Reply with the JSON object only.',
     ].join('\n'),
-    maxTokens: 700,
+    maxTokens: 1400,
     json: true,
   });
 

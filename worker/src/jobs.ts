@@ -43,6 +43,11 @@ export interface JobRow {
 }
 
 /**
+ * Re-enqueues of one failed job before the row is left dead for inspection.
+ */
+const MAX_ATTEMPTS = 3;
+
+/**
  * Enqueue a job, or return the existing job's id if `idempotencyKey` was already used.
  *
  * `ON CONFLICT DO NOTHING RETURNING` yields no row on a duplicate, so the id is
@@ -50,6 +55,7 @@ export interface JobRow {
  * "the row already existed" and "another Worker inserted it between the two
  * statements", and both are the same row, because the key is UNIQUE.
  */
+
 export async function enqueue(
   env: Env,
   chatId: string,
@@ -70,6 +76,27 @@ export async function enqueue(
     .first<{ id: string }>();
 
   if (inserted) return inserted.id;
+
+  // A FAILED job with the same key is not a duplicate to ignore — it is the previous
+  // attempt at this exact work, and it died. Leaving it `failed` here would stall the
+  // pipeline forever: the scheduler derives its range from `MAX(covers_to)`, so the same
+  // key is recomputed on every later turn, `ON CONFLICT DO NOTHING` keeps hitting the
+  // dead row, and the runner only picks `status = 'queued'`. Measured on a real 341-
+  // message chat: one transient failure (a cheap model that spends its whole token
+  // budget thinking) stopped every summary and fact extraction from that point on, and
+  // no amount of further turns unblocked it.
+  //
+  // Requeueing with a floor on attempts keeps this bounded — a job that keeps failing
+  // stops after `MAX_ATTEMPTS`, which is what the counter has always been for.
+  const requeued = await env.DB.prepare(
+    `UPDATE jobs
+        SET status = 'queued', lease_until = NULL, updated_at = ?
+      WHERE idempotency_key = ? AND status = 'failed' AND attempts < ?
+      RETURNING id`,
+  )
+    .bind(now, idempotencyKey, MAX_ATTEMPTS)
+    .first<{ id: string }>();
+  if (requeued) return requeued.id;
 
   const existing = await env.DB.prepare('SELECT id FROM jobs WHERE idempotency_key = ?')
     .bind(idempotencyKey)

@@ -98,6 +98,13 @@ Vary list length. Three parallel items is machine cadence; use one strong detail
 two, or occasionally four.
 Register a new stimulus once. Do not re-describe it, including in different words. Do
 not restate a fact the reader just read; the second telling is the tell.
+
+A spoken line earns at most one tone-tag. "She says it flat, like reporting a stain",
+"level, like reading off a form", "like a man doing a job" — the tone is already in the
+words the character says; a tag that restates it in simile is the model annotating its own
+dialogue. Tag the tone OR trust the line, and across a scene prefer trust. Never tag the
+same gesture twice: "the flat of her hand" used twice in a scene is a habit, not a hand.
+
 These do not appear: breath hitching, breath catching, husky, pupils blown wide,
 pupils dilated, predatory, ozone, a shiver ran down, barely above a whisper, the air
 was thick with, something shifted in.
@@ -146,62 +153,56 @@ At most one question a turn, and only one they want answered for their own reaso
 </craft_independent_npcs>`;
 
 const VOCALISATION = `<craft_vocalisation>
-The body is audible. Write the sound itself, never a report of it — "A-Ah—" on the
+The body is audible. Write the sound itself, never a report of it — "A-Ah" on the
 page, not "she made a small sound"; "Nngh" not "a low noise in her throat". A sound
 described is not a sound. When a body is doing something, it makes a noise, and the
 noise goes in the prose.
 
-A sound is caused. When one of these is happening, the noise is on the page, not
-described as happening:
-  pleasure building       -> "Mmm~", "Mmmh", "Ah—", "Nnn", "Haa", "Haaah… haa…", "Ahhn!"
-  climax                  -> the sound breaks open: "Aaaahh!", "Nnngh!", "Haaah—"
-  effort, lifting, strain -> "Nngh—", "Hnng!", "Ughh!", "Grhh!", "Khh~"
-  fear, shock, alarm      -> "Huhh?!", "Eh?!", "Haaah-!", "Hiee?!", a hard gasp
-  terror, a scream        -> "Aaaahh!!", "HHAAA—", "Nnnno—!", a scream that tears; a
-                             body that has stopped being in charge of its own voice
-  surprise, startled      -> "Eep!", "Kya!", "A-Ah...", a jump and the breath out of her
-  pain, a knock, a burn   -> "Ow!", "Ahh—!", "Nngghh...!", a hiss through the teeth
-  pleading, unable to say -> "P-Please..!", "Hh-Hey..!", "Nnnnh~!", "Ehhhn~!"
-  crying, losing the words-> "Hic...!", "Hwahh...!", "Sniff...", a wet breath, a swallowed "hnn";
-                             a sentence that dies mid-word dies ON the page — "I c—", "it's n-not—",
-                             never "the words stopped" or "she could not finish"
-  laughing                -> "Hah", "Hehe…", "Pfft…!", "Hahah!", "BWAHAHA!", a snort
-  panting, out of breath  -> "Haa… haa…", "Huff… huff…", "Hff—", a breath dragged in
-                             through the mouth in raw pulls; at the top of a hill, after
-                             a run, mid-sentence when the lungs are not keeping up
-  kissing                 -> "Mwah!!", "Chu~", "Mmmch!", "Mwah mwah mwah!"
-  mouth full, oral        -> "Mmmph!", "Glk—glk—glk—", "Slurp… slurrrp!", "Gulp…!", "*pop*!"
-  eating, drinking        -> "Mm-Mm!", "Crunch crunch!", "Slurp!", "Ahhh~", "Mmmf!"
-  throat, voice going     -> "Ahem.", "Hm-hm", a cough, a clearing of it, a swallow,
-                             "Nngh." tested low; a voice that will not start — "Listen—"
-                             cracking in the middle, the first word thin
-  yawning, tired          -> a long open "Haaaah…" on the exhale, the jaw cracking loose,
-                             a sentence ridden out through it and finished wrong
-  annoyed, dismissive     -> "Tsk!", "Che!", "Pfft.", "Hmph."
-  sleepy, content         -> "Zzz...", "Mmm…", a long breath out
+Build each sound from what is happening, the way that body would actually make it.
+Do not copy a stock interjection: read the cause and the character, and write the
+noise that this person in this moment makes. A sound assembled from the cause is
+always louder and more specific than one recalled from a list. When one of these is
+happening, the noise is on the page, not described as happening:
+
+  pleasure, arousal       -> vowels that open and lengthen as it builds; pitch and
+                             roughness rising; words that stop being words
+  climax                  -> the sound breaks open — volume the body no longer controls
+  effort, lifting, strain -> pressed out under load, half-swallowed, teeth shut
+  fear, shock, alarm      -> a hard inhale, the shape of a word started and dropped
+  terror, a scream        -> tears the throat; a body no longer in charge of its voice
+  surprise, startled      -> a jump and the breath out of her
+  pain                    -> sharp, involuntary, bitten off or hissed through the teeth
+  crying, losing words    -> wet, uneven, swallowed; a sentence that dies mid-word dies
+                             ON the page, never "the words stopped"
+  laughing                -> the actual rhythm of it, and the length it runs to
+  panting, out of breath  -> air through the mouth in raw pulls, mid-sentence
+  kissing, mouth full     -> the sounds the mouth actually makes doing it
+  eating, drinking        -> the sounds of it
+  throat, voice going     -> a clearing, a swallow, a first word that comes out thin
+  yawning, tired          -> a long open exhale, the jaw cracking loose
+  annoyed, dismissive     -> one small noise, consonant-forward, unimpressed
+  sleepy, content         -> a long breath out
 
 Speech breaks. Under fear, want, pain, effort or overwhelm, a word comes apart — on
-its FIRST sound, never mid-word: "T-The", "W-What", "I— I don't", "d-don't",
-"sssorry", "g-go". One break per sentence, two at the very most, on the word that
-matters; never twice in one line, and every word breaking is unreadable and reads as
-mockery. A thought never stutters — only speech does.
+its FIRST sound, never mid-word: "T-The", "W-What", "I... I don't", "d-don't". One
+break per sentence, two at the very most, on the word that matters; never twice in
+one line, and every word breaking is unreadable and reads as mockery. A thought
+never stutters — only speech does.
 
-Stretch a vowel when it runs long: "Nooo", "fuuuck", "unnhhh", "Bruuuuuuh". Lengthen
-the vowel, not the consonant tail — "Nooo" and not "Noooo", "argh" into "aaargh".
-One stretched word per line at most. A trailing "~" softens a sound into something
-playful or coaxing: "Mmm~", "Nnnnh~!".
+Stretch a vowel when it runs long: "Nooo", "fuuuck", "unnhhh". Lengthen the vowel,
+not the consonant tail. One stretched word per line at most. A trailing "~" softens
+a sound into something playful or coaxing.
 
 Volume and loss of control are written, not described:
   ALL CAPS for a shout, a hard emphasis, or a voice no longer under its owner's control —
-  "WHAT?!", "I SAID NO", "don't you DARE", "HAHAHAHAHA!!", "NNNO—", "SSSTOP IT".
+  "WHAT?!", "I SAID NO", "don't you DARE", "HAHAHAHAHA!!".
   The last of those is the point: a body that has lost its composure does not say
   "Hahaha!", it says "HAHAHAHAHA!!" and cannot stop. Write the loss of control in the
   letters themselves, never as "she laughed helplessly" or "she could not stop laughing".
-  A repeated syllable IS a sound — "Hahaha", "Hehehe", "nonono", "no no no no" — and the
-  longer it runs, the more it says. Do not tidy it into one neat "Haha".
-  Stacked "?!", "!?!", "....!?" for disbelief or a voice cracking upward: "W-What....?!"
+  A repeated syllable IS a sound — "Hahaha", "nonono" — and the longer it runs, the more
+  it says. Do not tidy it into one neat "Haha".
+  Stacked "?!", "!?!", "....!?" for disbelief or a voice cracking upward.
   A trailing "..." for something not finished, a word abandoned, a thought lost.
-  "—" for a cut-off: another speaker talking over them, a hand at the throat, a hit.
   Dots inside a word for a faltering rhythm: "I... I don't", "no... no, wait".
 
 Never label what the text already shows. If the sound is on the page, do not also say
@@ -210,12 +211,20 @@ word — pick the sound or the tag, never both. Never write a sound as a simile 
 description of itself: "a sound like...", "the noise of...", "something between a gasp
 and...". "She gasps" is a report; the gasp on the page is the sound.
 
-Restraint, so the rest of this holds: most lines carry no sound at all. Sound is an
-accent, not a baseline, and one repeated sound drains itself — so never two lines in a
-row, and never the same sound twice in a scene. A quiet scene should have none; a scene
-with real heat should have several, and they should be different from each other.
+PUNCTUATION IS NOT SOUND. Do not open a line, a paragraph, or a piece of dialogue
+with a dash, and do not use a dash as a general hesitation or pause marker — that is
+what "..." and a broken sentence are for. A dash may cut a line off ONLY when
+something physical actually interrupts it: another speaker talking over them, a hand
+at the throat, a hit. One such cut per reply at most.
 
-But the list above is a list of CAUSES, not of occasions, and every cause on it counts
+Restraint, so the rest of this holds: most lines carry no sound at all. Sound is an
+accent, not a baseline. A sound is fresh the first time; by its third appearance in
+the same scene it reads as a habit, not a sound — so vary the sound every time, and
+retire an interjection after using it once or twice. A quiet scene should have none;
+a scene with real heat should have several, and they should be different from each
+other.
+
+The list above is a list of CAUSES, not of occasions, and every cause on it counts
 at every intensity. A cough is a cough whether it comes from a deathbed or a tickle in
 the throat. A yawn is audible. Someone who has run up a hill and cannot speak yet is
 heard getting her breath back. Someone frightened says "Don't move" in a voice that
@@ -238,6 +247,31 @@ and do not open a turn in the previous turn's shape.
 Flip the modality: if the previous beat was internal, this one is external; if it was
 dialogue-led, this one leads with sensation or the physical.
 </craft_motion>`;
+
+/**
+ * The anti-repetition rules, for the prompt TAIL. `''` when both toggles are off.
+ *
+ * Separate from `renderCraftBlock`, and exported for the same measured reason as
+ * `renderVocalisation`: these are the rules the transcript shows being broken hardest.
+ * Over a 341-message chat the same stage business recurred verbatim — "the gecko chirps
+ * from the wall" twelve times, "the gate lamp buzzes the moth circles" twelve times, "she
+ * picks at the" thirty-five times — while the identical text sat in the cached prefix.
+ * An instruction read early is outweighed by everything the conversation says afterwards,
+ * and the conversation is exactly where the habit lives. So this block is emitted beside
+ * the vocalisation rule, as the last system text before the reader's message, where the
+ * other behaviour rules that actually hold are.
+ *
+ * The cost is the same as the content policy's: these tokens are billed at full price
+ * rather than cache price, and they are static per chat, so moving them back into the
+ * prefix would make the prefix cheaper again. The measured benefit is that they are read
+ * last, where they count.
+ */
+export function renderAntiRepetition(craft: Craft): string {
+  const parts: string[] = [];
+  if (craft.antiParrot) parts.push(ANTI_PARROT);
+  if (craft.stagnation) parts.push(STAGNATION);
+  return parts.join('\n');
+}
 
 const IMPULSE = `<craft_impulse>
 The flaw-driven urge comes first: the cowardice, jealousy, or pride fires before
@@ -269,7 +303,8 @@ Current state bends the line without breaking the voice:
   lying      -> over-specific detail, hedging, unnatural smoothness or stutter
   seduction  -> slower rhythm, more pauses, suggestive ambiguity
   authority  -> fewer words, statements over questions
-An interruption cuts the previous speaker off with an em dash.
+An interruption cuts the previous speaker off. Render it with a mid-word dash; do not
+open a line or a piece of dialogue with a dash.
 </craft_dialogue>`;
 
 const LIVING_WORLD = `<craft_world>
@@ -281,8 +316,9 @@ someone mid-task, the tail of a conversation, a market hour, a feud, a repair �
 something unrelated to the reader that is already underway and progresses between
 scenes.
 A location the scene returns to keeps at least one specific detail from its last
-appearance. Background figures stay unnamed until they do something the story will
-return to.
+appearance — a DIFFERENT one each time, and never one already used twice. Reusing the
+same detail is how a returning place reads as a loop. Background figures stay unnamed
+until they do something the story will return to.
 </craft_world>`;
 
 const SIDE_CHARACTERS = `<craft_side_characters>
@@ -583,8 +619,10 @@ export function renderCraftBlock(craft: Craft): string {
   if (craft.interiority) parts.push(INTERIORITY);
   if (craft.earnedKnowledge) parts.push(EARNED_KNOWLEDGE);
   if (craft.independentNpcs) parts.push(INDEPENDENT_NPCS);
-  if (craft.antiParrot) parts.push(ANTI_PARROT);
-  if (craft.stagnation) parts.push(STAGNATION);
+  // Anti-parrot and stagnation are NOT here. They are emitted separately into the tail —
+  // see `renderAntiRepetition` — for the same measured reason as the content policy and
+  // the vocalisation block: position decides whether the model obeys them, and these are
+  // the two the transcript shows being broken hardest from the prefix.
   if (craft.impulseFirst) parts.push(IMPULSE);
   if (craft.subtext) parts.push(SUBTEXT);
   if (craft.dialogueState) parts.push(DIALOGUE_STATE);

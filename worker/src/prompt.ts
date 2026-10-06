@@ -11,7 +11,12 @@ import type { CharacterCardJson } from '../../src/lib/cards/types';
 import { renderMemoryBlock } from '../../src/lib/prompt/memoryBlock';
 import { dynamicMacrosIn, substituteHead, substituteTail } from '../../src/lib/prompt/macros';
 import { renderStateBlock } from '../../src/lib/prompt/stateBlock';
-import { renderCraftBlock, renderContentPolicy, renderVocalisation } from '../../src/lib/prompt/craftBlock';
+import {
+  renderAntiRepetition,
+  renderCraftBlock,
+  renderContentPolicy,
+  renderVocalisation,
+} from '../../src/lib/prompt/craftBlock';
 import { recall } from './memory/recall';
 import { loadStateForTurn } from './state/update';
 import type { StatePoint } from './turn';
@@ -348,6 +353,7 @@ export async function buildPrompt(
       loreBlock: substituteTail(loreBlock, macroContext),
       contentPolicy: renderContentPolicy(setup.craft),
       vocalisation: renderVocalisation(setup.craft),
+      antiRepetition: renderAntiRepetition(setup.craft),
       authorsNote: substituteTail(settings.authorsNote, macroContext),
       // Precedence, per the CCv2/v3 spec: the CARD's post-history instructions replace
       // the user's global setting. That is what the field is for — it is the card's own

@@ -18,7 +18,11 @@ export async function evalJudgeRoute(req: Request, env: Env): Promise<Response> 
     const reply = await complete(env, {
       system: typeof body.system === 'string' ? body.system : undefined,
       user: body.user,
-      maxTokens: 1200,
+      // 1200 was exhausted by glm-5-3-flash on every long transcript: it reasons before
+      // answering, and a full transcript in the user turn pushed its thinking past the
+      // cap, leaving `content` empty — the same shape that stalled the memory pipeline
+      // (see `scheduleMemory`). 2500 leaves room for both the thinking and the answer.
+      maxTokens: 2500,
       json: true,
     });
     return json({ text: reply.text });

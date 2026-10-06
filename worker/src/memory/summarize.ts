@@ -94,7 +94,7 @@ export async function summarize(
 
   // Throws a clear "no cheap model configured" / "no API key" error before any write,
   // so a failed summarization never leaves a half-written row behind.
-  const first = await complete(env, { system: SYSTEM, user: transcript, maxTokens: 700 });
+  const first = await complete(env, { system: SYSTEM, user: transcript, maxTokens: 1400 });
   let content = first.text.trim();
 
   // One retry, and only when the reply is clearly a scene rather than a summary. The
@@ -109,7 +109,7 @@ export async function summarize(
         'Your previous attempt quoted the scene instead of summarising it. Rewrite it as',
         'third-person past-tense prose with no dialogue and no quoted lines.',
       ].join('\n'),
-      maxTokens: 700,
+      maxTokens: 1400,
     });
     const second = retry.text.trim();
     // Keep the retry only when it is better. A retry that is also scene prose, or empty,

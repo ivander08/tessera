@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { renderCraftBlock, renderContentPolicy, renderVocalisation } from './craftBlock';
+import {
+  renderAntiRepetition,
+  renderCraftBlock,
+  renderContentPolicy,
+  renderVocalisation,
+} from './craftBlock';
 import { DEFAULT_CRAFT, type Craft } from '../scene/setup';
 
 /**
@@ -140,8 +145,6 @@ describe('renderCraftBlock', () => {
   test('the default craft emits the new quality blocks and the enum lines', () => {
     const block = renderCraftBlock(DEFAULT_CRAFT);
     for (const tag of [
-      '<craft_no_echo>',
-      '<craft_motion>',
       '<craft_impulse>',
       '<craft_subtext>',
       '<craft_dialogue>',
@@ -166,6 +169,27 @@ describe('renderCraftBlock', () => {
     ]) {
       expect(block).toContain(tag);
     }
+    // Anti-parrot and stagnation are TAIL blocks now, not prefix blocks — see
+    // `renderAntiRepetition`. Pinning their absence here is what stops them being moved
+    // back by accident, the same way the vocalisation test below does.
+    expect(block).not.toContain('<craft_no_echo>');
+    expect(block).not.toContain('<craft_motion>');
+  });
+
+  test('the anti-repetition rules render into the tail from the same toggles', () => {
+    expect(renderAntiRepetition(DEFAULT_CRAFT)).toContain('<craft_no_echo>');
+    expect(renderAntiRepetition(DEFAULT_CRAFT)).toContain('<craft_motion>');
+    expect(
+      renderAntiRepetition({ ...DEFAULT_CRAFT, antiParrot: false, stagnation: false }),
+    ).toBe('');
+    expect(renderAntiRepetition({ ...DEFAULT_CRAFT, stagnation: false })).not.toContain(
+      '<craft_motion>',
+    );
+    expect(renderAntiRepetition({ ...DEFAULT_CRAFT, stagnation: false })).toContain(
+      '<craft_no_echo>',
+    );
+    // Determinism, because this block rides in the tail and must not wobble per turn.
+    expect(renderAntiRepetition(DEFAULT_CRAFT)).toBe(renderAntiRepetition(DEFAULT_CRAFT));
   });
 
   test('the default craft leaves the genre switches off', () => {
