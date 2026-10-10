@@ -1,15 +1,10 @@
 import { complete } from '../cheap';
 import { estimateTokens } from '../../../src/lib/tokenEstimate';
 import { visiblePathCte } from '../branch';
+import { clockRange, datedLine, type DatedMessage } from './dates';
 
 export interface Summary {
   id: string;
-  content: string;
-}
-
-interface SourceRow {
-  seq: number;
-  role: string;
   content: string;
 }
 
@@ -27,9 +22,14 @@ interface SourceRow {
 const SYSTEM = [
   'You compress a roleplay transcript into a factual scene summary.',
   '',
+  'Each transcript line is prefixed with the in-world date and time it happened, like',
+  '"[Wednesday, 30 September 2026, 05:34]". When something happened at a particular time,',
+  'say when — "on 14 April 2026 they met at the docks" — because the date is the part',
+  'later questions are asked about. Use only dates you read in the prefixes.',
+  '',
   'Rules:',
   '- Report only what the transcript states. Never invent, infer, or embellish.',
-  '- Preserve concrete specifics: names, places, objects, numbers, and any change in',
+  '- Preserve concrete specifics: names, places, objects, numbers, dates, and any change in',
   '  a character\'s circumstances, knowledge, or emotional state.',
   '- Note unresolved threads and open questions; they matter more later than mood.',
   '- Write in the third person, past tense, as prose. No bullet lists, no headings,',
@@ -76,13 +76,16 @@ export async function summarize(
   toSeq: number,
 ): Promise<Summary> {
   const { results } = await env.DB.prepare(
-    `${visiblePathCte('path', 'seq, id, role, content')}
-     SELECT seq, role, content FROM path
+    // `state_json` rides along so each line carries the in-world clock it happened at, the
+    // same way extraction does. The summariser is asked for a factual account of a scene,
+    // and a scene account with no dates cannot answer "when did that happen".
+    `${visiblePathCte('path', 'seq, id, role, content, state_json')}
+     SELECT seq, role, content, json_extract(state_json, '$.time') AS at FROM path
       WHERE seq BETWEEN ?2 AND ?3
       ORDER BY seq`,
   )
     .bind(chatId, fromSeq, toSeq)
-    .all<SourceRow>();
+    .all<DatedMessage>();
 
   if (results.length === 0) {
     throw new Error(`no messages in chat ${chatId} between seq ${fromSeq} and ${toSeq}`);
@@ -90,7 +93,15 @@ export async function summarize(
 
   // The seq is kept in the transcript so the model can anchor a claim to a turn, and
   // so a range that silently spans a gap (a deleted branch) is visible in the text.
-  const transcript = results.map((row) => `[${row.seq}] ${row.role}: ${row.content}`).join('\n\n');
+  // The in-world date leads the line, so the model can state WHEN things happened.
+  const transcript = results.map(datedLine).join('\n\n');
+
+  // The clock readings bounding the range, recorded on the row. Taken from the messages
+  // themselves rather than from the model's prose, so the date on a summary is a reading
+  // that was actually recorded rather than a claim the summariser made. Sparse ranges are
+  // handled inside `clockRange`: a greeting has no snapshot, and a turn whose state update
+  // failed has none either, so the outermost readings that exist are the answer.
+  const { from: dateFrom, to: dateTo } = await clockRange(env, chatId, fromSeq, toSeq);
 
   // Throws a clear "no cheap model configured" / "no API key" error before any write,
   // so a failed summarization never leaves a half-written row behind.
@@ -121,14 +132,16 @@ export async function summarize(
 
   const id = crypto.randomUUID();
   await env.DB.prepare(
-    `INSERT INTO summaries (id, chat_id, tier, covers_from, covers_to, content, tokens, created_at)
-     VALUES (?, ?, 'scene', ?, ?, ?, ?, ?)`,
+    `INSERT INTO summaries (id, chat_id, tier, covers_from, covers_to, covers_date_from, covers_date_to, content, tokens, created_at)
+     VALUES (?, ?, 'scene', ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
       chatId,
       results[0].seq,
       results[results.length - 1].seq,
+      dateFrom,
+      dateTo,
       content,
       estimateTokens(content),
       Date.now(),

@@ -11,7 +11,22 @@ import type { RecallHit } from '../memoryTypes';
 export interface MemoryBlockInput {
   summaries: RecallHit[];
   facts: RecallHit[];
+  events: RecallHit[];
   recalled: RecallHit[];
+}
+
+/**
+ * A memory line, with the in-world date it happened or became true.
+ *
+ * The date leads, because the question this answers is "when" and a date buried at the end
+ * of a long summary is one the narrator has to hunt for. A hit with no recorded date renders
+ * as the bare text rather than as "(no date)": absence of a date is not a fact about the
+ * world, and writing it out would put a second, negative claim in the prompt.
+ */
+function withDate(hit: RecallHit): string {
+  const at = (hit.at ?? '').trim();
+  const text = hit.text.trim();
+  return at.length > 0 ? `[${at}] ${text}` : text;
 }
 
 export function renderMemoryBlock(
@@ -21,11 +36,18 @@ export function renderMemoryBlock(
 ): string {
   const sections: Array<{ heading: string; lines: string[] }> = [];
 
-  const summaryLines = input.summaries.map((hit) => `- ${hit.text.trim()}`);
+  const summaryLines = input.summaries.map((hit) => `- ${withDate(hit)}`);
   if (summaryLines.length > 0) sections.push({ heading: 'Story so far', lines: summaryLines });
 
-  const factLines = input.facts.map((hit) => `- ${hit.text.trim()}`);
+  const factLines = input.facts.map((hit) => `- ${withDate(hit)}`);
   if (factLines.length > 0) sections.push({ heading: 'Established facts', lines: factLines });
+
+  // Events lead the recalled material rather than trailing it. A reader asking "when did I
+  // first meet Sydney" is asking for an event, and events are the only hits that carry a
+  // date the narrator can quote back. They sit after the facts because facts are the
+  // standing state of the world and events are its history.
+  const eventLines = input.events.map((hit) => `- ${withDate(hit)}`);
+  if (eventLines.length > 0) sections.push({ heading: 'What happened', lines: eventLines });
 
   const recallLines = input.recalled.map((hit) => `- ${hit.text.trim()}`);
   if (recallLines.length > 0) sections.push({ heading: 'Relevant earlier moments', lines: recallLines });
@@ -44,12 +66,22 @@ export function renderMemoryBlock(
   // inventions (measured on a 240-message soak chat: recall returned the fact top-ranked,
   // the rendered block contained no facts at all, and the narrator denied remembering).
   // So the sacrifice order is explicit, independent of compose order: summary lines
-  // first, recalled messages second, facts last. Within a section the END of the list
-  // goes first, which is also correct: summaries arrive newest-first, so the oldest
+  // first, recalled messages second, events third, facts last. Within a section the END of
+  // the list goes first, which is also correct: summaries arrive newest-first, so the oldest
   // scene dies first, and bm25-ranked hits arrive best-first, so the weakest match dies
   // first.
+  //
+  // Events go before facts because a fact is standing state that the narrator writes
+  // against, while an event is history the narrator can often reconstruct from the
+  // transcript it can still see — the same argument that puts recalled messages above
+  // facts, applied one step further out.
   const byHeading = new Map(sections.map((section) => [section.heading, section]));
-  const sacrificeOrder = ['Story so far', 'Relevant earlier moments', 'Established facts'];
+  const sacrificeOrder = [
+    'Story so far',
+    'Relevant earlier moments',
+    'What happened',
+    'Established facts',
+  ];
 
   let text = compose(sections);
   while (count(text) > maxTokens) {

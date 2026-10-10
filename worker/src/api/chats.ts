@@ -4,6 +4,7 @@ import { substituteHead } from '../../../src/lib/prompt/macros';
 import { EMPTY_STATE, validatePatch } from '../../../src/lib/state/schema';
 import { seedOpeningState } from '../state/update';
 import { loadSceneSetup } from '../scene';
+import { parseSceneSetup } from '../../../src/lib/scene/setup';
 
 /** `GET`/`POST /api/chats`. */
 export async function chatsRoute(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -57,6 +58,16 @@ async function createChat(env: Env, req: Request, ctx: ExecutionContext): Promis
     title?: string;
     /** Which opening to start from: 0 is `first_mes`, then the alternates in order. */
     greetingIndex?: number;
+    /**
+     * The scene setup, so the wizard's answers exist BEFORE the opening seed runs.
+     *
+     * The wizard used to create the chat and then PATCH the setup in a second request, which
+     * meant the seed — fired from creation, behind `waitUntil` — read the DEFAULTS. A scene
+     * the reader dated to 14 April 2026 seeded `state.time` with nothing, so the clock had no
+     * origin and no memory could be dated against it. Taking the setup here closes that
+     * window: by the time the seed runs, the epoch it needs is already stored.
+     */
+    setup?: unknown;
   }>(req);
   if (!body?.characterId) return badRequest('characterId required');
 
@@ -91,6 +102,18 @@ async function createChat(env: Env, req: Request, ctx: ExecutionContext): Promis
       now,
     )
     .run();
+
+  // Stored before the greeting and the seed, so `loadSceneSetup` inside the seed reads the
+  // reader's answers rather than the defaults. Parsed through the same choke point the PATCH
+  // path uses, so an unknown enum member falls back rather than being stored.
+  if (body.setup !== undefined) {
+    await env.DB.prepare(
+      `INSERT INTO chat_scene_setup (chat_id, json, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(chat_id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at`,
+    )
+      .bind(id, JSON.stringify(parseSceneSetup(body.setup)), now)
+      .run();
+  }
 
   // Which opening the scene starts from. Index 0 is `first_mes`; the alternates follow in
   // their stored order, which is the order the card editor lets you arrange them in.

@@ -18,6 +18,7 @@ import {
   renderVocalisation,
 } from '../../src/lib/prompt/craftBlock';
 import { recall } from './memory/recall';
+import { summaryDateSpan } from './memory/dates';
 import { loadStateForTurn } from './state/update';
 import type { StatePoint } from './turn';
 import { loadSceneSetup } from './scene';
@@ -598,14 +599,19 @@ async function buildMemoryBlock(
         // `covers_to` is tested against the path rather than merely against `?2` because a
         // deleted turn's rows are still in the table with their old seqs.
         `${VISIBLE_PATH_SEQ_CTE}
-         SELECT id, content FROM summaries
+         SELECT id, content, covers_date_from, covers_date_to FROM summaries
           WHERE chat_id = ?1
             AND (?2 IS NULL OR covers_to < ?2)
             AND EXISTS (SELECT 1 FROM path WHERE path.seq = summaries.covers_to)
           ORDER BY covers_to DESC LIMIT 3`,
       )
         .bind(chatId, beforeSeq)
-        .all<{ id: string; content: string }>(),
+        .all<{
+          id: string;
+          content: string;
+          covers_date_from: string | null;
+          covers_date_to: string | null;
+        }>(),
     ]);
 
     return renderMemoryBlock(
@@ -615,9 +621,12 @@ async function buildMemoryBlock(
           refId: row.id,
           text: row.content,
           score: 0,
+          at: summaryDateSpan(row.covers_date_from, row.covers_date_to),
         })),
         facts: hits.filter((hit) => hit.kind === 'fact'),
-        recalled: hits.filter((hit) => hit.kind !== 'fact'),
+        events: hits.filter((hit) => hit.kind === 'event'),
+        // Anything that is neither a fact nor an event is raw recalled transcript.
+        recalled: hits.filter((hit) => hit.kind !== 'fact' && hit.kind !== 'event'),
       },
       Math.round(MEMORY_BLOCK_TOKENS * calibration),
       estimateTokens,

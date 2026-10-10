@@ -9,6 +9,8 @@ interface SceneRow {
   id: string;
   covers_from: number;
   covers_to: number;
+  covers_date_from: string | null;
+  covers_date_to: string | null;
   content: string;
 }
 
@@ -19,9 +21,14 @@ const SYSTEM = [
   'You compress a sequence of scene summaries from one long roleplay into a single',
   'arc summary that preserves everything still likely to matter much later.',
   '',
+  'Each scene is prefixed with the in-world date span it covers, like',
+  '"[Wednesday, 30 September 2026, 05:34]". Keep the dates of the events that matter: an',
+  'arc that has lost when things happened cannot answer "when did that happen". Use only',
+  'dates you read in the prefixes.',
+  '',
   'Rules:',
   '- Report only what the scene summaries state. Never invent or infer.',
-  '- Keep concrete specifics: names, places, objects, numbers, promises, injuries,',
+  '- Keep concrete specifics: names, places, objects, numbers, dates, promises, injuries,',
   '  debts, and anything a character learned or believes (including wrong beliefs).',
   '- Keep unresolved threads; drop resolved ones that no longer bear on the story.',
   '- Prefer continuity over atmosphere: what changed, and what is still owed.',
@@ -57,7 +64,7 @@ export async function consolidate(env: Env, chatId: string): Promise<Consolidate
   const covered = lastArc?.covered ?? 0;
 
   const { results: scenes } = await env.DB.prepare(
-    `SELECT id, covers_from, covers_to, content FROM summaries
+    `SELECT id, covers_from, covers_to, covers_date_from, covers_date_to, content FROM summaries
       WHERE chat_id = ? AND tier = 'scene' AND covers_to > ?
       ORDER BY covers_from
       LIMIT ?`,
@@ -72,8 +79,20 @@ export async function consolidate(env: Env, chatId: string): Promise<Consolidate
 
   // The scene texts are the source at this level. Their seq ranges are included so
   // the arc records what it actually covers, and so a gap in the sequence is visible.
+  //
+  // The DATE is included on every line, and this is the whole reason the columns exist:
+  // the fold replaces ten scenes with one row, and `covers_from`/`covers_to` are seqs — a
+  // POSITION. Once the scenes are folded, the positions they named are gone, so anything
+  // downstream that needed to know WHEN now has nowhere to look. Carrying the date into the
+  // arc's own text and columns is what lets a fact or an arc outlive its fold and still be
+  // dated.
   const transcript = scenes
-    .map((scene) => `[${scene.covers_from}-${scene.covers_to}] ${scene.content}`)
+    .map((scene) => {
+      const span = scene.covers_date_from
+        ? `[${scene.covers_date_from}${scene.covers_date_to && scene.covers_date_to !== scene.covers_date_from ? ` – ${scene.covers_date_to}` : ''}]`
+        : `[${scene.covers_from}-${scene.covers_to}]`;
+      return `${span} ${scene.content}`;
+    })
     .join('\n\n');
 
   const reply = await complete(env, { system: SYSTEM, user: transcript, maxTokens: 900 });
@@ -81,15 +100,23 @@ export async function consolidate(env: Env, chatId: string): Promise<Consolidate
   if (content.length === 0) throw new Error('arc consolidation returned no content');
 
   const id = crypto.randomUUID();
+  // The arc's date range is the outermost readings of the scenes it folded, not the first
+  // and last scene's: a fold whose middle scenes have no recorded clock must still report
+  // the span it actually covers.
+  const dateFrom = scenes.find((scene) => scene.covers_date_from)?.covers_date_from ?? null;
+  const datedTo = [...scenes].reverse().find((scene) => scene.covers_date_to)?.covers_date_to ?? null;
+
   await env.DB.prepare(
-    `INSERT INTO summaries (id, chat_id, tier, covers_from, covers_to, content, tokens, created_at)
-     VALUES (?, ?, 'arc', ?, ?, ?, ?, ?)`,
+    `INSERT INTO summaries (id, chat_id, tier, covers_from, covers_to, covers_date_from, covers_date_to, content, tokens, created_at)
+     VALUES (?, ?, 'arc', ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
       chatId,
       first.covers_from,
       last.covers_to,
+      dateFrom,
+      datedTo,
       content,
       estimateTokens(content),
       Date.now(),

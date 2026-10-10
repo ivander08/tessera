@@ -91,6 +91,14 @@ const factsOf = (db: Database): Array<{ text: string; status: string }> =>
     status: string;
   }>;
 
+/** Every column the date work added, so a test can assert on what was actually written. */
+const datedRows = (db: Database): Array<{ text: string; at: string | null; kind: string }> =>
+  db.query('SELECT text, at, kind FROM facts ORDER BY created_at').all() as Array<{
+    text: string;
+    at: string | null;
+    kind: string;
+  }>;
+
 /** `superseded_by` per fact, keyed by text, which is what the Memory viewer renders. */
 const supersededBy = (db: Database): Record<string, string | null> => {
   const rows = db
@@ -282,5 +290,123 @@ describe('extractFacts', () => {
     stubProvider(JSON.stringify({ facts: [], supersede: [{ id: 1 }] }));
     const second = await extractFacts(env, 'chat-1', 0, 9999);
     expect(second.superseded).toBe(0);
+  });
+});
+
+describe('extractFacts — in-world dates', () => {
+  /**
+   * A turn with a clock reading, which is what the model needs to date anything.
+   *
+   * `state_json` is where the clock lives — BESIDE the message, not in its content — and
+   * leaving it out of the extraction query is the defect this whole change exists to fix.
+   */
+  function seedDatedMessage(db: Database, id: string, seq: number, at: string, content: string): void {
+    exec(db,
+      `INSERT INTO messages (id, chat_id, parent_id, role, content, seq, state_json, created_at)
+       VALUES (?, 'chat-1', NULL, 'user', ?, ?, ?, ?)`,
+      id,
+      content,
+      seq,
+      JSON.stringify({ time: at }),
+      Date.now(),
+    );
+  }
+
+  test('the in-world clock is put in front of the transcript the model reads', async () => {
+    // The defect: extraction was handed `role: content` only, so the date on disk was never
+    // in the prompt and every fact came back undated.
+    const { env, db } = makeEnv();
+    seedDatedMessage(db, 'm2', 2, 'Wednesday, 30 September 2026, 05:34', 'She waits by the rail.');
+
+    let seen = '';
+    globalThis.fetch = (async (_url: unknown, init: { body?: string }) => {
+      seen = String(init?.body ?? '');
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: '{"facts":[],"events":[],"supersede":[]}' } }], usage: {} }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    }) as unknown as typeof fetch;
+
+    await extractFacts(env, 'chat-1', 0, 9999);
+    expect(seen).toContain('[Wednesday, 30 September 2026, 05:34] user: She waits by the rail.');
+  });
+
+  test('writes the date the model copied from the transcript prefix', async () => {
+    const { env, db } = makeEnv();
+    seedDatedMessage(db, 'm2', 2, 'Wednesday, 30 September 2026, 05:34', 'They meet at the docks.');
+    stubProvider(
+      JSON.stringify({
+        facts: [
+          { text: 'Ivander first met Sydney at the docks.', subject: 'Sydney', at: 'Wednesday, 30 September 2026, 05:34' },
+        ],
+        events: [],
+        supersede: [],
+      }),
+    );
+
+    await extractFacts(env, 'chat-1', 0, 9999);
+    expect(datedRows(db)).toEqual([
+      { text: 'Ivander first met Sydney at the docks.', at: 'Wednesday, 30 September 2026, 05:34', kind: 'fact' },
+    ]);
+  });
+
+  test('an absent date is null rather than the range end', async () => {
+    // "This fact has no date" and "this fact is true as of the last turn" are different
+    // claims, and defaulting to the range end would silently assert the second.
+    const { env, db } = makeEnv();
+    stubProvider(
+      JSON.stringify({ facts: [{ text: 'Ada keeps her charts in a leather tube.' }], events: [], supersede: [] }),
+    );
+
+    await extractFacts(env, 'chat-1', 0, 9999);
+    expect(datedRows(db)).toEqual([
+      { text: 'Ada keeps her charts in a leather tube.', at: null, kind: 'fact' },
+    ]);
+  });
+
+  test('events are written with their own kind and are never superseded', async () => {
+    // A thing that happened cannot become false, so an event is exempt from the supersede
+    // rule that governs a fact.
+    const { env, db } = makeEnv();
+    seedFact(db, 'f1', 'The debt is forty crowns.');
+
+    stubProvider(
+      JSON.stringify({
+        facts: [{ text: 'The debt is sixty crowns.', at: 'Friday, 2 October 2026, 10:00' }],
+        events: [
+          { text: 'Sydney found out about the affair on 14 April 2026.', at: 'Tuesday, 14 April 2026, 20:00' },
+        ],
+        supersede: [{ id: 1, reason: 'amount changed' }],
+      }),
+    );
+
+    await extractFacts(env, 'chat-1', 0, 9999);
+    const rows = datedRows(db);
+    expect(rows).toHaveLength(3);
+    expect(rows[1]).toEqual({
+      text: 'The debt is sixty crowns.',
+      at: 'Friday, 2 October 2026, 10:00',
+      kind: 'fact',
+    });
+    expect(rows[2]).toEqual({
+      text: 'Sydney found out about the affair on 14 April 2026.',
+      at: 'Tuesday, 14 April 2026, 20:00',
+      kind: 'event',
+    });
+  });
+
+  test('the same sentence cannot land once as a fact and once as an event', async () => {
+    const { env, db } = makeEnv();
+    stubProvider(
+      JSON.stringify({
+        facts: [{ text: 'They met at the docks.', at: 'Tuesday, 14 April 2026, 20:00' }],
+        events: [{ text: 'They met at the docks.', at: 'Tuesday, 14 April 2026, 20:00' }],
+        supersede: [],
+      }),
+    );
+
+    const result = await extractFacts(env, 'chat-1', 0, 9999);
+    expect(result.added).toBe(1);
+    expect(datedRows(db)).toHaveLength(1);
   });
 });

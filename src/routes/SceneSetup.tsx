@@ -55,14 +55,13 @@ export default function SceneSetup() {
     setBusy(true);
     setFailure(null);
     try {
-      // Order matters: the chat has to exist before a setup row can reference it.
+      // Order matters: the chat has to exist before a setup row can reference it — but the
+      // setup rides IN the create request rather than following it as a PATCH. The opening
+      // seed is fired from creation behind `waitUntil`, so a second request would race it
+      // and the seed would read the defaults, leaving the scene's epoch unset.
       const chat = await apiJson<{ id: string }>('/api/chats', {
         method: 'POST',
-        body: JSON.stringify({ characterId: id, greetingIndex: opening }),
-      });
-      await apiJson(`/api/chats/${encodeURIComponent(chat.id)}/scene`, {
-        method: 'PATCH',
-        body: JSON.stringify(setup),
+        body: JSON.stringify({ characterId: id, greetingIndex: opening, setup }),
       });
       toast.success('Scene started.');
       navigate(`/chat/${chat.id}`);
@@ -137,6 +136,27 @@ export default function SceneSetup() {
                     </label>
                   ))}
                 </div>
+
+                {/* The epoch. Without it the clock has no origin, so a fact can never be
+                    dated — the narrator advances time but nothing records what day the
+                    story began on. Free text because the reader may want a period rather
+                    than a day, and a value that does not parse is still worth keeping. */}
+                <label className="form-row" style={{ marginTop: 18 }}>
+                  <span className="form-label">
+                    <span>Opening date</span>
+                    <span className="form-hint">
+                      The in-world date the scene starts on. This is what every later fact is
+                      dated against, so a memory can answer "when did that happen". Leave it
+                      empty to let the greeting decide.
+                    </span>
+                  </span>
+                  <input
+                    className="field"
+                    value={setup.startDate}
+                    onChange={(event) => setSetup({ ...setup, startDate: event.target.value })}
+                    placeholder="Wednesday, 14 April 2026"
+                  />
+                </label>
               </section>
             )}
 

@@ -23,6 +23,9 @@ interface SummaryEntry {
   tier: 'scene' | 'arc';
   covers_from: number;
   covers_to: number;
+  /** The in-world clock readings bounding the covered range, or null when none was recorded. */
+  covers_date_from: string | null;
+  covers_date_to: string | null;
   content: string;
   tokens: number | null;
   created_at: number;
@@ -35,6 +38,10 @@ interface FactEntry {
   status: 'active' | 'superseded';
   superseded_by: string | null;
   pinned: number;
+  /** A standing fact, or something that happened at a moment. */
+  kind: 'fact' | 'event';
+  /** The in-world date, verbatim, or null when none was recorded. */
+  at: string | null;
   created_at: number;
 }
 
@@ -73,6 +80,11 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
 
   const scenes = data?.summaries.filter((entry) => entry.tier === 'scene') ?? [];
   const arcs = data?.summaries.filter((entry) => entry.tier === 'arc') ?? [];
+  // Facts and events share a table and a recall index; the discriminator is what separates
+  // the standing state of the world from its history. The server sends one list, because
+  // that is what recall ranks, and the split happens here where it is displayed.
+  const facts = data?.facts.filter((entry) => entry.kind !== 'event') ?? [];
+  const events = data?.facts.filter((entry) => entry.kind === 'event') ?? [];
 
   const body = (
     <>
@@ -98,11 +110,11 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
           <>
             <section className="section">
               <span className="eyebrow">
-                Facts <span className="data">{data.facts.length}</span>
+                Facts <span className="data">{facts.length}</span>
               </span>
               <NewFact chatId={id} onCreated={() => reload()} onError={setActionError} />
 
-              {data.facts.length === 0 ? (
+              {facts.length === 0 ? (
                 <div className="empty">
                   Nothing is remembered as a fact yet.
                   <br />
@@ -111,7 +123,7 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
                 </div>
               ) : (
                 <ul className="panel">
-                  {data.facts.map((fact, index) => (
+                  {facts.map((fact, index) => (
                     <FactRow
                       key={fact.id}
                       fact={fact}
@@ -124,6 +136,16 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
                             body: JSON.stringify({ text }),
                           },
                           'Fact saved.',
+                        )
+                      }
+                      onSetDate={(at) =>
+                        mutate(
+                          `/api/memory/facts/${fact.id}`,
+                          {
+                            method: 'PATCH',
+                            body: JSON.stringify({ at }),
+                          },
+                          at ? 'Date saved.' : 'Date cleared.',
                         )
                       }
                       onTogglePin={() =>
@@ -150,6 +172,56 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
                       }
                       onDelete={() =>
                         mutate(`/api/memory/facts/${fact.id}`, { method: 'DELETE' }, 'Fact deleted.')
+                      }
+                    />
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            {/* Events sit after the facts because they are the history rather than the
+                standing state, and they are what a "when did that happen" question is
+                asking for — which is why the date is the first thing on each row. */}
+            <section className="section">
+              <span className="eyebrow">
+                What happened <span className="data">{events.length}</span>
+              </span>
+              <p className="form-hint" style={{ marginTop: 0 }}>
+                Things that happened at a moment, with the date they happened. Facts stay
+                true; events only happen once, so they are never superseded.
+              </p>
+
+              {events.length === 0 ? (
+                <div className="empty">
+                  Nothing dated has happened yet.
+                  <br />
+                  Events are recorded with the date the scene was at, so a question like
+                  "when did we first meet" has an answer. Set an opening date when you start
+                  a scene so the first one is anchored.
+                </div>
+              ) : (
+                <ul className="panel">
+                  {events.map((event, index) => (
+                    <FactRow
+                      key={event.id}
+                      fact={event}
+                      bordered={index > 0}
+                      onSave={(text) =>
+                        mutate(
+                          `/api/memory/facts/${event.id}`,
+                          { method: 'PATCH', body: JSON.stringify({ text }) },
+                          'Event saved.',
+                        )
+                      }
+                      onSetDate={(at) =>
+                        mutate(
+                          `/api/memory/facts/${event.id}`,
+                          { method: 'PATCH', body: JSON.stringify({ at }) },
+                          at ? 'Date saved.' : 'Date cleared.',
+                        )
+                      }
+                      onDelete={() =>
+                        mutate(`/api/memory/facts/${event.id}`, { method: 'DELETE' }, 'Event deleted.')
                       }
                     />
                   ))}
@@ -291,10 +363,27 @@ function Provenance({ children }: { children: React.ReactNode }) {
   );
 }
 
+/**
+ * A summary's date as one span.
+ *
+ * Collapsed to a single reading when the span is a point, because "14 April 2026 – 14 April
+ * 2026" is noise and a one-line summary covering one afternoon is the common case. Mirrors
+ * the server's `summaryDateSpan` so the panel and the prompt block render the same range the
+ * same way.
+ */
+function summaryDateSpan(from: string | null, to: string | null): string {
+  const start = (from ?? '').trim();
+  const end = (to ?? '').trim();
+  if (start.length === 0) return end;
+  if (end.length === 0 || end === start) return start;
+  return `${start} – ${end}`;
+}
+
 function FactRow({
   fact,
   bordered,
   onSave,
+  onSetDate,
   onTogglePin,
   onToggleStatus,
   onDelete,
@@ -302,14 +391,19 @@ function FactRow({
   fact: FactEntry;
   bordered: boolean;
   onSave: (text: string) => void;
-  onTogglePin: () => void;
-  onToggleStatus: () => void;
+  /** Events and facts both take a date; facts are superseded, events are not. */
+  onSetDate?: (at: string | null) => void;
+  onTogglePin?: () => void;
+  onToggleStatus?: () => void;
   onDelete: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(fact.text);
+  const [editingDate, setEditingDate] = useState(false);
+  const [dateDraft, setDateDraft] = useState(fact.at ?? '');
   const superseded = fact.status === 'superseded';
   const pinned = fact.pinned === 1;
+  const isEvent = fact.kind === 'event';
 
   return (
     <li
@@ -363,6 +457,54 @@ function FactRow({
             </div>
           )}
 
+          {/* The date leads, because it is the thing a question about memory is usually
+              asking for. An event with no date says so plainly rather than showing a blank
+              where a date should be — that is the field the reader most often needs to fix,
+              and it is the one an extraction pass cannot always fill. */}
+          {editingDate ? (
+            <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: 8 }}>
+              <input
+                className="field"
+                style={{ flex: 1, minWidth: 180 }}
+                value={dateDraft}
+                aria-label={isEvent ? 'When this happened' : 'When this became true'}
+                placeholder="Wednesday, 14 April 2026"
+                onChange={(event) => setDateDraft(event.target.value)}
+              />
+              <button
+                type="button"
+                className="btn primary"
+                onClick={() => {
+                  onSetDate?.(dateDraft.trim().length > 0 ? dateDraft.trim() : null);
+                  setEditingDate(false);
+                }}
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  setDateDraft(fact.at ?? '');
+                  setEditingDate(false);
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <p style={{ margin: '0 0 6px' }}>
+              <button
+                type="button"
+                className="btn quiet data"
+                title={isEvent ? 'Change when this happened' : 'Change when this became true'}
+                onClick={() => setEditingDate(true)}
+              >
+                {fact.at ? `[${fact.at}]` : isEvent ? 'no date — add one' : 'no date'}
+              </button>
+            </p>
+          )}
+
           <p className="prose whitespace-pre-wrap" style={{ fontSize: 'var(--text-sm)', margin: 0 }}>
             {fact.text}
           </p>
@@ -376,26 +518,31 @@ function FactRow({
             <button type="button" className="btn quiet" onClick={() => setEditing(true)}>
               Edit
             </button>
-            <button
-              type="button"
-              className="btn quiet"
-              title={pinned ? 'Stop always recalling this' : 'Always recall this'}
-              onClick={onTogglePin}
-            >
-              {pinned ? 'Unpin' : 'Pin'}
-            </button>
-            <button
-              type="button"
-              className="btn quiet"
-              title={
-                superseded
-                  ? 'Put this back in force'
-                  : 'Mark as no longer true, keeping it in the record'
-              }
-              onClick={onToggleStatus}
-            >
-              {superseded ? 'Restore' : 'Supersede'}
-            </button>
+            {/* Events are never superseded: a thing that happened cannot become false. */}
+            {!isEvent && (
+              <>
+                <button
+                  type="button"
+                  className="btn quiet"
+                  title={pinned ? 'Stop always recalling this' : 'Always recall this'}
+                  onClick={onTogglePin}
+                >
+                  {pinned ? 'Unpin' : 'Pin'}
+                </button>
+                <button
+                  type="button"
+                  className="btn quiet"
+                  title={
+                    superseded
+                      ? 'Put this back in force'
+                      : 'Mark as no longer true, keeping it in the record'
+                  }
+                  onClick={onToggleStatus}
+                >
+                  {superseded ? 'Restore' : 'Supersede'}
+                </button>
+              </>
+            )}
             <button type="button" className="btn quiet danger" onClick={onDelete}>
               Delete
             </button>
@@ -480,6 +627,15 @@ function SummaryRow({
         </div>
       ) : (
         <>
+          {/* The in-world span leads, for the same reason it does on a fact: it is what a
+              question about memory is asking for, and it is the part that survives the arc
+              fold where the seq range does not. */}
+          {entry.covers_date_from && (
+            <p className="data" style={{ margin: '0 0 6px' }}>
+              [{summaryDateSpan(entry.covers_date_from, entry.covers_date_to)}]
+            </p>
+          )}
+
           <p
             className="prose whitespace-pre-wrap"
             style={{ fontSize: 'var(--text-sm)', margin: 0 }}

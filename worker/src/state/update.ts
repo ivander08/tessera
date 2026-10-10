@@ -354,7 +354,7 @@ export async function seedOpeningState(
     if (openingContent.trim().length === 0) return { applied: false, reason: 'no greeting' };
 
     const reply = await complete(env, {
-      system: `${buildSystemPrompt(setup)}\n${OPENING_RULE}`,
+      system: `${buildSystemPrompt(setup)}\n${openingRule(setup)}`,
       user: [
         'Current state:',
         '{}',
@@ -410,16 +410,34 @@ export async function seedOpeningState(
   }
 }
 
-const OPENING_RULE = [
-  'This is the OPENING of a scene. Nothing has happened yet. Establish the initial "time",',
-  '"location", "weather" and "outfits" that the greeting implies, and leave everything else',
-  'empty. If the greeting does not establish something, omit it rather than inventing it.',
-  'Emit "time" as a full date and 24-hour clock reading when the greeting implies one,',
-  'including when it only gives a time of day ("late evening" -> 21:00).',
-  // A greeting rarely states a clock, and under `manual` the reader owns it — seeding one
-  // would hand them a time they did not choose.
-  'When the pace is manual, omit "time" entirely.',
-].join('\n');
+/**
+ * The opening instruction, with the scene's epoch when the reader set one.
+ *
+ * The epoch matters most here: it is the only place a scene's starting date enters the
+ * record. Seeded from the reader's answer, every subsequent clock reading descends from a
+ * date that was actually chosen, which is what makes a fact datable at all.
+ */
+function openingRule(setup: SceneSetup): string {
+  const start = setup.startDate.trim();
+  return [
+    'This is the OPENING of a scene. Nothing has happened yet. Establish the initial "time",',
+    '"location", "weather" and "outfits" that the greeting implies, and leave everything else',
+    'empty. If the greeting does not establish something, omit it rather than inventing it.',
+    'Emit "time" as a full date and 24-hour clock reading when the greeting implies one,',
+    'including when it only gives a time of day ("late evening" -> 21:00).',
+    // The reader's epoch wins over anything the greeting implies: it is a decision they made
+    // about when the story starts, not a detail to be inferred away.
+    start.length > 0
+      ? `The scene opens on ${start}. Use that date for "time", filling in a clock reading from the greeting if it gives one and otherwise leaving the time of day as the greeting has it.`
+      : '',
+    // A greeting rarely states a clock, and under `manual` the reader owns it — seeding one
+    // would hand them a time they did not choose. With an epoch set the date still goes in,
+    // because a start date is the reader's own answer rather than the narrator's invention.
+    setup.timePace === 'manual' && start.length === 0 ? 'When the pace is manual, omit "time" entirely.' : '',
+  ]
+    .filter((line) => line.length > 0)
+    .join('\n');
+}
 
 /**
  * The world state to write one turn against, read from the turn's anchor on the visible

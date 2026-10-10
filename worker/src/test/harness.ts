@@ -33,6 +33,7 @@ export const TEST_MIGRATIONS = [
   '0013_presets_authored.sql',
   '0014_provenance.sql',
   '0015_supersession_provenance.sql',
+  '0017_memory_dates.sql',
 ];
 
 /**

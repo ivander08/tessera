@@ -1,6 +1,7 @@
 import { buildMatchQuery } from './fts';
 import { VISIBLE_PATH_SEQ_CTE } from '../branch';
 import { factIsTrueSql } from './facts';
+import { summaryDateSpan } from './dates';
 
 export type { RecallHit, RecallKind } from '../../../src/lib/memoryTypes';
 import type { RecallHit } from '../../../src/lib/memoryTypes';
@@ -11,9 +12,23 @@ interface FtsRow {
   ref_id: string;
 }
 
+interface FactFtsRow extends FtsRow {
+  /** The in-world date the fact or event carries, or null. */
+  at: string | null;
+  kind: string;
+}
+
+interface SummaryFtsRow extends FtsRow {
+  covers_to: number;
+  covers_date_from: string | null;
+  covers_date_to: string | null;
+}
+
 interface PinnedRow {
   id: string;
   text: string;
+  at: string | null;
+  kind: string;
 }
 
 /**
@@ -89,9 +104,14 @@ export async function recall(
       // it is not true at all — injecting it anyway writes a scene where an event that
       // never happened has already happened. `learned_at_seq = 0` is a fact with no
       // recorded origin (a backfilled row, or a manually added one) and stays visible.
+      //
+      // Events are NOT filtered out here. They are the same table and the same index, and
+      // they are exactly what a "when did that happen" query is looking for, so excluding
+      // them would remove the hits the reader most wants. The discriminator rides back on
+      // the row and the caller splits the two lists.
       `${VISIBLE_PATH_SEQ_CTE}
        SELECT facts_fts.rowid AS rowid, bm25(facts_fts) AS score,
-              f.text AS text, f.id AS ref_id
+              f.text AS text, f.id AS ref_id, f.at AS at, f.kind AS kind
          FROM facts_fts
          JOIN facts f ON f.rowid = facts_fts.rowid
         WHERE facts_fts MATCH ?2 AND f.chat_id = ?1
@@ -100,13 +120,17 @@ export async function recall(
         LIMIT ?3`,
     )
       .bind(chatId, match, limit, beforeSeq)
-      .all<FtsRow>(),
+      .all<FactFtsRow>(),
 
     env.DB.prepare(
       // Same two bounds as the prompt's summary read: not from a later turn, and its range
       // still on the visible path. See the note in `buildMemoryBlock`.
+      //
+      // The date span is read from the row rather than from the prose: it is the clock
+      // reading that was actually recorded for the covered range, so it stays right even
+      // when the summariser omits a date from its text.
       `${VISIBLE_PATH_SEQ_CTE}
-       SELECT id AS ref_id, content AS text, covers_to
+       SELECT id AS ref_id, content AS text, covers_to, covers_date_from, covers_date_to
          FROM summaries
         WHERE chat_id = ?1 AND content LIKE ?2 ESCAPE '\\'
           AND (?4 IS NULL OR covers_to < ?4)
@@ -115,14 +139,14 @@ export async function recall(
         LIMIT ?3`,
     )
       .bind(chatId, likePattern(query), limit, beforeSeq)
-      .all<FtsRow>(),
+      .all<SummaryFtsRow>(),
 
     env.DB.prepare(
       // Pinning overrides RANKING, never status or provenance: a pinned fact that has since
       // been superseded is still superseded, and a pinned fact recorded at turn 5 is still
       // not true at turn 4.
       `${VISIBLE_PATH_SEQ_CTE}
-       SELECT id, text FROM facts
+       SELECT id, text, at, kind FROM facts
         WHERE chat_id = ?1 AND pinned = 1
           AND ${factIsTrueSql('facts', '?2')}
         ORDER BY created_at`,
@@ -139,10 +163,11 @@ export async function recall(
       score: row.score,
     })),
     ...facts.results.map((row) => ({
-      kind: 'fact' as const,
+      kind: row.kind === 'event' ? ('event' as const) : ('fact' as const),
       refId: row.ref_id,
       text: row.text,
       score: row.score,
+      at: row.at,
     })),
     // A LIKE hit is a weaker signal than a bm25 hit, so it scores 0 and sorts last.
     ...summaries.results.map((row) => ({
@@ -150,6 +175,7 @@ export async function recall(
       refId: row.ref_id,
       text: row.text,
       score: 0,
+      at: summaryDateSpan(row.covers_date_from, row.covers_date_to),
     })),
   ].sort((a, b) => a.score - b.score);
 
@@ -157,7 +183,13 @@ export async function recall(
   const out: RecallHit[] = [];
   for (const row of pinned.results) {
     seen.add(`fact:${row.id}`);
-    out.push({ kind: 'fact', refId: row.id, text: row.text, score: 0 });
+    out.push({
+      kind: row.kind === 'event' ? 'event' : 'fact',
+      refId: row.id,
+      text: row.text,
+      score: 0,
+      at: row.at,
+    });
   }
   for (const entry of matched) {
     if (out.length >= limit + pinned.results.length) break;

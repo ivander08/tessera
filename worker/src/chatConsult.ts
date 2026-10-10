@@ -4,6 +4,7 @@ import { loadStateForViewer } from './state/update';
 import { loadPathTail, type BranchRow } from './branch';
 import { loadSceneSetup } from './scene';
 import { recall } from './memory/recall';
+import { summaryDateSpan } from './memory/dates';
 import { streamCheap } from './cheap';
 import { CONTENT_BLOCK, parseReply, unwrapFencedProse } from './forge/consult';
 import { partialField } from './forge/partial';
@@ -403,11 +404,16 @@ async function memoryBlock(env: Env, chatId: string, rows: BranchRow[]): Promise
     const [hits, summaries] = await Promise.all([
       query.trim().length > 0 ? recall(env, chatId, query, 8) : Promise.resolve([] as RecallHit[]),
       env.DB.prepare(
-        `SELECT id, content FROM summaries WHERE chat_id = ?
+        `SELECT id, content, covers_date_from, covers_date_to FROM summaries WHERE chat_id = ?
           ORDER BY covers_to DESC LIMIT 3`,
       )
         .bind(chatId)
-        .all<{ id: string; content: string }>(),
+        .all<{
+          id: string;
+          content: string;
+          covers_date_from: string | null;
+          covers_date_to: string | null;
+        }>(),
     ]);
 
     return renderMemoryBlock(
@@ -417,9 +423,11 @@ async function memoryBlock(env: Env, chatId: string, rows: BranchRow[]): Promise
           refId: row.id,
           text: row.content,
           score: 0,
+          at: summaryDateSpan(row.covers_date_from, row.covers_date_to),
         })),
         facts: hits.filter((hit) => hit.kind === 'fact'),
-        recalled: hits.filter((hit) => hit.kind !== 'fact'),
+        events: hits.filter((hit) => hit.kind === 'event'),
+        recalled: hits.filter((hit) => hit.kind !== 'fact' && hit.kind !== 'event'),
       },
       MEMORY_TOKENS,
       estimateTokens,

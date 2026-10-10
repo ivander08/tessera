@@ -27,6 +27,21 @@ export interface SceneSetup {
    * deliberate opt-out, for a reader who wants to keep the clock themselves.
    */
   timePace: 'auto' | 'manual';
+  /**
+   * The in-world date the scene opens on, free text, or empty for "unset".
+   *
+   * This is the scene's EPOCH. Without it the clock has no origin: the narrator can advance
+   * time from turn to turn, but nothing records what day the story started on, so a fact
+   * can never be dated to a real reading. Measured before this existed: 792 turns carried a
+   * clock reading and not one of them could be anchored, because the first reading was the
+   * narrator's invention rather than a date the reader chose.
+   *
+   * Free text rather than a date input on purpose. The narrator's clock is a display string
+   * ("Wednesday, 14 April 2026, 09:00"), the reader may want a period rather than a day, and
+   * a value that does not parse is still worth showing in the state panel. The reader owns
+   * the format; `parseStateTime` handles ordering where a value happens to be a full date.
+   */
+  startDate: string;
   /** Who maintains the world state. */
   stateMode: 'automatic' | 'manual' | 'off';
   /** Generate time/weather/location/outfits from the greeting when the scene opens. */
@@ -108,6 +123,7 @@ export interface Craft {
   /** How long a reply runs. */
   responseLength:
     | 'off'
+    | 'reallyShort'
     | 'short'
     | 'medium'
     | 'long'
@@ -191,6 +207,9 @@ export const DEFAULT_CRAFT: Craft = {
 
 export const DEFAULT_SCENE_SETUP: SceneSetup = {
   timePace: 'auto',
+  // Empty by default: an epoch is the reader's to set, and inventing one would date every
+  // fact in every existing chat to a day the story never mentioned.
+  startDate: '',
   stateMode: 'automatic',
   generateOpeningState: true,
   craft: DEFAULT_CRAFT,
@@ -449,6 +468,12 @@ export const LENGTH_OPTIONS: Array<{
     value: 'off',
     label: 'Leave it to the card',
     description: 'Tessera says nothing about this.',
+  },
+  {
+    value: 'reallyShort',
+    label: 'Really short',
+    description:
+      'At most two short paragraphs, and one is usually better. Reacts and stops — no preamble, no recap. A line of dialogue on its own is a complete reply.',
   },
   {
     value: 'short',
@@ -1201,12 +1226,16 @@ export function parseSceneSetup(
   const timePace = record.timePace;
   const stateMode = record.stateMode;
   const generateOpeningState = record.generateOpeningState;
+  const startDate = record.startDate;
 
   return {
     timePace:
       typeof timePace === 'string' && TIME_PACES.has(timePace)
         ? (timePace as SceneSetup['timePace'])
         : fallback.timePace,
+    // An empty string is a real value — "the reader cleared it" — and must not fall back to
+    // a stored date, or clearing the field would silently restore the old epoch.
+    startDate: typeof startDate === 'string' ? startDate.trim() : fallback.startDate,
     stateMode:
       typeof stateMode === 'string' && STATE_MODES.has(stateMode)
         ? (stateMode as SceneSetup['stateMode'])

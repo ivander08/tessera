@@ -454,6 +454,8 @@ const DISTANCE_LINE: Record<Craft['narrativeDistance'], string> = {
 
 const LENGTH_LINE: Record<Craft['responseLength'], string> = {
   off: '',
+  reallyShort:
+    'The reply is at most two short paragraphs, and one is usually better. No preamble, no recap, no scene-setting: react to what was just said or done and stop. A line of dialogue on its own is a complete reply.',
   short:
     'The reply runs under four paragraphs; paragraphs that are dialogue do not count toward the limit.',
   medium:

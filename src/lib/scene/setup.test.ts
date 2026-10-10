@@ -21,11 +21,24 @@ describe('parseSceneSetup', () => {
   test('keeps a valid document', () => {
     const setup: SceneSetup = {
       timePace: 'manual',
+      startDate: '',
       stateMode: 'off',
       generateOpeningState: false,
       craft: DEFAULT_CRAFT,
     };
     expect(parseSceneSetup(setup)).toEqual(setup);
+  });
+
+  test('keeps a start date, and an empty one stays empty', () => {
+    // An empty string is a real value — "the reader cleared it". Falling back to a stored
+    // date would silently restore the old epoch.
+    const dated: SceneSetup = {
+      ...DEFAULT_SCENE_SETUP,
+      startDate: 'Wednesday, 14 April 2026',
+    };
+    expect(parseSceneSetup(dated).startDate).toBe('Wednesday, 14 April 2026');
+    expect(parseSceneSetup({ startDate: '' }, dated).startDate).toBe('');
+    expect(parseSceneSetup({ startDate: 42 }, dated).startDate).toBe('Wednesday, 14 April 2026');
   });
 
   test('an unknown enum member falls back per field, keeping its valid siblings', () => {
@@ -59,6 +72,7 @@ describe('parseSceneSetup', () => {
     // the STORED value, not on the built-in default, or a typo would undo a choice.
     const stored: SceneSetup = {
       timePace: 'manual',
+      startDate: '',
       stateMode: 'manual',
       generateOpeningState: false,
       craft: DEFAULT_CRAFT,
@@ -102,6 +116,7 @@ describe('parseSceneSetup — craft', () => {
   test('round-trips through JSON', () => {
     const setup: SceneSetup = {
       timePace: 'manual',
+      startDate: 'Wednesday, 14 April 2026',
       stateMode: 'manual',
       generateOpeningState: false,
       craft: {

@@ -100,6 +100,7 @@ describe('scene setup: writing', () => {
     // to reset it.
     expect(payload.setup).toEqual({
       timePace: 'manual',
+      startDate: DEFAULT_SCENE_SETUP.startDate,
       stateMode: 'off',
       generateOpeningState: DEFAULT_SCENE_SETUP.generateOpeningState,
       craft: DEFAULT_SCENE_SETUP.craft,

@@ -118,6 +118,34 @@ function seedScene(db: Database, chatId: string, from: number, to: number, conte
   );
 }
 
+/**
+ * A scene summary with the in-world date span it covers.
+ *
+ * The span is what survives an arc fold — `covers_from`/`covers_to` are seqs, and folding
+ * discards the positions they named — so a fold's own dates come from these columns rather
+ * than from the scenes' text.
+ */
+function seedDatedScene(
+  db: Database,
+  chatId: string,
+  from: number,
+  to: number,
+  content: string,
+  dateFrom: string,
+  dateTo: string,
+): void {
+  seedScene(db, chatId, from, to, content);
+  exec(
+    db,
+    `UPDATE summaries SET covers_date_from = ?, covers_date_to = ?
+      WHERE chat_id = ? AND tier = 'scene' AND covers_from = ?`,
+    dateFrom,
+    dateTo,
+    chatId,
+    from,
+  );
+}
+
 describe('FTS5 escaping', () => {
   test('wraps each token in quotes and doubles internal quotes', () => {
     expect(escapeFtsToken('Ada')).toBe('"Ada"');
@@ -302,6 +330,44 @@ describe('recall', () => {
     expect(hits.some((hit) => hit.kind === 'summary')).toBe(true);
     // Summary hits carry score 0 — a LIKE hit is a weaker signal than bm25.
     expect(hits.find((hit) => hit.kind === 'summary')?.score).toBe(0);
+  });
+
+  test('a fact and an event come back with the date they carry, split by kind', async () => {
+    // The reader's question — "when did I first meet Sydney" — is answered by an EVENT, and
+    // the date has to ride back on the hit or the narrator can only say what happened.
+    const { env, db } = makeEnv();
+    const chatId = seedChat(db);
+    exec(
+      db,
+      `INSERT INTO facts (id, chat_id, text, subject, at, kind, status, pinned, created_at)
+       VALUES ('f-meet', ?, 'Ivander first met Sydney at the docks.', 'Sydney', 'Tuesday, 14 April 2026, 20:00', 'event', 'active', 0, 1)`,
+      chatId,
+    );
+    exec(
+      db,
+      `INSERT INTO facts (id, chat_id, text, subject, at, kind, status, pinned, created_at)
+       VALUES ('f-key', ?, 'Ivander keeps the brass key.', 'Ivander', 'Wednesday, 15 April 2026, 09:00', 'fact', 'active', 0, 2)`,
+      chatId,
+    );
+
+    const hits = await recall(env, chatId, 'Sydney docks brass key', 10);
+    const meet = hits.find((hit) => hit.refId === 'f-meet');
+    const key = hits.find((hit) => hit.refId === 'f-key');
+
+    expect(meet?.kind).toBe('event');
+    expect(meet?.at).toBe('Tuesday, 14 April 2026, 20:00');
+    expect(key?.kind).toBe('fact');
+    expect(key?.at).toBe('Wednesday, 15 April 2026, 09:00');
+  });
+
+  test('a summary hit carries its covered span as one collapsed date', async () => {
+    const { env, db } = makeEnv();
+    const chatId = seedChat(db);
+    seedDatedScene(db, chatId, 1, 3, 'They argued about the brass key.', '14 April 2026', '15 April 2026');
+
+    const hits = await recall(env, chatId, 'brass key', 10);
+    const summary = hits.find((hit) => hit.kind === 'summary');
+    expect(summary?.at).toBe('14 April 2026 – 15 April 2026');
   });
 
   test('superseded facts are never recalled, even when pinned', async () => {
@@ -653,6 +719,59 @@ describe('consolidate', () => {
     expect(row.covers_from).toBe(1);
     expect(row.covers_to).toBe(20);
     expect(row.content).toBe('The cellar arc, folded.');
+  });
+
+  test('an arc inherits the date span of the scenes it folded', async () => {
+    // This is the whole reason the date columns exist. The fold replaces ten scenes with
+    // one row and `covers_from`/`covers_to` are POSITIONS — once the scenes are gone, the
+    // seqs they named are gone with them, so anything that needed to know WHEN has nowhere
+    // left to look unless the date is carried forward.
+    const { env, db } = makeEnv();
+    const chatId = seedChat(db);
+    await configure(env);
+    for (let i = 0; i < 10; i++) {
+      seedDatedScene(
+        db,
+        chatId,
+        i * 2 + 1,
+        i * 2 + 2,
+        `scene ${i}`,
+        `Monday, ${i + 1} April 2026, 09:00`,
+        `Monday, ${i + 1} April 2026, 18:00`,
+      );
+    }
+
+    await consolidate(env, chatId);
+
+    const row = db
+      .query("SELECT covers_date_from, covers_date_to FROM summaries WHERE tier = 'arc'")
+      .get() as { covers_date_from: string | null; covers_date_to: string | null };
+    expect(row.covers_date_from).toBe('Monday, 1 April 2026, 09:00');
+    expect(row.covers_date_to).toBe('Monday, 10 April 2026, 18:00');
+  });
+
+  test('a fold whose middle scenes have no clock still reports the span it covers', async () => {
+    // The outermost readings that exist, not the first and last scene's: a scene with no
+    // recorded clock must not blank the arc's date.
+    const { env, db } = makeEnv();
+    const chatId = seedChat(db);
+    await configure(env);
+    for (let i = 0; i < 10; i++) {
+      // Only the first and the last carry a date; the eight in between have none.
+      if (i === 0 || i === 9) {
+        seedDatedScene(db, chatId, i * 2 + 1, i * 2 + 2, `scene ${i}`, `Monday, ${i + 1} April 2026, 09:00`, `Monday, ${i + 1} April 2026, 18:00`);
+      } else {
+        seedScene(db, chatId, i * 2 + 1, i * 2 + 2, `scene ${i}`);
+      }
+    }
+
+    await consolidate(env, chatId);
+
+    const row = db
+      .query("SELECT covers_date_from, covers_date_to FROM summaries WHERE tier = 'arc'")
+      .get() as { covers_date_from: string | null; covers_date_to: string | null };
+    expect(row.covers_date_from).toBe('Monday, 1 April 2026, 09:00');
+    expect(row.covers_date_to).toBe('Monday, 10 April 2026, 18:00');
   });
 
   test('consumption is tracked by range: folded scenes are never folded again', async () => {

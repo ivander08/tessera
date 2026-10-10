@@ -28,7 +28,7 @@ Tessera is a client you point at your own API key and write in. A **scene** is a
 
 Underneath, three things run automatically while you read:
 
-**Memory.** Every twenty turns, a cheap model compresses the transcript into a scene summary, and separately pulls out facts — one self-contained sentence each, things that will still be true many scenes later: a name, a debt, an injury, an object and its markings, a promise. Facts are never rewritten. A newer fact retires an older one by flipping its status, so the history stays readable and nothing true silently disappears. When you write, the relevant ones are recalled by keyword into the prompt tail.
+**Memory.** Every twenty turns, a cheap model compresses the transcript into a scene summary, and separately pulls out facts — one self-contained sentence each, things that will still be true many scenes later: a name, a debt, an injury, an object and its markings, a promise — and dated events, the things that happened on a particular day. Facts are never rewritten. A newer fact retires an older one by flipping its status, so the history stays readable and nothing true silently disappears. Everything is dated from the scene's own clock, so "when did we first meet" has an answer. When you write, the relevant ones are recalled by keyword into the prompt tail.
 
 **World state.** The narrator keeps a structured document — where and when it is, what the weather is doing, who is present, who is wearing what, what is being carried, and notes it has committed to. It is written after each completed turn from a validated patch, so the model cannot invent a field or drift the format. It is on screen above the transcript while you read, and it is editable when it gets something wrong.
 
@@ -40,7 +40,7 @@ Underneath, three things run automatically while you read:
 |---|---|
 | **Scenes & branching** | Swipe between versions of any reply · regenerate without losing the old continuation · edit a message and keep the original · export a scene as Markdown or JSON |
 | **Characters** | Card import — PNG (v2/v3), CharX, plain JSON, with no dropped fields · the full library with each card's token cost |
-| **Memory** | Automatic scene summaries and arc folds · extracted facts with supersession · FTS5 keyword recall · a viewer where you can pin, edit, supersede or delete any of it |
+| **Memory** | Automatic scene summaries and arc folds · extracted facts with supersession · dated events, so "when did that happen" has an answer · every entry carries the in-world date it happened or became true · FTS5 keyword recall · a viewer where you can pin, edit, re-date, supersede or delete any of it |
 | **World state** | Date and time, place, weather, present, away, outfits, inventory, notes · written from a validated patch after each turn · per-character knowledge isolation |
 | **Casts** | A scene can hold more than one speaker; a group reply is split per voice, each with its own name and colour |
 | **The consultant** | An interview that drafts, critiques and token-costs a card, and writes it |

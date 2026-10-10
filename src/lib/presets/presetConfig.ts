@@ -74,7 +74,14 @@ export interface PresetConfig {
  * "one beat, then stop" produces a reply that ends where the writing ends. The counts in
  * the descriptions are the reader-facing summary; the rule is what is actually sent.
  */
-export type ResponseLength = 'auto' | 'brief' | 'short' | 'medium' | 'long' | 'custom';
+export type ResponseLength =
+  | 'auto'
+  | 'brief'
+  | 'short'
+  | 'reallyShort'
+  | 'medium'
+  | 'long'
+  | 'custom';
 
 export const RESPONSE_LENGTHS: Array<{
   value: ResponseLength;
@@ -106,6 +113,15 @@ export const RESPONSE_LENGTHS: Array<{
     rule:
       'Write a short reply: one short paragraph of a few sentences. Move the scene ' +
       'forward by one step and stop there.',
+  },
+  {
+    value: 'reallyShort',
+    label: 'Really short',
+    description: 'One or two short paragraphs, and often just one.',
+    rule:
+      'Write a very short reply: at most two short paragraphs, and one is usually ' +
+      'better. React to what was just said or done and stop — no preamble, no recap, ' +
+      'no scene-setting. A single line of dialogue is a complete reply.',
   },
   {
     value: 'medium',

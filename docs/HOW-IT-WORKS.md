@@ -430,7 +430,7 @@ nothing:
 | **Tense** | **off** | Past / Present |
 | **Show vs tell** | Balanced | Show / Show weighted / Tell weighted / Tell / Adaptive / *off* |
 | **Narrative distance** | Close | Remote / Objective / Standard / Free indirect discourse / Adaptive / *off* |
-| **Response length** | Adaptive medium | Short / Medium / Long / No set limit / Adaptive short / Adaptive long / *off* |
+| **Response length** | Adaptive medium | **Really short** / Short / Medium / Long / No set limit / Adaptive short / Adaptive long / *off* |
 | **Paragraph density** | Standard | Minimal / Light / Full / Dense / Adaptive / *off* |
 | **Sentence rhythm** | Dynamic | Uniform / Sprawling / Percussive / *off* |
 | **Figurative language** | Adaptive | None / Sparse / Moderate / Rich / Saturated / *off* |
@@ -550,12 +550,60 @@ active.
 Recall returns only `status = 'active'` facts, and pinned facts are prepended
 unconditionally.
 
-**🐛 Bug found:** `superseded_by` is set to the superseded fact's **own id**, not the
-replacement's (`extract.ts:163`). The viewer therefore shows a fact "superseded by
-itself". Harmless to recall, but wrong.
+**🐛 Bug found (since fixed in code, doc was stale):** `superseded_by` used to be set to
+the superseded fact's **own id**, not the replacement's. The viewer then showed a fact
+"superseded by itself". `extract.ts` now names the replacement when exactly one new fact
+was extracted, and leaves it null otherwise — with zero or several new facts there is no
+single replacement to name.
 
 **Finding:** `subject` is parsed, stored and displayed, but **never consumed** at
 runtime. A label only.
+
+### 4.1a In-world dates ✅
+
+Added 2026-10-10. The defect it fixes: **memory stored WHAT and WHERE, never WHEN.**
+
+Measured on the real database before the fix: **792** turns carried a full in-world
+clock (`"Wednesday, 30 September 2026, 05:34"`) in `messages.state_json`, and **zero**
+of 47 facts and 28 summaries contained any date. The date was on disk the whole time;
+nothing read it.
+
+Three separate causes, all fixed:
+
+1. **Extraction never saw the clock.** The transcript was built as
+   `role: content`, but the clock lives BESIDE the message, in its state snapshot, not
+   inside `content`. Every line is now prefixed: `[Wednesday, 30 September 2026, 05:34] user: …`.
+2. **There was no field for a date.** `facts.at` (the in-world reading, verbatim) and
+   the `"at"` key in the extraction reply now carry it.
+3. **Nothing survived an arc fold.** `covers_from`/`covers_to` are **seqs — a position**
+   — and folding ten scenes into one arc discards the positions it consumed. So a fact
+   or arc that outlived its fold had no position left to be dated by.
+   `summaries.covers_date_from` / `covers_date_to` carry the date forward instead.
+
+**The scene epoch.** A clock with no origin cannot date anything, so `SceneSetup` gained
+`startDate` — asked for in the wizard's time step and seeded into `state.time` by the
+opening seed. Without it the narrator advanced time from an invented starting point.
+
+**Facts vs events.** A fact stays true and can be superseded; an event *happened* and
+cannot. They share the `facts` table (`kind` discriminates) because they are the same
+shape — one sentence, a subject, a date — and differ only in how they age. One FTS
+index, one recall path, one viewer, one provenance rule. Recall ranks them together;
+the prompt renders them under separate headings:
+
+```
+Established facts:     ← standing state
+What happened:         ← dated history
+```
+
+Verified end to end against `deepseek-v4-1-flash`: a wizard-created scene dated
+14 April 2026, three real turns (the clock advancing 09:00 → 09:03 → 10:03 → Saturday
+18 April for "later that week"), then extraction wrote **8/8 dated rows** — 5 events and
+3 facts — with a summary spanning `[14 April 2026, 09:00 → 18 April 2026, 19:01]`.
+
+A known limit: **recall is keyword-only**, so a query like *"when did I first meet
+Sydney"* retrieves the relevant event (the word "Sydney" matches) and the event carries
+its date — but a query with no lexical overlap with any stored row still cannot find it.
+Embeddings would be the fix; that is not in scope here.
 
 ### 4.2 Scenes ✅
 

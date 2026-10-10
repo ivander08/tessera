@@ -1,6 +1,7 @@
 import { badRequest, json, notFound, readJson } from '../http';
 import { recall } from './recall';
 import { factStatusSql } from './facts';
+import { summaryDateSpan } from './dates';
 import { VISIBLE_PATH_SEQ_CTE } from '../branch';
 import { renderMemoryBlock } from '../../../src/lib/prompt/memoryBlock';
 import { estimateTokens } from '../../../src/lib/tokenEstimate';
@@ -22,6 +23,8 @@ interface SummaryRow {
   tier: 'scene' | 'arc';
   covers_from: number;
   covers_to: number;
+  covers_date_from: string | null;
+  covers_date_to: string | null;
   content: string;
   tokens: number | null;
   created_at: number;
@@ -34,6 +37,9 @@ interface FactRow {
   status: 'active' | 'superseded';
   superseded_by: string | null;
   pinned: number;
+  kind: 'fact' | 'event';
+  /** The in-world date, verbatim, or null. */
+  at: string | null;
   learned_at_seq: number;
   superseded_at_seq: number;
   created_at: number;
@@ -48,7 +54,7 @@ export async function listMemory(env: Env, chatId: string): Promise<Response> {
   const [summaries, facts, lastUser] = await Promise.all([
     // Newest coverage first: the arc/scene you just made is the one you want to read.
     env.DB.prepare(
-      `SELECT id, tier, covers_from, covers_to, content, tokens, created_at
+      `SELECT id, tier, covers_from, covers_to, covers_date_from, covers_date_to, content, tokens, created_at
          FROM summaries WHERE chat_id = ? ORDER BY covers_from DESC`,
     )
       .bind(chatId)
@@ -59,7 +65,7 @@ export async function listMemory(env: Env, chatId: string): Promise<Response> {
       // that reported "superseded" for it would contradict the prompt it is explaining.
       `${VISIBLE_PATH_SEQ_CTE}
        SELECT id, text, subject, ${factStatusSql('facts')} AS status, superseded_by,
-              pinned, learned_at_seq, superseded_at_seq, created_at
+              pinned, kind, at, learned_at_seq, superseded_at_seq, created_at
          FROM facts WHERE chat_id = ?1 ORDER BY pinned DESC, created_at`,
     )
       .bind(chatId)
@@ -96,9 +102,11 @@ export async function listMemory(env: Env, chatId: string): Promise<Response> {
             refId: row.id,
             text: row.content,
             score: 0,
+            at: summaryDateSpan(row.covers_date_from, row.covers_date_to),
           })),
         facts: recalled.filter((hit) => hit.kind === 'fact'),
-        recalled: recalled.filter((hit) => hit.kind !== 'fact'),
+        events: recalled.filter((hit) => hit.kind === 'event'),
+        recalled: recalled.filter((hit) => hit.kind !== 'fact' && hit.kind !== 'event'),
       },
       800,
       estimateTokens,
@@ -123,7 +131,15 @@ function messageOf(error: unknown): string {
  * `superseded` columns could never be exercised at all.
  */
 export async function createFact(env: Env, req: Request): Promise<Response> {
-  const body = await readJson<{ chatId?: string; text?: string; subject?: string; pinned?: boolean }>(req);
+  const body = await readJson<{
+    chatId?: string;
+    text?: string;
+    subject?: string;
+    pinned?: boolean;
+    /** The in-world date, or absent for "no date". */
+    at?: string;
+    kind?: string;
+  }>(req);
   if (!body?.chatId || typeof body.text !== 'string' || body.text.trim().length === 0) {
     return badRequest('chatId and text required');
   }
@@ -133,16 +149,23 @@ export async function createFact(env: Env, req: Request): Promise<Response> {
     .first<{ id: string }>();
   if (!chat) return notFound('chat not found');
 
+  // A hand-written row defaults to a fact; the reader can mark it an event so it renders
+  // under "What happened" and is exempt from the supersede rules.
+  const kind = body.kind === 'event' ? 'event' : 'fact';
+  const at = typeof body.at === 'string' && body.at.trim().length > 0 ? body.at.trim() : null;
+
   const id = crypto.randomUUID();
   await env.DB.prepare(
-    `INSERT INTO facts (id, chat_id, text, subject, status, pinned, created_at)
-     VALUES (?, ?, ?, ?, 'active', ?, ?)`,
+    `INSERT INTO facts (id, chat_id, text, subject, at, kind, status, pinned, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
   )
     .bind(
       id,
       body.chatId,
       body.text.trim(),
       typeof body.subject === 'string' && body.subject.length > 0 ? body.subject : null,
+      at,
+      kind,
       body.pinned ? 1 : 0,
       Date.now(),
     )
@@ -189,11 +212,18 @@ export async function mutateMemory(
     subject?: string | null;
     pinned?: boolean;
     status?: string;
+    /** The in-world date, or null to clear it. */
+    at?: string | null;
   }>(req);
   if (!body) return badRequest('invalid body');
 
   const sets: string[] = [];
   const values: Array<string | number | null> = [];
+
+  if (body.at !== undefined) {
+    sets.push('at = ?');
+    values.push(typeof body.at === 'string' && body.at.trim().length > 0 ? body.at.trim() : null);
+  }
 
   if (body.text !== undefined) {
     if (typeof body.text !== 'string' || body.text.trim().length === 0) {
