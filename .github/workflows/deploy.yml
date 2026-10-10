@@ -135,10 +135,20 @@ jobs:
             -e "ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes" \
             ./ "$VPS_USER@$VPS_HOST:/srv/tessera/"
 
-      - name: Install dependencies and restart the service
+      - name: Apply migrations, then restart the service
+        # Migrations run BEFORE the restart, not after. The rsync has already replaced the
+        # code on disk, so the schema has to be ready before the new code starts — otherwise
+        # the first request against a new column fails. Applying first also means a migration
+        # failure aborts the deploy while the OLD process is still serving, which is the
+        # recoverable order; a restart-then-migrate would leave a new binary running against
+        # an old schema.
+        #
+        # `sh deploy/migrate.sh` rather than executing the file directly: the rsync does not
+        # preserve the executable bit (`-rltz`, deliberately, see the copy step), so running
+        # it by path would fail with permission denied.
         run: |
           ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes "$VPS_USER@$VPS_HOST" \
-            'cd /srv/tessera && /usr/local/bin/bun install --frozen-lockfile --production && sudo systemctl restart tessera'
+            'cd /srv/tessera && sh deploy/migrate.sh && /usr/local/bin/bun install --frozen-lockfile --production && sudo systemctl restart tessera'
 
       - name: Verify the service is healthy
         # The runner cannot reach the VPS loopback, so the health probe runs there.

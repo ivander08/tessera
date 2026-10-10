@@ -208,6 +208,10 @@ Migrations create the schema — including the FTS tables, their six sync trigge
 `rebuild` that populates the index. So search works with no manual step, and the import
 only has to supply rows.
 
+Run the same script the deploy uses, so the one-time path and the recurring path cannot
+drift. It creates the `d1_migrations` ledger on an empty database and applies every
+migration in filename order.
+
 ```sh
 cd /srv/tessera
 
@@ -215,13 +219,17 @@ cd /srv/tessera
 # to get a database that reads as subtly wrong.
 sudo rm -f /srv/tessera/data/tessera.sqlite*
 
-for f in $(ls migrations/*.sql | sort); do
-  echo "applying $f"
-  sudo -u tessera sqlite3 /srv/tessera/data/tessera.sqlite < "$f" || { echo "FAILED $f"; break; }
-done
+# An empty database needs the ledger table to exist before the runner can record into it.
+sudo -u tessera sqlite3 /srv/tessera/data/tessera.sqlite \
+  "CREATE TABLE IF NOT EXISTS d1_migrations (id INTEGER PRIMARY KEY, name TEXT, applied_at INTEGER);"
+
+sudo -u tessera sh deploy/migrate.sh /srv/tessera/data/tessera.sqlite
 
 sudo -u tessera sqlite3 /srv/tessera/data/tessera.sqlite < /tmp/d1-data.sql
 ```
+
+The runner is what CI calls on every deploy (§7), so a migration added later is applied by
+the deploy itself and never needs this section again. Re-running it is a no-op.
 
 ### 6d. Verify — this is the gate
 
