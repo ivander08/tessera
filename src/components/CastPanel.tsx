@@ -85,87 +85,97 @@ export function CastPanel({ chatId, onChanged }: { chatId: string; onChanged?: (
         <>
           <div className="panel panel-pad" style={{ display: 'grid', gap: 10 }}>
             {data.cast.map((member) => (
-              <div key={member.id} style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                <Avatar
-                  src={
-                    member.character_id
-                      ? `/api/characters/${encodeURIComponent(member.character_id)}/avatar`
-                      : null
-                  }
-                  name={member.name}
-                  className="cast-avatar"
-                />
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div
-                    className="turn-speaker"
-                    style={member.color ? { color: `var(${member.color})` } : undefined}
-                  >
-                    {member.name}
+              <div key={member.id} style={{ display: 'grid', gap: 8 }}>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                  <Avatar
+                    src={
+                      member.character_id
+                        ? `/api/characters/${encodeURIComponent(member.character_id)}/avatar`
+                        : null
+                    }
+                    name={member.name}
+                    className="cast-avatar"
+                  />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div
+                      className="turn-speaker"
+                      style={member.color ? { color: `var(${member.color})` } : undefined}
+                    >
+                      {member.name}
+                    </div>
+                    <div className="form-hint" style={{ marginTop: 2 }}>
+                      {member.isPrimary
+                        ? 'The character this scene is written from'
+                        : member.character_id
+                          ? 'A real character'
+                          : 'Introduced by the narrator — no card yet'}
+                    </div>
                   </div>
-                  <div className="form-hint" style={{ marginTop: 2 }}>
-                    {member.isPrimary
-                      ? 'The character this scene is written from'
-                      : member.character_id
-                        ? 'A real character'
-                        : 'Introduced by the narrator — no card yet'}
-                  </div>
+
+                  {!member.isPrimary && (
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button
+                        type="button"
+                        className="btn quiet"
+                        disabled={busy}
+                        onClick={() => setPicking(picking === member.id ? null : member.id)}
+                      >
+                        {member.character_id ? 'Change' : 'Promote'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn quiet"
+                        disabled={busy}
+                        style={{ color: 'var(--danger)' }}
+                        onClick={() => setConfirming({ id: member.id, name: member.name })}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  )}
                 </div>
 
-                {!member.isPrimary && (
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <button
-                      type="button"
-                      className="btn quiet"
-                      disabled={busy}
-                      onClick={() => setPicking(picking === member.id ? null : member.id)}
+                {/* The picker opens under the row it applies to, so the reader can see which
+                    member they are attaching a card to. It used to render once after the
+                    whole list under a bare "Attach a card" heading, which is a picker with no
+                    stated subject. */}
+                {picking === member.id && (
+                  <div style={{ display: 'grid', gap: 6 }}>
+                    <span className="eyebrow">Attach a card to {member.name}</span>
+                    {characters.loading && <p className="sheet-sub">Loading…</p>}
+                    <div
+                      className="panel panel-pad"
+                      style={{ display: 'grid', gap: 6, maxHeight: 280, overflowY: 'auto' }}
                     >
-                      {member.character_id ? 'Change' : 'Promote'}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn quiet"
-                      disabled={busy}
-                      style={{ color: 'var(--danger)' }}
-                      onClick={() => setConfirming({ id: member.id, name: member.name })}
-                    >
-                      Remove
-                    </button>
+                      {(characters.data ?? []).map((character) => (
+                        <button
+                          key={character.id}
+                          type="button"
+                          className="pick-row"
+                          disabled={busy}
+                          onClick={() => void promote(member.id, character.id)}
+                        >
+                          <Avatar
+                            src={character.avatar}
+                            name={character.shownName ?? character.name}
+                            className="cast-avatar"
+                          />
+                          <span className="pick-name">
+                            {character.shownName ?? character.name}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                    <p className="form-hint" style={{ marginTop: 0 }}>
+                      The cast member is renamed to the card's shown name, and its portrait is
+                      used from then on. Lines already written keep the name they were written
+                      under.
+                    </p>
                   </div>
                 )}
               </div>
             ))}
           </div>
-
-          {/* The picker opens inline under the row it applies to, so the reader can see
-              which member they are attaching a card to. */}
-          {picking && (
-            <section className="section">
-              <span className="eyebrow">Attach a card</span>
-              {characters.loading && <p className="sheet-sub">Loading…</p>}
-              <div className="panel panel-pad" style={{ display: 'grid', gap: 6, maxHeight: 280, overflowY: 'auto' }}>
-                {(characters.data ?? []).map((character) => (
-                  <button
-                    key={character.id}
-                    type="button"
-                    className="pick-row"
-                    disabled={busy}
-                    onClick={() => void promote(picking, character.id)}
-                  >
-                    <Avatar
-                      src={character.avatar}
-                      name={character.shownName ?? character.name}
-                      className="cast-avatar"
-                    />
-                    <span className="pick-name">{character.shownName ?? character.name}</span>
-                  </button>
-                ))}
-              </div>
-              <p className="form-hint" style={{ marginTop: 8 }}>
-                The cast member is renamed to the card's shown name, and its portrait is used
-                from then on. Lines already written keep the name they were written under.
-              </p>
-            </section>
-          )}
         </>
       )}
 

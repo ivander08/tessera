@@ -9,6 +9,31 @@ function hit(kind: RecallHit['kind'], text: string, score = 0, at?: string | nul
 }
 
 describe('renderMemoryBlock — in-world dates', () => {
+  test('a recalled message carries the clock recorded beside it', () => {
+    // The clock lives BESIDE the turn, not in it. Recall reads it and the block renders it,
+    // because "when did we first meet" is answered by the transcript as much as by the
+    // extracted events — and the reading was on disk and unread before this.
+    const block = renderMemoryBlock(
+      {
+        summaries: [],
+        facts: [],
+        events: [],
+        recalled: [
+          hit('message', 'We met at the docks.', 0, 'Tuesday, 14 April 2026, 20:00'),
+          hit('message', 'A greeting with no snapshot.', 0, null),
+        ],
+      },
+      4000,
+      count,
+    );
+
+    expect(block).toContain('- [Tuesday, 14 April 2026, 20:00] We met at the docks.');
+    // No recorded clock means no bracket, not an empty one: `[]` reads as "the date is
+    // nothing", while a bare line reads as "no date was recorded".
+    expect(block).toContain('- A greeting with no snapshot.');
+    expect(block).not.toContain('[]');
+  });
+
   test('a dated fact and event carry their date, and an undated one does not invent one', () => {
     // The date leads, because "when" is the question this answers. An absent date renders
     // as the bare text rather than as "(no date)": writing it out would put a second,

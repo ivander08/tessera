@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { apiJson } from '../lib/api';
 import type { CharacterSummary } from '../lib/apiTypes';
 import { messageOf, useAsync } from '../lib/hooks';
@@ -13,13 +13,6 @@ import { useToast } from '../components/Toast';
 interface CharacterRow extends CharacterSummary {
   chat_count: number;
 }
-
-/**
- * The row icons are 30px rather than the 34px default: three of them plus the labelled
- * action have to sit beside a name on a 390px line, and 4px off each of three buttons is
- * 12px the name gets to keep.
- */
-const ICON_BTN = { width: 30, height: 30 } as const;
 
 /** The same 16px, 1.7-stroke grid the transcript's tools use. */
 const STROKE = {
@@ -56,8 +49,30 @@ export default function Characters() {
     [],
   );
   const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
   const [busyId, setBusyId] = useState<string | null>(null);
+  // The card just created, highlighted for a moment so the reader can see where it landed
+  // in a list they may have scrolled. The same treatment search hits get in the transcript.
+  //
+  // The param is consumed once into a ref rather than read as a dependency: clearing the
+  // query changes `params`, and an effect keyed on it would re-run and cancel its own
+  // timer — which left the highlight on screen permanently.
+  const justCreated = useRef(params.get('created'));
+  const [found, setFound] = useState<string | null>(justCreated.current);
   const toast = useToast();
+
+  // Mount-only, deliberately. `setParams` is not a stable identity across the navigation it
+  // performs, so keying the effect on it re-ran the cleanup — clearing the timer it had just
+  // set — and the highlight stayed on screen forever.
+  useEffect(() => {
+    if (!justCreated.current) return;
+    justCreated.current = null;
+    setParams({}, { replace: true });
+    const timer = window.setTimeout(() => setFound(null), 2200);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once, on mount
+  }, []);
+
   // The character being forked, while the name sheet is open. Null means no sheet.
   const [forking, setForking] = useState<CharacterRow | null>(null);
   // The character the reader has asked to delete, held until they confirm.
@@ -164,7 +179,10 @@ export default function Characters() {
             const shown = character.shownName ?? character.name;
             const busy = busyId === character.id;
             return (
-              <article key={character.id} className="plate">
+              <article
+                key={character.id}
+                className={`plate${found === character.id ? ' is-found' : ''}`}
+              >
                 {/* The portrait opens the character's own screen, which is where the
                     avatar is actually set — clicking a picture to change it is the most
                     direct thing it can do here. */}
@@ -204,7 +222,6 @@ export default function Characters() {
                       className="icon-btn"
                       aria-label={`Edit ${shown}`}
                       title="Edit"
-                      style={ICON_BTN}
                     >
                       <PencilGlyph />
                     </Link>
@@ -215,7 +232,6 @@ export default function Characters() {
                       className="icon-btn"
                       aria-label={`Fork ${shown}`}
                       title="Fork"
-                      style={ICON_BTN}
                     >
                       <ForkGlyph />
                     </button>
@@ -226,7 +242,7 @@ export default function Characters() {
                       className="icon-btn"
                       aria-label={`Delete ${shown}`}
                       title="Delete"
-                      style={{ ...ICON_BTN, color: 'var(--danger)' }}
+                      style={{ color: 'var(--danger)' }}
                     >
                       <TrashGlyph />
                     </button>

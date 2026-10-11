@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { useDialogFocus } from '../lib/useDialogFocus';
 
 /**
  * A sheet over the current screen.
@@ -37,21 +38,21 @@ export function Modal({
   // hands control back. Without this the sheet is gone in one frame and the enter
   // animation was the only motion it ever had.
   const requestClose = useCallback(() => setClosing(true), []);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+
+  // Escape, the focus trap, `inert` on the page behind and focus restoration all live in
+  // the shared hook, which also makes Escape close only the topmost sheet.
+  useDialogFocus(panelRef, requestClose);
 
   useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (event.key === 'Escape') requestClose();
-    }
-    document.addEventListener('keydown', onKey);
     // The page behind must not scroll while the sheet is open, or a flick inside the
     // sheet drags the transcript underneath it.
     const previous = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
-      document.removeEventListener('keydown', onKey);
       document.body.style.overflow = previous;
     };
-  }, [requestClose]);
+  }, []);
 
   const duration = reduced ? 0 : 0.2;
 
@@ -76,10 +77,12 @@ export function Modal({
         {!closing && (
           <motion.div
             key="panel"
+            ref={panelRef}
             className="sheet-panel"
             role="dialog"
             aria-modal="true"
             aria-label={title}
+            tabIndex={-1}
             initial={{ y: 14, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: 10, opacity: 0 }}

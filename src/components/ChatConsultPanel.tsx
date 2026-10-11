@@ -91,6 +91,9 @@ export function ChatConsultPanel({
    */
   const [phase, setPhase] = useState<ConsultPhase>('say');
   const [failure, setFailure] = useState<string | null>(null);
+  // The stream in flight, so the reader can stop it and so closing the dock does not leave
+  // it running to completion unseen.
+  const abortRef = useRef<AbortController | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -157,35 +160,44 @@ export function ChatConsultPanel({
     // which this closure captures stale — checking it there re-showed the streamed text after
     // the turn frame had already committed the same words to the transcript.
     let settled = false;
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     try {
-      await streamChatConsult<ChatConsultTurn>(chatId, { messages: next }, (frame) => {
-        if (frame.type === 'delta') {
-          streamed = frame.text;
-          setPending(frame.text);
-          return;
-        }
-        if (frame.type === 'phase') {
-          setPhase(frame.phase);
-          return;
-        }
-        if (frame.type === 'error') {
+      await streamChatConsult<ChatConsultTurn>(
+        chatId,
+        { messages: next },
+        (frame) => {
+          if (frame.type === 'delta') {
+            streamed = frame.text;
+            setPending(frame.text);
+            return;
+          }
+          if (frame.type === 'phase') {
+            setPhase(frame.phase);
+            return;
+          }
+          if (frame.type === 'error') {
+            settled = true;
+            setFailure(frame.message);
+            return;
+          }
+          const parsed = frame.turn;
           settled = true;
-          setFailure(frame.message);
-          return;
-        }
-        const parsed = frame.turn;
-        settled = true;
-        patch({
-          messages: [...next, { role: 'assistant', content: parsed.say }],
-          question: parsed.question ?? null,
-        });
-        setPending('');
-      });
+          patch({
+            messages: [...next, { role: 'assistant', content: parsed.say }],
+            question: parsed.question ?? null,
+          });
+          setPending('');
+        },
+        { signal: controller.signal },
+      );
     } catch (cause) {
       settled = true;
-      setFailure(messageOf(cause));
+      // An abort is the reader pressing Stop, not a failure to report.
+      if (!controller.signal.aborted) setFailure(messageOf(cause));
     } finally {
+      abortRef.current = null;
       // A stream that ended without a terminal frame still showed the reader something; the
       // partial text stays on screen rather than vanishing, which is what makes the failure
       // readable.
@@ -193,6 +205,9 @@ export function ChatConsultPanel({
       setBusy(false);
     }
   }
+
+  // Closing the dock mid-answer stops the request rather than letting it finish unseen.
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   return (
     <section className="consult-pane">
@@ -330,6 +345,7 @@ export function ChatConsultPanel({
           className="field"
           rows={1}
           value={answer}
+          disabled={busy}
           onChange={(event) => patch({ answer: event.target.value })}
           onKeyDown={(event) => {
             // Enter sends on a keyboard; on a phone it makes a newline and the Send button
@@ -340,11 +356,18 @@ export function ChatConsultPanel({
         />
         <button
           type="button"
-          className="btn primary"
-          onClick={() => void send(answer)}
-          disabled={busy || answer.trim().length === 0}
+          className={busy ? 'btn' : 'btn primary'}
+          onClick={() => {
+            // The same one-button Stop the chat composer uses.
+            if (busy) {
+              abortRef.current?.abort();
+              return;
+            }
+            void send(answer);
+          }}
+          disabled={!busy && answer.trim().length === 0}
         >
-          Ask
+          {busy ? 'Stop' : 'Ask'}
         </button>
       </div>
     </section>

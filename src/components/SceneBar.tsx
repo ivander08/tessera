@@ -50,6 +50,9 @@ export function SceneBar({ state, onOpen }: { state: WorldState | undefined; onO
           <span className="scene-bar-empty-text">
             No scene recorded yet — the narrator fills this in after the first completed turn
           </span>
+          {/* The strip is a button in both states, so it advertises that in both. Without
+              this the empty state looked inert while still being a full-width target. */}
+          <ChevronGlyph />
         </span>
       ) : (
         <>

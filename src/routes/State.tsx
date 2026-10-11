@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { useParams } from 'react-router';
 import { apiJson } from '../lib/api';
 import type { WorldState } from '../lib/state/schema';
-import { messageOf, useAsync } from '../lib/hooks';
+import { messageOf, useAsync, useUnsavedGuard } from '../lib/hooks';
 import { AppBar, BackLink } from '../components/AppBar';
 import { BondMeters, ThreadList } from '../components/StateMeters';
+import { ConfirmPrompt } from '../components/ConfirmPrompt';
 import { useToast } from '../components/Toast';
 
 type Bonds = NonNullable<WorldState['bonds']>;
@@ -27,6 +28,11 @@ interface Field {
   map?: boolean;
   /** A structured value edited by a dedicated widget rather than a text box. */
   kind?: 'bonds' | 'threads';
+  /**
+   * The empty-state example. Per field rather than derived from `list`/`map`: the clothing
+   * grammar was being taught to Conditions, which is a different kind of value.
+   */
+  placeholder?: string;
 }
 
 /**
@@ -53,18 +59,20 @@ const GROUPS: Array<{ heading: string; fields: Field[] }> = [
   {
     heading: 'Who and what',
     fields: [
-      { key: 'present', label: 'Present', hint: 'Characters in the scene, one per line.', list: true },
+      { key: 'present', label: 'Present', hint: 'Characters in the scene, one per line.', list: true, placeholder: 'one name per line' },
       {
         key: 'outfits',
         label: 'Outfits',
         hint: 'Character: what they are wearing. One per line. Deleting a line removes that entry.',
         map: true,
+        placeholder: 'Name: what they are wearing',
       },
       {
         key: 'conditions',
         label: 'Conditions',
         hint: 'Character: short condition — "bleeding", "wet through". Deleting a line removes it.',
         map: true,
+        placeholder: 'Name: short condition',
       },
     ],
   },
@@ -125,10 +133,20 @@ export default function State({
   // Only ever holds "Nothing changed.", which is not a save and must not claim to be one —
   // so it stays inline rather than becoming a toast.
   const [status, setStatus] = useState<string | null>(null);
+  // Lines a map field dropped on save, keyed by field. They used to be discarded with the
+  // toast still reporting success, which is a silent loss of the reader's own text.
+  const [skipped, setSkipped] = useState<Record<string, string[]>>({});
   const [busy, setBusy] = useState(false);
+  // Clearing is two server writes — the state row AND every turn's `messages.state_json` —
+  // and neither is recoverable, so it is asked for rather than done.
+  const [confirming, setConfirming] = useState(false);
   const toast = useToast();
 
   const state = data?.state ?? {};
+
+  // Editing the world state and navigating away silently discards it: `edits` and
+  // `structured` live only in this component.
+  useUnsavedGuard(Object.keys(edits).length > 0 || Object.keys(structured).length > 0);
 
   function currentValue(key: keyof WorldState, list?: boolean, map?: boolean): string {
     if (edits[key] !== undefined) return edits[key];
@@ -153,6 +171,7 @@ export default function State({
     // Build a patch from the fields actually touched, so untouched fields are not
     // rewritten with a normalised version of themselves.
     const patch: Record<string, unknown> = {};
+    const missedByField: Record<string, string[]> = {};
     for (const [key, raw] of Object.entries(edits)) {
       const field = ALL_FIELDS.find((f) => f.key === key);
       if (!field) continue;
@@ -165,14 +184,24 @@ export default function State({
         // Split on the FIRST colon only: an outfit can contain one ("a coat: navy"), and
         // a value that loses its tail is worse than a line that is skipped.
         const entries: Record<string, string | null> = {};
+        const missed: string[] = [];
         for (const line of trimmed.split('\n')) {
           const at = line.indexOf(':');
-          if (at < 0) continue;
+          if (at < 0) {
+            // Kept so the reader is told which line was not saved, rather than finding out
+            // from the document on the next turn.
+            if (line.trim().length > 0) missed.push(line);
+            continue;
+          }
           const name = line.slice(0, at).trim();
           const text = line.slice(at + 1).trim();
-          if (name.length === 0) continue;
+          if (name.length === 0) {
+            missed.push(line);
+            continue;
+          }
           entries[name] = text;
         }
+        if (missed.length > 0) missedByField[key] = missed;
         // A line the reader deleted is sent as an explicit null. These maps MERGE, so an
         // omitted key means "leave it alone" — without this, deleting a line in the panel
         // would look like it worked and the entry would still be there on the next turn.
@@ -236,6 +265,7 @@ export default function State({
 
     if (Object.keys(patch).length === 0) {
       setBusy(false);
+      setSkipped(missedByField);
       setStatus('Nothing changed.');
       return;
     }
@@ -250,6 +280,7 @@ export default function State({
       );
       setEdits({});
       setStructured({});
+      setSkipped(missedByField);
       toast.success('World state saved. The next turn will use it.');
       onSaved?.(saved.state);
       reload();
@@ -345,7 +376,7 @@ export default function State({
                         onChange={(event) =>
                           setEdits({ ...edits, [String(field.key)]: event.target.value })
                         }
-                        placeholder={field.map ? 'Name: what they are wearing' : 'one per line'}
+                        placeholder={field.placeholder}
                       />
                     ) : (
                       <input
@@ -355,6 +386,14 @@ export default function State({
                           setEdits({ ...edits, [String(field.key)]: event.target.value })
                         }
                       />
+                    )}
+                    {skipped[String(field.key)] && (
+                      <p className="form-hint" style={{ marginTop: 6, color: 'var(--warn)' }}>
+                        {skipped[String(field.key)].length === 1
+                          ? '1 line had no "Name:" and was not saved:'
+                          : `${skipped[String(field.key)].length} lines had no "Name:" and were not saved:`}{' '}
+                        {skipped[String(field.key)].join(' · ')}
+                      </p>
                     )}
                   </label>
                 ))}
@@ -379,24 +418,6 @@ export default function State({
               </section>
             )}
 
-            {state.conditions && Object.keys(state.conditions).length > 0 && (
-              <section className="section">
-                <span className="eyebrow">Conditions</span>
-                <div className="panel panel-pad">
-                  {Object.entries(state.conditions).map(([who, what]) => (
-                    <div key={who} style={{ display: 'flex', gap: 10 }}>
-                      <span style={{ minWidth: 90, color: 'var(--ink)' }}>{who}</span>
-                      <span style={{ color: 'var(--ink-dim)' }}>{what}</span>
-                    </div>
-                  ))}
-                </div>
-                <p className="form-hint" style={{ marginTop: 8 }}>
-                  Maintained per character by the engine. Edit them by describing the change in
-                  the chat rather than here.
-                </p>
-              </section>
-            )}
-
             <section className="section">
               <span className="eyebrow">As the narrator sees it</span>
               <div className="panel panel-pad">
@@ -414,20 +435,44 @@ export default function State({
             </section>
 
             <div style={{ marginTop: 30 }}>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <button type="button" className="btn primary" onClick={() => void save()} disabled={busy}>
-                  Save changes
-                </button>
-                <button type="button" className="btn danger" onClick={() => void clearAll()} disabled={busy}>
-                  Clear everything
-                </button>
-              </div>
+              <button type="button" className="btn primary" onClick={() => void save()} disabled={busy}>
+                Save changes
+              </button>
               {status && (
                 <p className="form-hint" style={{ marginTop: 10 }}>
                   {status}
                 </p>
               )}
+              {/* On its own row rather than beside Save: the destructive action should not
+                  sit a thumb-width from the primary one. */}
+              <div style={{ marginTop: 14 }}>
+                <button
+                  type="button"
+                  className="btn danger"
+                  onClick={() => setConfirming(true)}
+                  disabled={busy}
+                >
+                  Clear everything
+                </button>
+              </div>
             </div>
+
+            {confirming && (
+              <ConfirmPrompt
+                title="Clear the world state"
+                message={
+                  "Clear the world state for this chat? Time, place, cast, outfits and threads are removed, and every turn's scene line with them. Nothing brings them back."
+                }
+                confirmLabel="Clear everything"
+                danger
+                busy={busy}
+                onConfirm={() => {
+                  setConfirming(false);
+                  void clearAll();
+                }}
+                onCancel={() => setConfirming(false)}
+              />
+            )}
           </>
         )}
     </>
@@ -438,7 +483,7 @@ export default function State({
   return (
     <>
       <AppBar
-        lead={<BackLink to={`/chat/${id}`} label="Back to chat" />}
+        lead={<BackLink to={`/chat/${id}`} label="chat" />}
         title={<span className="bar-title">World state</span>}
       />
       <main className="sheet">{body}</main>

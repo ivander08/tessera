@@ -10,6 +10,21 @@ import { parseTheme, type Theme } from '../lib/theme';
 
 const PROVIDERS = ['openrouter', 'kenari'] as const;
 
+/**
+ * The reason a numeric field is not usable, or null when it is.
+ *
+ * An empty value is allowed: `save` sends the empty string and the Worker's `||` default
+ * applies, which is the documented way to say "use the default".
+ */
+function numericProblem(label: string, value: string | undefined, min: number, max: number): string | null {
+  const trimmed = (value ?? '').trim();
+  if (trimmed.length === 0) return null;
+  if (!/^\d+$/.test(trimmed)) return `${label} must be a whole number.`;
+  const parsed = Number(trimmed);
+  if (parsed < min || parsed > max) return `${label} must be between ${min} and ${max}.`;
+  return null;
+}
+
 interface SettingsShape {
   provider?: string;
   model?: string;
@@ -37,6 +52,10 @@ export default function Settings() {
   const [edits, setEdits] = useState<SettingsShape>({});
   const [theme, setTheme] = useState<Theme>(() => parseTheme(null));
   const [keyDraft, setKeyDraft] = useState<Record<string, string>>({});
+  // Every other form in the app says what it is doing while it does it; this one changed
+  // nothing on save, so a slow round trip was indistinguishable from a dead button.
+  const [busy, setBusy] = useState(false);
+  const [numericFailure, setNumericFailure] = useState<string | null>(null);
   const toast = useToast();
 
   // The loaded settings are the base; local edits layer on top. Deriving the form
@@ -83,6 +102,20 @@ export default function Settings() {
   const keyed = new Set((keys.data ?? []).map((row) => row.provider));
 
   async function save() {
+    // Validated before the request. The Worker coerces a bad value to the default
+    // (`Number(raw.maxTokens ?? 1024) || 1024`), which means "abc" saved silently becomes
+    // 1024 — the reader's typo is not rejected, it is overwritten.
+    const bad =
+      numericProblem('Max output tokens', form.maxTokens, 1, 200000) ??
+      numericProblem('Context budget', form.contextBudget, 512, 2000000) ??
+      numericProblem('Cheap context budget', form.cheapContextBudget, 512, 2000000);
+    if (bad) {
+      setNumericFailure(bad);
+      return;
+    }
+    setNumericFailure(null);
+    setBusy(true);
+
     // One request for the whole form. This used to be a `PUT` per key — eleven round trips
     // for one button, each its own chance to fail and leave the form half-saved.
     const settings: Record<string, string> = {
@@ -109,6 +142,8 @@ export default function Settings() {
       reload();
     } catch (cause) {
       toast.failure(messageOf(cause));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -240,20 +275,35 @@ export default function Settings() {
           <Field label="Max output tokens">
             <input
               value={form.maxTokens ?? ''}
-              onChange={(event) => setForm({ ...form, maxTokens: event.target.value })}
+              onChange={(event) => {
+                setForm({ ...form, maxTokens: event.target.value });
+                setNumericFailure(null);
+              }}
               inputMode="numeric"
               className="field" style={{ maxWidth: 32 * 4 }}
+              aria-invalid={numericProblem('Max output tokens', form.maxTokens, 1, 200000) !== null}
             />
           </Field>
           <Field label="Context budget (prompt tokens)">
             <input
               value={form.contextBudget ?? ''}
-              onChange={(event) => setForm({ ...form, contextBudget: event.target.value })}
+              onChange={(event) => {
+                setForm({ ...form, contextBudget: event.target.value });
+                setNumericFailure(null);
+              }}
               inputMode="numeric"
               className="field" style={{ maxWidth: 40 * 4 }}
+              aria-invalid={numericProblem('Context budget', form.contextBudget, 512, 2000000) !== null}
             />
           </Field>
         </div>
+        {/* Rendered rather than tooltipped, the way `KnobEditor` does it: a rejected field
+            with no visible reason is the complaint that rule exists to answer. */}
+        {numericFailure && (
+          <p className="form-hint" style={{ color: 'var(--danger)' }}>
+            {numericFailure}
+          </p>
+        )}
         <div className="field-list two">
           <label className="block" htmlFor="settings-cheap-provider">
             <span className="form-label">
@@ -302,7 +352,10 @@ export default function Settings() {
         <Field label="Cheap context budget (prompt tokens; 0 for no ceiling)">
           <input
             value={form.cheapContextBudget ?? ''}
-            onChange={(event) => setForm({ ...form, cheapContextBudget: event.target.value })}
+            onChange={(event) => {
+              setForm({ ...form, cheapContextBudget: event.target.value });
+              setNumericFailure(null);
+            }}
             inputMode="numeric"
             className="field" style={{ maxWidth: 40 * 4 }}
           />
@@ -345,8 +398,9 @@ export default function Settings() {
           type="button"
           onClick={() => void save()}
           className="btn primary"
+          disabled={busy}
         >
-          Save settings
+          {busy ? 'Saving…' : 'Save settings'}
         </button>
       </div>
     </Frame>

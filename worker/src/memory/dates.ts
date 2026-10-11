@@ -23,28 +23,6 @@ export interface DatedMessage {
 }
 
 /**
- * The clock reading recorded on a turn, or null.
- *
- * Reads the message's OWN snapshot, not the live `state` document: the live document is
- * overwritten every turn, so it only ever describes "now" — asking it about turn 40 would
- * answer with the clock as of the latest turn, which is the bug this whole change exists to
- * fix.
- */
-export async function clockAt(
-  env: Env,
-  chatId: string,
-  seq: number,
-): Promise<string | null> {
-  const row = await env.DB.prepare(
-    `SELECT json_extract(state_json, '$.time') AS at
-       FROM messages WHERE chat_id = ? AND seq = ?`,
-  )
-    .bind(chatId, seq)
-    .first<{ at: string | null }>();
-  return clean(row?.at ?? null);
-}
-
-/**
  * The clock readings bounding a seq range: the first and the last that exist.
  *
  * Not `clockAt(fromSeq)` / `clockAt(toSeq)`: a greeting has no snapshot, and a turn whose
@@ -95,21 +73,6 @@ export function datedLine(message: DatedMessage): string {
 function clean(value: string | null): string | null {
   const text = (value ?? '').trim();
   return text.length > 0 ? text : null;
-}
-
-/**
- * A summary's date as one span, or null when the range carried no recorded clock.
- *
- * Collapsed to a single reading when the span is a point, because "14 April 2026 – 14 April
- * 2026" is noise and a one-line summary covering one afternoon is the common case. Shared so
- * the prompt block, the consultant and the viewer all render the same range the same way.
- */
-export function summaryDateSpan(from: string | null, to: string | null): string | null {
-  const start = clean(from);
-  const end = clean(to);
-  if (!start) return end;
-  if (!end || end === start) return start;
-  return `${start} – ${end}`;
 }
 
 /**

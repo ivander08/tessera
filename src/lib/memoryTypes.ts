@@ -17,10 +17,9 @@ export interface RecallHit {
   /**
    * The in-world date this hit happened or became true, verbatim, or null.
    *
-   * Optional because a recalled MESSAGE has no single date — it is a turn, and the clock
-   * beside it is the scene's reading at that moment rather than a claim the hit makes. A
-   * fact, an event and a summary all carry one, and it is rendered so the narrator can say
-   * WHEN rather than only WHAT.
+   * A recalled MESSAGE carries the clock recorded beside that turn — not a claim the message
+   * makes, but the reading that places it in the story, which is what answers "when did that
+   * happen". A fact, an event and a summary carry the date of what they assert.
    */
   at?: string | null;
 }

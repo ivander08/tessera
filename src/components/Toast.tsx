@@ -140,48 +140,66 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const visible = toasts.filter((item) => !leaving.has(item.id));
   const exitDuration = reduced ? 0 : 0.16;
 
+  /**
+   * Two regions, not one.
+   *
+   * A failure announced politely waits its turn behind whatever the screen reader is
+   * already reading — and it is the one message that must not wait. `role="alert"` is
+   * implicitly assertive and interrupts; a success or an aside stays polite so it does not.
+   */
+  const stack = (kind: 'polite' | 'assertive') => (
+    <AnimatePresence initial={false} onExitComplete={settle}>
+      {visible
+        .filter((item) => (kind === 'assertive' ? item.kind === 'failure' : item.kind !== 'failure'))
+        .map((item) => (
+          // `layout` is what makes the survivors slide rather than jump when one
+          // leaves — the siblings' positions are not animatable CSS properties, so
+          // this is the case a transition genuinely cannot do.
+          <motion.div
+            key={item.id}
+            layout
+            initial={{ opacity: 0, y: 6, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 4, scale: 0.98 }}
+            transition={{ duration: exitDuration, ease: [0.22, 0.68, 0.36, 1] }}
+            className={`toast ${item.kind}`}
+          >
+            <span className="toast-text">{item.text}</span>
+            <button
+              type="button"
+              className="toast-close"
+              aria-label="Dismiss"
+              onClick={() => dismiss(item.id)}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="14"
+                height="14"
+                aria-hidden="true"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              >
+                <path d="M6 6l12 12M18 6L6 18" />
+              </svg>
+            </button>
+          </motion.div>
+        ))}
+    </AnimatePresence>
+  );
+
   return (
     <ToastContext.Provider value={api}>
       {children}
       {createPortal(
-        <div className="toast-stack" role="status" aria-live="polite">
-          <AnimatePresence initial={false} onExitComplete={settle}>
-            {visible.map((item) => (
-              // `layout` is what makes the survivors slide rather than jump when one
-              // leaves — the siblings' positions are not animatable CSS properties, so
-              // this is the case a transition genuinely cannot do.
-              <motion.div
-                key={item.id}
-                layout
-                initial={{ opacity: 0, y: 6, scale: 0.98 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 4, scale: 0.98 }}
-                transition={{ duration: exitDuration, ease: [0.22, 0.68, 0.36, 1] }}
-                className={`toast ${item.kind}`}
-              >
-                <span className="toast-text">{item.text}</span>
-                <button
-                  type="button"
-                  className="toast-close"
-                  aria-label="Dismiss"
-                  onClick={() => dismiss(item.id)}
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    width="14"
-                    height="14"
-                    aria-hidden="true"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                  >
-                    <path d="M6 6l12 12M18 6L6 18" />
-                  </svg>
-                </button>
-              </motion.div>
-            ))}
-          </AnimatePresence>
+        <div className="toast-stack">
+          <div role="status" aria-live="polite">
+            {stack('polite')}
+          </div>
+          <div role="alert">
+            {stack('assertive')}
+          </div>
         </div>,
         document.body,
       )}

@@ -106,7 +106,7 @@ const DARK: Record<string, string> = {
   '--surface-raised': '#26211A',
   '--ink': '#E9E2D7',
   '--ink-dim': '#9A8F82',
-  '--ink-faint': '#6B6157',
+  '--ink-faint': '#948679',
   '--line': 'rgba(233, 226, 215, 0.10)',
   '--line-strong': 'rgba(233, 226, 215, 0.20)',
   // Brass: the character's voice, and every primary action.
@@ -140,7 +140,7 @@ const DARK: Record<string, string> = {
   '--good': '#86A96B',
   '--warn': '#D2A24C',
   '--shadow': '0 1px 2px rgba(0, 0, 0, 0.45)',
-  '--scrim': 'rgba(10, 8, 6, 0.62)',
+  '--scrim': 'rgba(6, 5, 4, 0.72)',
 };
 
 /**
@@ -154,7 +154,9 @@ const LIGHT: Record<string, string> = {
   '--surface-raised': '#EDE7DC',
   '--ink': '#221D17',
   '--ink-dim': '#6B6157',
-  '--ink-faint': '#9C9186',
+  /* Lighter than `--ink-dim` so the tier still reads as a tier, but dark enough to clear
+     4.5:1 on all three grounds (5.09 / 5.68 / 4.61). The old `#9C9186` measured 2.9:1. */
+  '--ink-faint': '#6E6459',
   '--line': 'rgba(34, 29, 23, 0.12)',
   '--line-strong': 'rgba(34, 29, 23, 0.26)',
   '--brass': '#7E6224',
@@ -228,11 +230,15 @@ export function themeTokens(theme: Theme, prefersDark: boolean): Record<string, 
     '--font-ui': "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
     '--font-data': "ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, monospace",
 
-    '--text-xs': `${(11.5 * scale).toFixed(2)}px`,
-    '--text-sm': `${(13 * scale).toFixed(2)}px`,
-    '--text-base': `${(15.5 * scale).toFixed(2)}px`,
-    '--text-lg': `${(18 * scale).toFixed(2)}px`,
-    '--text-xl': `${(23 * scale).toFixed(2)}px`,
+    // In `rem`, not `px`: the reader's browser text-size setting is the one typographic
+    // preference the app has no business overriding, and a px scale ignores it entirely.
+    // 16px is the assumed base, which is what every browser uses unless the reader has
+    // changed it — and if they have, these follow.
+    '--text-xs': `${((11.5 * scale) / 16).toFixed(3)}rem`,
+    '--text-sm': `${((13 * scale) / 16).toFixed(3)}rem`,
+    '--text-base': `${((15.5 * scale) / 16).toFixed(3)}rem`,
+    '--text-lg': `${((18 * scale) / 16).toFixed(3)}rem`,
+    '--text-xl': `${((23 * scale) / 16).toFixed(3)}rem`,
 
     '--leading': String(theme.lineHeight),
     '--measure': `${theme.measure}ch`,
@@ -288,6 +294,11 @@ export function applyTheme(
   // renders a turn.
   root.dataset.layout = theme.messageLayout;
 
+  // Hiding the avatars is also structural: `--avatar: 0px` leaves a 2px bordered dot and a
+  // dead grid column, and no custom property can collapse a `grid-template-columns`. The
+  // same data-attribute mechanism as the layout, for the same reason.
+  root.dataset.avatars = theme.avatarSize === 0 ? 'hidden' : 'shown';
+
   const styleId = 'tessera-custom-css';
   let node = document.getElementById(styleId) as HTMLStyleElement | null;
   if (!node) {
@@ -307,8 +318,8 @@ export function parseTheme(raw: string | null | undefined): Theme {
     const parsed = JSON.parse(raw) as Partial<Theme>;
     return {
       mode: parsed.mode === 'dark' || parsed.mode === 'light' ? parsed.mode : 'auto',
-      fontScale: clamp(Number(parsed.fontScale ?? 1), 0.85, 1.5),
-      lineHeight: clamp(Number(parsed.lineHeight ?? 1.68), 1.3, 2.2),
+      fontScale: clamp(Number(parsed.fontScale ?? 1), 0.8, 1.6),
+      lineHeight: clamp(Number(parsed.lineHeight ?? 1.68), 1.2, 2.2),
       avatarSize: clamp(Number(parsed.avatarSize ?? 34), 0, 64),
       messageLayout: parsed.messageLayout === 'bubble' ? 'bubble' : 'flat',
       measure: clamp(Number(parsed.measure ?? 68), 45, 100),

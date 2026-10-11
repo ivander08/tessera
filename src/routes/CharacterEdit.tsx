@@ -5,7 +5,7 @@ import { alwaysOnLore, parseLorebook } from '../lib/cards/lorebook';
 import { CARD_FIELD_ROWS } from '../lib/cards/fields';
 import type { CharacterCardJson, GreetingState } from '../lib/cards/types';
 import { loadTokenCounter } from '../lib/tokenizerClient';
-import { messageOf, useAsync } from '../lib/hooks';
+import { messageOf, useAsync, useUnsavedGuard } from '../lib/hooks';
 import { useToast } from '../components/Toast';
 import { GreetingsEditor, GreetingStateFields } from '../components/GreetingsEditor';
 import { Avatar } from '../components/Avatar';
@@ -179,7 +179,31 @@ export default function CharacterEdit() {
     setRemoveAvatar(false);
   }, [data]);
 
+  // The unsaved guard compares against what the form was seeded with — which is a pure
+  // function of `data`, so it is derived here rather than captured in a ref. Nothing can
+  // drift between the seeding effect and this.
+  const seeded = data
+    ? {
+        tagsText: data.card?.tags.join(', ') ?? '',
+        greetings: data.card?.alternateGreetings ?? [],
+        greetingStates: data.card?.greetingStates ?? [],
+        bookText: data.card?.characterBook
+          ? JSON.stringify(data.card.characterBook, null, 2)
+          : '',
+      }
+    : null;
+  const dirtyCount = seeded
+    ? Object.keys(edits).length +
+      (tagsText === seeded.tagsText ? 0 : 1) +
+      (JSON.stringify(greetings) === JSON.stringify(seeded.greetings) ? 0 : 1) +
+      (JSON.stringify(greetingStates) === JSON.stringify(seeded.greetingStates) ? 0 : 1) +
+      (bookText === seeded.bookText ? 0 : 1) +
+      (avatar !== null || removeAvatar ? 1 : 0)
+    : 0;
+  useUnsavedGuard(dirtyCount > 0);
+
   const tokensOf = count ?? (() => 0);
+
   // Until the exact vocabulary has loaded, show a dash rather than a number that is
   // about to change: a figure the user has already read and acted on is worse than a
   // placeholder that plainly means "not yet".
@@ -650,6 +674,11 @@ export default function CharacterEdit() {
               <button type="button" className="btn" onClick={() => setForkOpen(true)} disabled={busy}>
                 Fork
               </button>
+              {dirtyCount > 0 && (
+                <span className="form-hint" style={{ marginLeft: 'auto' }}>
+                  {dirtyCount} unsaved
+                </span>
+              )}
             </div>
 
             {forkOpen && (

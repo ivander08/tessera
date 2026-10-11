@@ -4,7 +4,7 @@ import { loadStateForViewer } from './state/update';
 import { loadPathTail, type BranchRow } from './branch';
 import { loadSceneSetup } from './scene';
 import { recall } from './memory/recall';
-import { summaryDateSpan } from './memory/dates';
+import { summaryDateSpan } from '../../src/lib/prompt/memoryBlock';
 import { streamCheap } from './cheap';
 import { CONTENT_BLOCK, parseReply, unwrapFencedProse } from './forge/consult';
 import { partialField } from './forge/partial';

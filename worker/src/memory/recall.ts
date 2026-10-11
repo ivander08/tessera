@@ -1,7 +1,7 @@
 import { buildMatchQuery } from './fts';
 import { VISIBLE_PATH_SEQ_CTE } from '../branch';
 import { factIsTrueSql } from './facts';
-import { summaryDateSpan } from './dates';
+import { summaryDateSpan } from '../../../src/lib/prompt/memoryBlock';
 
 export type { RecallHit, RecallKind } from '../../../src/lib/memoryTypes';
 import type { RecallHit } from '../../../src/lib/memoryTypes';
@@ -10,11 +10,11 @@ interface FtsRow {
   score: number;
   text: string;
   ref_id: string;
+  /** The in-world clock reading recorded beside the row, or null. */
+  at: string | null;
 }
 
 interface FactFtsRow extends FtsRow {
-  /** The in-world date the fact or event carries, or null. */
-  at: string | null;
   kind: string;
 }
 
@@ -82,7 +82,8 @@ export async function recall(
       // index, so without it recall quotes text the reader removed.
       `${VISIBLE_PATH_SEQ_CTE}
        SELECT messages_fts.rowid AS rowid, bm25(messages_fts) AS score,
-              m.content AS text, m.id AS ref_id
+              m.content AS text, m.id AS ref_id,
+              json_extract(m.state_json, '$.time') AS at
          FROM messages_fts
          JOIN messages m ON m.seq = messages_fts.rowid
          JOIN path ON path.seq = m.seq
@@ -161,6 +162,11 @@ export async function recall(
       refId: row.ref_id,
       text: row.text,
       score: row.score,
+      // The clock recorded BESIDE this turn, not a claim the message makes. It is what lets
+      // a recalled moment be placed in the story — "when did we first meet" is answered by
+      // the transcript as much as by the extracted events, and the reading was on disk and
+      // unread until now.
+      at: row.at,
     })),
     ...facts.results.map((row) => ({
       kind: row.kind === 'event' ? ('event' as const) : ('fact' as const),

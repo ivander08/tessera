@@ -107,6 +107,14 @@ export default function CharacterNew() {
   // Whether the card was authored here is a fact about the card itself — an imported one
   // always carries the parsed source in `raw`, a blank one has nothing to carry — so the
   // mode is derived from that rather than tracked in a second state that could drift.
+  //
+  // `baseline` is what the form was seeded with, so the commit row can say how much is
+  // unsaved. It is written only where a card is adopted — the blank one, a parsed file —
+  // and never on a field edit, which is what makes the comparison mean "edited since
+  // loaded".
+  const [baseline, setBaseline] = useState<ParsedCard | null>(() =>
+    params.get('blank') === '1' ? blankCard() : null,
+  );
   const [card, setCard] = useState<ParsedCard | null>(() =>
     params.get('blank') === '1' ? blankCard() : null,
   );
@@ -156,6 +164,7 @@ export default function CharacterNew() {
     setAvatarNote(null);
     try {
       const parsed = await parseCardFile(file);
+      setBaseline(parsed);
       setCard(parsed);
       // Dispatch on the bytes, not `file.type`. The browser infers the type from the
       // extension, so a card named `.card` or `.json` that is really a PNG reports the
@@ -182,6 +191,7 @@ export default function CharacterNew() {
    */
   function startFromFile() {
     setCard(null);
+    setBaseline(null);
     setAvatar(null);
     setAvatarNote(null);
     setError(null);
@@ -218,6 +228,19 @@ export default function CharacterNew() {
       setSaving(false);
     }
   }
+
+  // Field-level, so the number reads as "three fields are unwritten" rather than as one
+  // opaque difference. `raw` is the parsed source file and never edited here, so it never
+  // counts.
+  const dirtyCount =
+    card && baseline
+      ? Object.keys(card).filter(
+          (key) =>
+            key !== 'raw' &&
+            JSON.stringify((card as unknown as Record<string, unknown>)[key]) !==
+              JSON.stringify((baseline as unknown as Record<string, unknown>)[key]),
+        ).length
+      : 0;
 
   if (!card) {
     return (
@@ -621,6 +644,11 @@ export default function CharacterNew() {
           <button type="button" className="btn" onClick={startFromFile} disabled={saving}>
             {authored ? 'Start from a file instead' : 'Choose another file'}
           </button>
+          {dirtyCount > 0 && (
+            <span className="form-hint" style={{ marginLeft: 'auto' }}>
+              {dirtyCount} unsaved
+            </span>
+          )}
         </div>
       </main>
     </>

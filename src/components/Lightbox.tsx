@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { useDialogFocus } from '../lib/useDialogFocus';
 
 /**
  * A portrait, full size.
@@ -20,21 +21,21 @@ export function Lightbox({ src, name, onClose }: { src: string; name: string; on
   const reduced = useReducedMotion();
   const [failed, setFailed] = useState(false);
   const [closing, setClosing] = useState(false);
+  const figureRef = useRef<HTMLElement | null>(null);
 
   const requestClose = useCallback(() => setClosing(true), []);
 
+  // Same hook as `Modal`: the lightbox is a dialog, so it traps focus, marks the page
+  // behind `inert`, restores focus on close, and lets Escape close only the topmost sheet.
+  useDialogFocus(figureRef, requestClose);
+
   useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (event.key === 'Escape') requestClose();
-    }
-    document.addEventListener('keydown', onKey);
     const previous = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
-      document.removeEventListener('keydown', onKey);
       document.body.style.overflow = previous;
     };
-  }, [requestClose]);
+  }, []);
 
   const duration = reduced ? 0 : 0.2;
 
@@ -57,7 +58,9 @@ export function Lightbox({ src, name, onClose }: { src: string; name: string; on
         {!closing && (
           <motion.figure
             key="figure"
+            ref={figureRef}
             className="lightbox-figure"
+            tabIndex={-1}
             initial={{ y: 14, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: 10, opacity: 0 }}

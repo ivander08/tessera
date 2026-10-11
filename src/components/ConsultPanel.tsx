@@ -169,6 +169,10 @@ export function ConsultPanel({
   const [phase, setPhase] = useState<'say' | 'question' | 'card'>('say');
   const [failure, setFailure] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // The stream in flight. The transport has always accepted a signal; nothing passed one, so
+  // a consultant answer could not be stopped and ran to completion even after the pane was
+  // closed — the reader paid for the rest of a reply they had walked away from.
+  const abortRef = useRef<AbortController | null>(null);
   const toast = useToast();
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -241,6 +245,8 @@ export function ConsultPanel({
     // which is captured stale by this closure — checking it there re-showed the streamed text
     // after the turn frame had already committed the same words to the transcript.
     let settled = false;
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     try {
       await streamConsult(
@@ -265,11 +271,14 @@ export function ConsultPanel({
           patch({ messages: [...next, { role: 'assistant', content: parsed.say }], turn: parsed });
           setPending('');
         },
+        { signal: controller.signal },
       );
     } catch (cause) {
       settled = true;
-      setFailure(messageOf(cause));
+      // An abort is the reader pressing Stop, not a failure to report.
+      if (!controller.signal.aborted) setFailure(messageOf(cause));
     } finally {
+      abortRef.current = null;
       // A stream that ended without a terminal frame still showed the user something; the
       // partial text stays on screen rather than vanishing, which is what makes the failure
       // readable.
@@ -277,6 +286,9 @@ export function ConsultPanel({
       setBusy(false);
     }
   }
+
+  // Closing the pane mid-answer stops the request rather than letting it finish unseen.
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   async function save(card: ParsedCard) {
     if (!onDone) return;
@@ -291,7 +303,9 @@ export function ConsultPanel({
   }
 
   const proposed = turn?.card ?? null;
-  const canType = !busy && (messages.length > 0 || mode === 'consult');
+  // Deliberately NOT gated on `busy`: the row holds the Stop button, and hiding it the
+  // instant a stream starts is exactly when the reader wants it.
+  const canType = messages.length > 0 || mode === 'consult';
 
   return (
     <section className="consult-pane">
@@ -464,6 +478,7 @@ export function ConsultPanel({
             className="field"
             rows={1}
             value={answer}
+            disabled={busy}
             onChange={(event) => patch({ answer: event.target.value })}
             onKeyDown={(event) => {
               // Enter sends on a keyboard; on a phone it makes a newline and the Send button
@@ -483,11 +498,19 @@ export function ConsultPanel({
           />
           <button
             type="button"
-            className="btn primary"
-            onClick={() => void send(answer)}
-            disabled={answer.trim().length === 0}
+            className={busy ? 'btn' : 'btn primary'}
+            onClick={() => {
+              // The same one-button Stop the chat composer uses: the abort resolves the
+              // stream, and the partial text stays on screen.
+              if (busy) {
+                abortRef.current?.abort();
+                return;
+              }
+              void send(answer);
+            }}
+            disabled={!busy && answer.trim().length === 0}
           >
-            Send
+            {busy ? 'Stop' : 'Send'}
           </button>
         </div>
       )}

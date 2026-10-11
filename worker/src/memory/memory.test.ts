@@ -981,6 +981,45 @@ describe('memory viewer API', () => {
     expect((await listMemory(env, 'nope')).status).toBe(404);
   });
 
+  test('events read in in-world order, not in the order they were written', async () => {
+    // The database orders by `created_at`, which is when the row was WRITTEN. A backfill, a
+    // regeneration, or a fact added by hand all break the correspondence between that and
+    // when the thing happened — and a panel headed "What happened" that lists them in
+    // extractor order fails at the one question its heading asks.
+    const { env, db } = makeEnv();
+    const chatId = seedChat(db);
+    // Written first, happened last.
+    exec(
+      db,
+      `INSERT INTO facts (id, chat_id, text, subject, kind, status, pinned, created_at)
+       VALUES ('e-late', ?, 'They burned the boat.', 'Ada', 'event', 'active', 0, 1)`,
+      chatId,
+    );
+    exec(
+      db,
+      `INSERT INTO facts (id, chat_id, text, subject, kind, status, pinned, at, created_at)
+       VALUES ('e-late-dated', ?, 'They burned the boat.', 'Ada', 'event', 'active', 0,
+               'Wednesday, 15 April 2026, 22:00', 1)`,
+      chatId,
+    );
+    // Written second, happened first.
+    exec(
+      db,
+      `INSERT INTO facts (id, chat_id, text, subject, kind, status, pinned, at, created_at)
+       VALUES ('e-early', ?, 'They met at the docks.', 'Ada', 'event', 'active', 0,
+               'Tuesday, 14 April 2026, 20:00', 2)`,
+      chatId,
+    );
+
+    const payload = await body(await listMemory(env, chatId));
+    const facts = payload.facts as Array<{ id: string; pinned: number }>;
+    const ids = facts.map((row) => row.id);
+    // The dated rows sort by their reading; the undated one falls back to `created_at`
+    // rather than sorting as if it were the epoch.
+    expect(ids.indexOf('e-early')).toBeLessThan(ids.indexOf('e-late-dated'));
+    expect(ids).toContain('e-late');
+  });
+
   describe('recall visibility', () => {
     /** Appends a row with an explicit role and parent, for a real chained transcript. */
     function seedRow(

@@ -1,6 +1,6 @@
 import { useNavigate, useParams } from 'react-router';
 import { apiJson } from '../lib/api';
-import { messageOf, useAsync } from '../lib/hooks';
+import { useAsync } from '../lib/hooks';
 import { AppBar, BackLink, CrumbSep } from '../components/AppBar';
 import { PresetEditor, type PresetDetail } from '../components/PresetEditor';
 
@@ -52,12 +52,6 @@ export default function PresetEdit() {
         {data && (
           <p className="form-hint" style={{ marginTop: 18 }}>
             Changes apply from the next turn. Chats using this preset pick them up then.
-          </p>
-        )}
-
-        {error && (
-          <p className="form-hint" style={{ marginTop: 14 }}>
-            {messageOf(error)}
           </p>
         )}
       </main>

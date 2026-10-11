@@ -174,9 +174,12 @@ export function Turn({
             </div>
             {/* Before the first token there is nothing to read, so the wait itself is
                 drawn. The ellipsis is styled in the speaker's own colour, which is what
-                ties it to the character rather than to a generic spinner. */}
+                ties it to the character rather than to a generic spinner.
+                `role="status"`: an `aria-label` on a bare `span` is ignored by assistive
+                technology — a span is not a landmark, a widget, or a live region, so there
+                is nothing for the name to attach to. */}
             <div className="prose">
-              <span className="thinking" aria-label={`${rowName} is writing`}>
+              <span className="thinking" role="status" aria-label={`${rowName} is writing`}>
                 <i />
                 <i />
                 <i />

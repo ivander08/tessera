@@ -1,10 +1,16 @@
 import { notFound } from '../http';
-import { createFact, listMemory, mutateMemory } from '../memory/api';
+import { createFact, listMemory, listMemoryJobs, mutateMemory } from '../memory/api';
 
 /** `GET /api/chats/:chatId/memory`. */
 export async function memoryRoute(req: Request, env: Env, chatId: string): Promise<Response> {
   if (req.method !== 'GET') return notFound();
   return listMemory(env, chatId);
+}
+
+/** `GET /api/chats/:chatId/memory/jobs` — the newest extraction job's state. */
+export async function memoryJobsRoute(req: Request, env: Env, chatId: string): Promise<Response> {
+  if (req.method !== 'GET') return notFound();
+  return listMemoryJobs(env, chatId);
 }
 
 /** `POST /api/memory/facts` — a fact the reader wrote by hand. */

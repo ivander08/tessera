@@ -18,7 +18,7 @@ import {
   renderVocalisation,
 } from '../../src/lib/prompt/craftBlock';
 import { recall } from './memory/recall';
-import { summaryDateSpan } from './memory/dates';
+import { summaryDateSpan } from '../../src/lib/prompt/memoryBlock';
 import { loadStateForTurn } from './state/update';
 import type { StatePoint } from './turn';
 import { loadSceneSetup } from './scene';

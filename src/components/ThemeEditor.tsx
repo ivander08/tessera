@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { applyTheme, DEFAULT_THEME, resolveMode, type Theme } from '../lib/theme';
+import { ConfirmPrompt } from './ConfirmPrompt';
 
 /**
  * Theme controls.
@@ -17,6 +18,9 @@ export function ThemeEditor({
   onChange: (next: Theme) => void;
 }) {
   const [preview, setPreview] = useState<Theme>(value);
+  // Reset discards every setting at once — mode, layout, five sliders, four colours and
+  // the custom CSS — so it asks first.
+  const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
     setPreview(value);
@@ -41,12 +45,26 @@ export function ThemeEditor({
         </h2>
         <button
           type="button"
-          className="app-link"
-          onClick={() => update({ ...DEFAULT_THEME })}
+          className="btn quiet"
+          onClick={() => setConfirming(true)}
         >
           Reset
         </button>
       </div>
+
+      {confirming && (
+        <ConfirmPrompt
+          title="Reset the theme"
+          message="Reset the whole theme — mode, layout, sliders, colours and custom CSS?"
+          confirmLabel="Reset"
+          danger
+          onConfirm={() => {
+            setConfirming(false);
+            update({ ...DEFAULT_THEME });
+          }}
+          onCancel={() => setConfirming(false)}
+        />
+      )}
 
       <Row label="Mode">
         <div className="flex gap-1">
@@ -96,6 +114,16 @@ export function ThemeEditor({
         step={0.05}
         format={(v) => v.toFixed(2)}
         onChange={(lineHeight) => update({ lineHeight })}
+      />
+
+      <Slider
+        label="Line width"
+        value={preview.measure}
+        min={45}
+        max={100}
+        step={1}
+        format={(v) => `${v}ch`}
+        onChange={(measure) => update({ measure })}
       />
 
       <Slider

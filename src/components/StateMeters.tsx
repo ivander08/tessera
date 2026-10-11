@@ -81,6 +81,7 @@ export function BondMeters(props: { value: Bonds; onChange: (next: Bonds) => voi
                   min={meter.min}
                   max={meter.max}
                   value={value}
+                  aria-label={`${meter.label} for ${pair.replace('|', ' and ')}`}
                   onChange={(event) => setMeter(pair, meter.field, Number(event.target.value))}
                   style={{ flex: 1 }}
                 />
@@ -144,10 +145,11 @@ export function ThreadList(props: { value: Threads; onChange: (next: Threads) =>
       {props.value.map((thread, index) => (
         <div
           key={index}
+          className="thread-row"
           style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}
         >
           <input
-            className="field"
+            className="field thread-row-text"
             style={{ flex: 1 }}
             placeholder="What the scene raised"
             value={thread.text}

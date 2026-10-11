@@ -1,7 +1,8 @@
 import { badRequest, json, notFound, readJson } from '../http';
 import { recall } from './recall';
 import { factStatusSql } from './facts';
-import { summaryDateSpan } from './dates';
+import { dateOrder } from './dates';
+import { summaryDateSpan } from '../../../src/lib/prompt/memoryBlock';
 import { VISIBLE_PATH_SEQ_CTE } from '../branch';
 import { renderMemoryBlock } from '../../../src/lib/prompt/memoryBlock';
 import { estimateTokens } from '../../../src/lib/tokenEstimate';
@@ -115,7 +116,56 @@ export async function listMemory(env: Env, chatId: string): Promise<Response> {
     console.warn(`[memory] viewer recall failed for chat=${chatId}: ${messageOf(error)}`);
   }
 
-  return json({ summaries: summaries.results, facts: facts.results, recalled, rendered, query });
+  // Order is pinned first — that is what pinning means, and it is not a date claim — then by
+  // in-world date where one was recorded, falling back to the row's own insertion position.
+  // The database ordered by `created_at` alone, which is when the row was WRITTEN: a
+  // backfill, a regeneration, or a fact the reader added by hand all break the correspondence
+  // between that and when the thing happened. A panel listing "what happened" in the order
+  // the extractor happened to run fails at the one question its own heading asks.
+  const byWorldDate = <T extends { at: string | null; created_at: number }>(rows: T[]): T[] =>
+    [...rows].sort((a, b) => dateOrder(a.at, a.created_at) - dateOrder(b.at, b.created_at));
+
+  const pinnedRows = facts.results.filter((row) => row.pinned === 1);
+  const unpinnedRows = facts.results.filter((row) => row.pinned !== 1);
+
+  return json({
+    summaries: summaries.results,
+    facts: [...pinnedRows, ...byWorldDate(unpinnedRows)],
+    recalled,
+    rendered,
+    query,
+  });
+}
+
+/**
+ * The newest memory job for a chat.
+ *
+ * Summaries appear in the viewer only once a job has been DELIVERED, so a chat whose
+ * extraction is queued, running, or repeatedly failing looks exactly like a chat that has
+ * nothing to remember. The panel shows one line from here for that reason — the state of
+ * the work is otherwise invisible, and "nothing is happening" is the wrong conclusion to
+ * draw from it.
+ */
+export async function listMemoryJobs(env: Env, chatId: string): Promise<Response> {
+  const chat = await env.DB.prepare('SELECT id FROM chats WHERE id = ?')
+    .bind(chatId)
+    .first<{ id: string }>();
+  if (!chat) return notFound('chat not found');
+
+  const job = await env.DB.prepare(
+    `SELECT kind, status, attempts, error, updated_at
+       FROM jobs WHERE chat_id = ? ORDER BY created_at DESC LIMIT 1`,
+  )
+    .bind(chatId)
+    .first<{
+      kind: string;
+      status: string;
+      attempts: number;
+      error: string | null;
+      updated_at: number;
+    }>();
+
+  return json({ job: job ?? null });
 }
 
 function messageOf(error: unknown): string {

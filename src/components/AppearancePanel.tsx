@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiJson } from '../lib/api';
 import { applyTheme, parseTheme, type Theme } from '../lib/theme';
 import { ThemeEditor } from './ThemeEditor';
@@ -21,12 +21,20 @@ export function AppearancePanel({ onClose }: { onClose: () => void }) {
   const [loaded, setLoaded] = useState(false);
   const toast = useToast();
 
+  // The value waiting to be written, and the last value actually written.
+  const pending = useRef<string | null>(null);
+  const written = useRef<string | null>(null);
+  const flushRef = useRef<() => void>(() => {});
   useEffect(() => {
     let alive = true;
     void apiJson<Record<string, string>>('/api/settings')
       .then((settings) => {
         if (alive) {
-          setTheme(parseTheme(settings.theme));
+          const parsed = parseTheme(settings.theme);
+          // The stored value is already stored: seeding this stops the first debounce from
+          // PUTting the theme back unchanged just because the panel opened.
+          written.current = JSON.stringify(parsed);
+          setTheme(parsed);
           setLoaded(true);
         }
       })
@@ -46,21 +54,41 @@ export function AppearancePanel({ onClose }: { onClose: () => void }) {
     return () => media.removeEventListener('change', apply);
   }, [theme]);
 
+  // The debounced write. It lives in a ref so both the timer and the unmount cleanup call
+  // the same current function — a cleanup that merely cleared the timer discarded the
+  // edit: the theme was already painted, so the reader saw the change and it was never
+  // stored. The assignment is in an effect rather than in render, which is where ref
+  // writes belong.
   useEffect(() => {
-    if (!loaded) return;
-    const timer = setTimeout(() => {
+    flushRef.current = () => {
+      const next = pending.current;
+      pending.current = null;
+      // Both paths can reach here for the same value — the timer fires and the panel then
+      // unmounts — so the last value actually sent is what decides.
+      if (next === null || next === written.current) return;
+      written.current = next;
       void apiJson('/api/settings', {
         method: 'PUT',
-        body: JSON.stringify({ key: 'theme', value: JSON.stringify(theme) }),
+        body: JSON.stringify({ key: 'theme', value: next }),
       }).catch((cause: unknown) =>
         // No success toast: this autosaves on a debounce while the reader drags a slider,
         // so a toast per save would be a stream of them. The transcript behind the panel
         // is the confirmation. A failure is the opposite — it needs saying.
         toast.failure(cause instanceof Error ? cause.message : String(cause)),
       );
-    }, 600);
+    };
+  });
+
+  useEffect(() => {
+    if (!loaded) return;
+    pending.current = JSON.stringify(theme);
+    const timer = setTimeout(() => flushRef.current(), 600);
     return () => clearTimeout(timer);
-  }, [theme, loaded, toast]);
+  }, [theme, loaded]);
+
+  // Unmount only: a dependency-driven cleanup here would flush on every keystroke and
+  // there would be no debounce left.
+  useEffect(() => () => flushRef.current(), []);
 
   return (
     <>

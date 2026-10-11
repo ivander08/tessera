@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { apiJson } from '../lib/api';
-import { useAsync } from '../lib/hooks';
+import { messageOf, useAsync } from '../lib/hooks';
 import { Modal } from './Modal';
+import { useToast } from './Toast';
 
 /**
  * Switches the preset for the current chat, from the chat's own menu.
@@ -29,6 +30,10 @@ export function PresetMenu({ chatId, onChanged }: { chatId: string; onChanged?: 
   const [current, setCurrent] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [open, setOpen] = useState(false);
+  // A failed switch used to be silent, and the sheet then showed "No presets yet." — which
+  // read as "your presets are gone" rather than "the request failed".
+  const [failure, setFailure] = useState<string | null>(null);
+  const toast = useToast();
 
   // Fetched lazily, on first render of the menu — a chat turn should not wait on it.
   if (!loaded) {
@@ -39,17 +44,25 @@ export function PresetMenu({ chatId, onChanged }: { chatId: string; onChanged?: 
   }
 
   async function choose(presetId: string | null) {
+    // The value the row was actually showing, captured before the optimistic write. The
+    // old code restored `null` — "Global settings" — on failure, which was a lie about a
+    // chat that still had a preset attached.
+    const previous = current;
     setCurrent(presetId);
     setOpen(false);
+    setFailure(null);
     try {
       await apiJson('/api/preset/apply', {
         method: 'POST',
         body: JSON.stringify({ chatId, presetId }),
       });
       onChanged?.();
-    } catch {
+    } catch (cause) {
+      const message = messageOf(cause);
       // Put it back, so the tick never lies about what is stored.
-      setCurrent(null);
+      setCurrent(previous);
+      setFailure(message);
+      toast.failure(message);
     }
   }
 
@@ -80,7 +93,10 @@ export function PresetMenu({ chatId, onChanged }: { chatId: string; onChanged?: 
         >
           {presets.loading && <p className="sheet-sub">Loading…</p>}
 
-          {!presets.loading && rows.length === 0 && (
+          {failure && <div className="note danger">{failure}</div>}
+          {presets.error && <div className="note danger">{presets.error}</div>}
+
+          {!presets.loading && !failure && !presets.error && rows.length === 0 && (
             <p className="sheet-sub">
               No presets yet. A preset overrides the sampler, prompt and stop-string
               settings for this chat.

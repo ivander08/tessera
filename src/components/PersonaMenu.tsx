@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { apiJson } from '../lib/api';
-import { useAsync } from '../lib/hooks';
+import { messageOf, useAsync } from '../lib/hooks';
 import { Modal } from './Modal';
+import { useToast } from './Toast';
 
 /**
  * Switches who the reader is in this chat.
@@ -36,26 +37,38 @@ export function PersonaMenu({
   const [selected, setSelected] = useState<string | null>(current);
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState('');
+  // A failed switch used to be silent, and the sheet then showed "No personas yet." —
+  // which read as "your personas are gone" rather than "the request failed".
+  const [failure, setFailure] = useState<string | null>(null);
+  const toast = useToast();
+
+  const rows = personas.data ?? [];
+  const active = selected ?? current;
 
   async function choose(personaId: string | null) {
     // Optimistic: the sheet closes on choosing and the write is one round trip, so a
-    // pending state would flash more than it would inform.
+    // pending state would flash more than it would inform. The value to fall back to is the
+    // one the row was actually showing, not `current` — `current` is the prop as of the last
+    // render and does not move while the sheet is open.
+    const previous = active;
     setSelected(personaId);
     setOpen(false);
+    setFailure(null);
     try {
       await apiJson('/api/persona', {
         method: 'POST',
         body: JSON.stringify({ chatId, personaId }),
       });
       onChanged?.();
-    } catch {
+    } catch (cause) {
+      const message = messageOf(cause);
       // Put it back, so the checkmark never lies about what is stored.
-      setSelected(current);
+      setSelected(previous);
+      setFailure(message);
+      toast.failure(message);
     }
   }
 
-  const rows = personas.data ?? [];
-  const active = selected ?? current;
   const activeName = rows.find((row) => row.id === active)?.name ?? 'No persona';
   const needle = filter.trim().toLowerCase();
   const shown = needle ? rows.filter((row) => row.name.toLowerCase().includes(needle)) : rows;
@@ -105,7 +118,10 @@ export function PersonaMenu({
 
           {personas.loading && <p className="sheet-sub">Loading…</p>}
 
-          {!personas.loading && rows.length === 0 && (
+          {failure && <div className="note danger">{failure}</div>}
+          {personas.error && <div className="note danger">{personas.error}</div>}
+
+          {!personas.loading && !failure && !personas.error && rows.length === 0 && (
             <p className="sheet-sub">
               No personas yet. One is worth setting — without it, cards that say{' '}
               <code className="md-code">{'{{user}}'}</code> leave the placeholder visible

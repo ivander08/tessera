@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { apiJson } from '../lib/api';
 import type { ModelInfo } from '../lib/apiTypes';
-import { messageOf, useAsync } from '../lib/hooks';
+import { messageOf, useAsync, useUnsavedGuard } from '../lib/hooks';
 import type { PresetConfig, ResponseLength } from '../lib/presets/presetConfig';
 import { RESPONSE_LENGTHS } from '../lib/presets/presetConfig';
 import { KnobEditor } from './KnobEditor';
@@ -69,6 +69,22 @@ export function PresetEditor({
   const [stopText, setStopText] = useState(() => (preset.config.stopStrings ?? []).join('\n'));
   const [busy, setBusy] = useState(false);
   const toast = useToast();
+
+  // The values the form opened with. `key={preset.id}` on the call site remounts this
+  // component when the preset changes, so a plain initial capture is correct — there is
+  // no "reload under an open form" case to reconcile.
+  const [opened] = useState(() => ({
+    name: preset.name,
+    knobsJson: JSON.stringify(numericKnobs(preset.knobs)),
+    config: preset.config,
+    stopText: (preset.config.stopStrings ?? []).join('\n'),
+  }));
+  const dirty =
+    name !== opened.name ||
+    knobsJson !== opened.knobsJson ||
+    stopText !== opened.stopText ||
+    JSON.stringify(config) !== JSON.stringify(opened.config);
+  useUnsavedGuard(dirty);
 
   // The preset's own model list, independent of what the chat is set to: this is the
   // model the preset will force when it is attached.

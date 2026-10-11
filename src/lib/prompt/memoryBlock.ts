@@ -22,11 +22,34 @@ export interface MemoryBlockInput {
  * of a long summary is one the narrator has to hunt for. A hit with no recorded date renders
  * as the bare text rather than as "(no date)": absence of a date is not a fact about the
  * world, and writing it out would put a second, negative claim in the prompt.
+ *
+ * A recalled MESSAGE now carries one too — the clock recorded beside that turn. It is not a
+ * claim the message makes, but it is what places the moment in the story, and it was already
+ * on disk. A greeting, or a turn whose state update failed, has none and renders bare.
  */
 function withDate(hit: RecallHit): string {
   const at = (hit.at ?? '').trim();
   const text = hit.text.trim();
   return at.length > 0 ? `[${at}] ${text}` : text;
+}
+
+/**
+ * A summary's date as one span, or null when the range carried no recorded clock.
+ *
+ * Collapsed to a single reading when the span is a point, because "14 April 2026 – 14 April
+ * 2026" is noise and a one-line summary covering one afternoon is the common case.
+ *
+ * Here rather than in the Worker, and here rather than twice: the prompt block, the chat
+ * consultant and the memory viewer all render this range, and two implementations of one
+ * format drift silently — the panel and the prompt would disagree about the same row and
+ * neither would look wrong on its own.
+ */
+export function summaryDateSpan(from: string | null, to: string | null): string | null {
+  const start = (from ?? '').trim();
+  const end = (to ?? '').trim();
+  if (start.length === 0) return end.length > 0 ? end : null;
+  if (end.length === 0 || end === start) return start;
+  return `${start} – ${end}`;
 }
 
 export function renderMemoryBlock(
@@ -49,7 +72,7 @@ export function renderMemoryBlock(
   const eventLines = input.events.map((hit) => `- ${withDate(hit)}`);
   if (eventLines.length > 0) sections.push({ heading: 'What happened', lines: eventLines });
 
-  const recallLines = input.recalled.map((hit) => `- ${hit.text.trim()}`);
+  const recallLines = input.recalled.map((hit) => `- ${withDate(hit)}`);
   if (recallLines.length > 0) sections.push({ heading: 'Relevant earlier moments', lines: recallLines });
 
   if (sections.length === 0) return '';

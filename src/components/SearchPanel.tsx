@@ -92,8 +92,14 @@ export function SearchPanel({
           }}
           aria-label="Search this scene"
         />
-        <button type="button" className="btn primary" onClick={() => void run()} disabled={busy}>
-          {busy ? '…' : 'Search'}
+        <button
+          type="button"
+          className="btn primary"
+          onClick={() => void run()}
+          disabled={busy}
+          aria-busy={busy}
+        >
+          Search
         </button>
       </div>
 

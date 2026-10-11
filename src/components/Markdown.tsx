@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, memo, type ReactNode } from 'react';
 import { Marked, type Token, type Tokens } from 'marked';
 
 /**
@@ -33,10 +33,15 @@ const SILENT = new Set(['space', 'def']);
  */
 const md = new Marked({ breaks: true });
 
-export function Markdown({ content }: { content: string }): ReactNode {
+/**
+ * Memoized on the one prop it takes. A streaming reply re-renders the transcript on every
+ * frame, and without this each of those renders re-lexed every visible message — the cost
+ * of the stream scaled with the length of the chat rather than with the reply.
+ */
+export const Markdown = memo(function Markdown({ content }: { content: string }): ReactNode {
   const tokens = md.lexer(content);
   return <>{renderBlocks(tokens, 'root')}</>;
-}
+});
 
 function renderBlocks(tokens: Token[], keyPrefix: string): ReactNode[] {
   const out: ReactNode[] = [];

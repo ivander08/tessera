@@ -65,14 +65,17 @@ export function OpeningPicker({
 
   return (
     <div>
-      <div className="tabs" role="tablist" aria-label="Opening">
+      {/* Plain buttons, not a `tablist`. The tab pattern is a promise about `aria-controls`,
+          `tabpanel` and arrow-key roving focus, and this picker has none of the three — it
+          is a set of mutually exclusive choices, which is what `aria-pressed` describes.
+          Removing the roles is strictly better than keeping three that are untrue. */}
+      <div className="tabs" role="group" aria-label="Opening">
         {openings.map((opening) => (
           <button
             key={opening.index}
             type="button"
-            role="tab"
             className="tab"
-            aria-selected={selected === opening.index}
+            aria-pressed={selected === opening.index}
             onClick={() => onSelect(opening.index)}
           >
             {opening.index === 0 ? 'Opening' : `Alt ${opening.index}`}

@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { apiFetch, apiJson, streamChat, type TurnMode } from '../lib/api';
@@ -72,6 +72,11 @@ function scrollToBottom(): void {
  * takes the turn's place — so the sentence only warns about what leaves the scene.
  */
 function deleteWarning(after: number, hasVersions: boolean): string {
+  if (after === 0) {
+    return hasVersions
+      ? 'Another version of this reply takes its place.'
+      : 'This is the last turn in the scene. Nothing brings it back.';
+  }
   const leaving =
     after === 1
       ? 'the turn written after it leaves the scene'
@@ -106,6 +111,145 @@ interface Pending {
    */
   settling?: boolean;
 }
+
+/**
+ * One row of the transcript.
+ *
+ * Extracted and memoized so a streaming reply does not re-render the whole scene. The
+ * overlay's text is passed as a string rather than as the overlay object: the object's
+ * identity changes on every delta, so a row that took it would re-render on every frame
+ * even though its own content did not change. Every handler is a stable `useCallback` from
+ * the parent for the same reason — `memo` on the row is worthless if its props are fresh
+ * arrows.
+ */
+const TurnRow = memo(function TurnRow({
+  message,
+  name,
+  avatar,
+  cast,
+  macros,
+  sceneState,
+  isOpening,
+  isUser,
+  isTarget,
+  overlayText,
+  truncated,
+  editing,
+  busy,
+  after,
+  onContinue,
+  onRegenerate,
+  onEditStart,
+  onEditCancel,
+  onEditSave,
+  onSwipe,
+  onDeleteTurn,
+}: {
+  message: TurnView;
+  name: string;
+  avatar?: string | null;
+  cast?: CastVoice[];
+  macros: { char: string; user: string };
+  sceneState?: WorldState | null;
+  isOpening: boolean;
+  isUser: boolean;
+  isTarget: boolean;
+  /** The streamed replacement text for this slot, or null when this row is not the target. */
+  overlayText: string | null;
+  truncated: boolean;
+  editing: boolean;
+  busy: boolean;
+  /** How many turns after this one leave the scene with it. */
+  after: number;
+  onContinue: (messageId: string) => void;
+  onRegenerate: (messageId: string) => void;
+  onEditStart: (messageId: string) => void;
+  onEditCancel: () => void;
+  onEditSave: (messageId: string, content: string) => void;
+  onSwipe: (messageId: string, direction: 'prev' | 'next') => void;
+  onDeleteTurn: (target: {
+    id: string;
+    after: number;
+    isUser: boolean;
+    hasVersions: boolean;
+  }) => void;
+}) {
+  // The turn being redone. Its reply replaces this slot rather than appending, so
+  // regenerating an early message shows the new version where the reader is looking
+  // instead of at the bottom of a scene they then have to scroll up from.
+  if (isTarget && overlayText !== null && !isUser) {
+    return overlayText.length === 0 ? (
+      <Turn
+        message={{ ...message, content: '' }}
+        name={name}
+        avatar={avatar}
+        macros={macros}
+        dropCap={isOpening}
+        thinking
+      />
+    ) : (
+      <Turn
+        message={{ ...message, content: overlayText }}
+        name={name}
+        avatar={avatar}
+        macros={macros}
+        dropCap={isOpening}
+        streaming
+      />
+    );
+  }
+
+  const hasVersions = (message.swipes?.length ?? 1) > 1;
+  return (
+    <Turn
+      message={message}
+      name={name}
+      avatar={avatar}
+      cast={cast}
+      macros={macros}
+      sceneState={sceneState}
+      // The marker belongs to the reply that hit the cap, and Continue asks for
+      // more of that same reply — the same call an empty send makes.
+      truncated={truncated}
+      onContinue={truncated ? () => onContinue(message.id) : undefined}
+      // In the transcript you are already reading one character, so the portrait has
+      // nothing else to do — enlarging it is the only useful action, and it is also how
+      // you check an import carried an avatar.
+      zoomAvatar
+      // The first thing in the scene opens with a drop cap; everything else is body text.
+      dropCap={isOpening}
+      editing={editing}
+      busy={busy}
+      onEditStart={() => onEditStart(message.id)}
+      onEditCancel={onEditCancel}
+      onEditSave={(content) => onEditSave(message.id, content)}
+      actions={
+        editing ? null : (
+          <MessageActions
+            canSwipeLeft={(message.swipeIndex ?? 0) > 0}
+            canSwipeRight={(message.swipeIndex ?? 0) < (message.swipes?.length ?? 1) - 1}
+            swipeIndex={message.swipeIndex ?? 0}
+            swipeCount={message.swipes?.length ?? 1}
+            onSwipe={(direction) => onSwipe(message.id, direction)}
+            onCopy={() => message.content}
+            onEdit={() => onEditStart(message.id)}
+            // Rows after this one are exactly the turns that go with it: the window ends
+            // at the tail of the path, so nothing that follows is missing from it.
+            onDelete={() => onDeleteTurn({ id: message.id, after, isUser, hasVersions })}
+            onRegenerate={
+              // Offered on every reply, not only the newest. Regenerating an earlier one
+              // is a branch: the new version takes that position and the turns after it
+              // step out of the transcript until you swipe back, which is what makes
+              // rewriting a scene's direction possible without losing the scene you had.
+              !isUser ? () => onRegenerate(message.id) : undefined
+            }
+            busy={busy}
+          />
+        )
+      }
+    />
+  );
+});
 
 export default function Chat() {
   const { id = '' } = useParams();
@@ -161,6 +305,47 @@ export default function Chat() {
   // append. Swiping swaps which row is on the path and deleting promotes a version, so the
   // id to hold is the one the server returns, not the one the reader clicked.
   const keepInView = useRef<string | null>(null);
+
+  /**
+   * Streamed text, coalesced to one update per frame.
+   *
+   * The SSE frames arrive faster than the display refreshes, and each one used to set state
+   * — which re-rendered this component, rebuilt the whole `path.map`, and re-lexed every
+   * visible message's markdown. The cost of a stream therefore scaled with the length of the
+   * chat. Buffering into a ref and flushing once per animation frame makes it one render per
+   * painted frame regardless of how many frames the provider sent.
+   */
+  const deltaBuffer = useRef('');
+  const flushHandle = useRef<number | null>(null);
+  const flushDelta = useCallback(() => {
+    if (flushHandle.current !== null) {
+      cancelAnimationFrame(flushHandle.current);
+      flushHandle.current = null;
+    }
+    const buffered = deltaBuffer.current;
+    deltaBuffer.current = '';
+    if (buffered.length === 0) return;
+    setPending((current) => (current ? { ...current, text: current.text + buffered } : current));
+  }, []);
+  const queueDelta = useCallback(
+    (text: string) => {
+      deltaBuffer.current += text;
+      if (flushHandle.current !== null) return;
+      flushHandle.current = requestAnimationFrame(() => {
+        flushHandle.current = null;
+        flushDelta();
+      });
+    },
+    [flushDelta],
+  );
+
+  // A frame scheduled at unmount would fire against a dead component.
+  useEffect(
+    () => () => {
+      if (flushHandle.current !== null) cancelAnimationFrame(flushHandle.current);
+    },
+    [],
+  );
 
   const messages = useMemo(() => data?.messages ?? [], [data]);
 
@@ -569,13 +754,15 @@ export default function Chat() {
           content,
           (frame) => {
             if (frame.type === 'delta') {
-              setPending((current) =>
-                current ? { ...current, text: current.text + frame.text } : current,
-              );
+              queueDelta(frame.text);
             } else if (frame.type === 'error') {
               failed = true;
               setSendError(frame.message);
             } else if (frame.type === 'done') {
+              // The buffered text is flushed synchronously before anything else: `done`
+              // clears `busy` and the refetch follows, and a frame still queued would land
+              // after the overlay was already settled.
+              flushDelta();
               if (frame.truncated) setTruncatedId(frame.messageId);
               // The composer unlocks HERE, not when the stream closes. The server holds the
               // stream open a moment longer to write this turn's scene snapshot before
@@ -596,6 +783,9 @@ export default function Chat() {
         }
       } finally {
         abortRef.current = null;
+        // Any delta that arrived without a `done` — an abort mid-frame, a transport error —
+        // is still the reader's text and must not be dropped.
+        flushDelta();
         // Released before the settle timeout: a turn is over the moment its outcome is
         // decided. The guard exists only to stop overlapping starts, not to gate the
         // refetch, which `reload()` runs regardless.
@@ -646,7 +836,7 @@ export default function Chat() {
         }
       }
     },
-    [id, reload],
+    [id, reload, queueDelta, flushDelta],
   );
 
   function send() {
@@ -741,36 +931,42 @@ export default function Chat() {
     };
   }, [consultOpen]);
 
-  async function swipe(messageId: string, direction: 'prev' | 'next') {
-    try {
-      const result = await apiJson<{ id?: string }>('/api/message/swipe', {
-        method: 'POST',
-        body: JSON.stringify({ chatId: id, id: messageId, direction }),
-      });
-      // The version that is now on the path, which is not the row the reader clicked:
-      // holding the clicked id would scroll to a row that just left the scene.
-      keepInView.current = result?.id ?? messageId;
-      reload();
-    } catch (cause) {
-      setSendError(messageOf(cause));
-    }
-  }
+  const swipe = useCallback(
+    async (messageId: string, direction: 'prev' | 'next') => {
+      try {
+        const result = await apiJson<{ id?: string }>('/api/message/swipe', {
+          method: 'POST',
+          body: JSON.stringify({ chatId: id, id: messageId, direction }),
+        });
+        // The version that is now on the path, which is not the row the reader clicked:
+        // holding the clicked id would scroll to a row that just left the scene.
+        keepInView.current = result?.id ?? messageId;
+        reload();
+      } catch (cause) {
+        setSendError(messageOf(cause));
+      }
+    },
+    [id, reload],
+  );
 
-  async function saveEdit(messageId: string, content: string) {
-    setEditingId(null);
-    try {
-      await apiJson('/api/message/edit', {
-        method: 'POST',
-        body: JSON.stringify({ chatId: id, id: messageId, content }),
-      });
-      reload();
-    } catch (cause) {
-      // The composer row is contextual to the turn being edited, so it stays; the toast is
-      // added because the row is easy to miss when the edit form has already closed.
-      setSendError(messageOf(cause));
-      toast.failure(messageOf(cause));
-    }
-  }
+  const saveEdit = useCallback(
+    async (messageId: string, content: string) => {
+      setEditingId(null);
+      try {
+        await apiJson('/api/message/edit', {
+          method: 'POST',
+          body: JSON.stringify({ chatId: id, id: messageId, content }),
+        });
+        reload();
+      } catch (cause) {
+        // The composer row is contextual to the turn being edited, so it stays; the toast is
+        // added because the row is easy to miss when the edit form has already closed.
+        setSendError(messageOf(cause));
+        toast.failure(messageOf(cause));
+      }
+    },
+    [id, reload, toast],
+  );
 
   /**
    * Removes one version of a turn.
@@ -780,18 +976,44 @@ export default function Chat() {
    * The server's own `id` wins when it has one: deleting the active version promotes a
    * survivor, and that is the row now on the path.
    */
-  async function remove(messageId: string, holdId: string | null) {
-    try {
-      const result = await apiJson<{ id?: string }>('/api/message/delete', {
-        method: 'POST',
-        body: JSON.stringify({ chatId: id, id: messageId }),
-      });
-      keepInView.current = result?.id ?? holdId;
-      reload();
-    } catch (cause) {
-      setSendError(messageOf(cause));
-    }
-  }
+  const remove = useCallback(
+    async (messageId: string, holdId: string | null) => {
+      try {
+        const result = await apiJson<{ id?: string }>('/api/message/delete', {
+          method: 'POST',
+          body: JSON.stringify({ chatId: id, id: messageId }),
+        });
+        keepInView.current = result?.id ?? holdId;
+        reload();
+      } catch (cause) {
+        setSendError(messageOf(cause));
+      }
+    },
+    [id, reload],
+  );
+
+  // Stable identities for the transcript's rows. `Turn` is memoized, and a fresh arrow on
+  // every render would defeat it for every turn in the scene — which is exactly the cost
+  // this phase exists to remove.
+  const onEditStart = useCallback((messageId: string) => setEditingId(messageId), []);
+  const onEditCancel = useCallback(() => setEditingId(null), []);
+  const onEditSave = useCallback(
+    (messageId: string, content: string) => void saveEdit(messageId, content),
+    [saveEdit],
+  );
+  const onContinue = useCallback(
+    (messageId: string) => void run('continue', '', messageId),
+    [run],
+  );
+  const onRegenerate = useCallback(
+    (messageId: string) => void run('regenerate', '', messageId),
+    [run],
+  );
+  const onDeleteTurn = useCallback(
+    (target: { id: string; after: number; isUser: boolean; hasVersions: boolean }) =>
+      setConfirmDelete(target),
+    [],
+  );
 
   /**
    * Downloads the export.
@@ -923,14 +1145,16 @@ export default function Chat() {
               <>
                 <MenuSep />
                 {/* Moved off the transcript: a percentage pinned under every reply reads
-                    as a billing screen. It still matters, so it lives one tap away. */}
-                <MenuAction
-                  label={`Last turn ${Math.round(
+                    as a billing screen. It still matters, so it lives one tap away — and as
+                    a label, not a button, because there is nothing to press. */}
+                <MenuLabel>
+                  Last turn{' '}
+                  {Math.round(
                     (lastAssistant.cached_tokens / Math.max(1, lastAssistant.prompt_tokens)) * 100,
-                  )}% cached`}
-                  hint={lastAssistant.cost_usd != null ? `$${lastAssistant.cost_usd.toFixed(4)}` : undefined}
-                  onClick={() => {}}
-                />
+                  )}
+                  % cached
+                  {lastAssistant.cost_usd != null && ` · $${lastAssistant.cost_usd.toFixed(4)}`}
+                </MenuLabel>
               </>
             )}
           </>
@@ -942,7 +1166,17 @@ export default function Chat() {
           narrator has drifted. Replaces the chip that only said "Set the scene". */}
       <SceneBar state={sceneNow} onOpen={() => setPanel('state')} />
 
-      <div className="transcript">
+      {/* `role="log"` with `aria-live="polite"`: a streamed reply is added to this region
+          frame by frame, and without a live region a screen reader is told nothing about
+          the answer that is arriving. `aria-relevant="additions"` because the stream
+          mutates the last row rather than appending rows. */}
+      <main
+        className="transcript"
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions"
+        aria-label="Transcript"
+      >
         {hasMore && (
           <div className="transcript-earlier">
             <button
@@ -955,111 +1189,37 @@ export default function Chat() {
             </button>
           </div>
         )}
-        {path.map((message, index) => {
-          const isUser = message.role === 'user';
-          // The turn being redone. Its reply replaces this slot rather than appending,
-          // so regenerating an early message shows the new version where the reader is
-          // looking instead of at the bottom of a scene they then have to scroll up from.
-          const isTarget = replaceTarget === message.id;
-          // The cap belongs to the scene's opening, which is the first row of the whole
-          // path. Index 0 is the whole path's first row only once nothing older is left
-          // to fetch — while `hasMore` is true, index 0 is just the top of the window.
-          const isOpening = !hasMore && index === 0;
-          return (
-            <Fragment key={message.id}>
-              {/* The turn being redone. Its OLD text is replaced by the new one in the same
-                  slot rather than left on screen with the reply appended below it — a redo
-                  is a replacement, and leaving the previous version visible makes it look
-                  like a new message arriving at the end of the scene. */}
-              {isTarget && overlay && !isUser ? (
-                overlay.text.length === 0 ? (
-                  <Turn
-                    message={{ ...(message as TurnView), content: '' }}
-                    name={characterName}
-                    avatar={data.character?.avatar}
-                    macros={macroContext}
-                    dropCap={isOpening}
-                    thinking
-                  />
-                ) : (
-                  <Turn
-                    message={{ ...(message as TurnView), content: overlay.text }}
-                    name={characterName}
-                    avatar={data.character?.avatar}
-                    macros={macroContext}
-                    dropCap={isOpening}
-                    streaming
-                  />
-                )
-              ) : (
-                <Turn
-                  message={message as TurnView}
-                  name={isUser ? userName : characterName}
-                  avatar={isUser ? data.persona?.avatar : data.character?.avatar}
-                  cast={isUser ? undefined : voices}
-                  macros={macroContext}
-                  sceneState={stateAt.get(message.id)}
-                  // The marker belongs to the reply that hit the cap, and Continue asks for
-                  // more of that same reply — the same call an empty send makes.
-                  truncated={truncatedId === message.id}
-                  onContinue={
-                    truncatedId === message.id ? () => void run('continue', '', message.id) : undefined
-                  }
-                  // In the transcript you are already reading one character, so the
-                  // portrait has nothing else to do — enlarging it is the only useful
-                  // action, and it is also how you check an import carried an avatar.
-                  zoomAvatar
-                  // The first thing in the scene opens with a drop cap; everything else is
-                  // body text.
-                  dropCap={isOpening}
-                  editing={editingId === message.id}
-                  busy={busy}
-                  onEditStart={() => setEditingId(message.id)}
-                  onEditCancel={() => setEditingId(null)}
-                  onEditSave={(content) => void saveEdit(message.id, content)}
-                  actions={
-                    editingId === message.id ? null : (
-                      <MessageActions
-                        canSwipeLeft={(message.swipeIndex ?? 0) > 0}
-                        canSwipeRight={(message.swipeIndex ?? 0) < (message.swipes?.length ?? 1) - 1}
-                        swipeIndex={message.swipeIndex ?? 0}
-                        swipeCount={message.swipes?.length ?? 1}
-                        onSwipe={(direction) => void swipe(message.id, direction)}
-                        onCopy={() => message.content}
-                        onEdit={() => setEditingId(message.id)}
-                        onDelete={() => {
-                          // Rows after this one are exactly the turns that go with it: the
-                          // window ends at the tail of the path, so nothing that follows is
-                          // missing from it.
-                          const after = path.length - 1 - index;
-                          if (after === 0) {
-                            void remove(message.id, null);
-                            return;
-                          }
-                          setConfirmDelete({
-                            id: message.id,
-                            after,
-                            isUser,
-                            hasVersions: (message.swipes?.length ?? 1) > 1,
-                          });
-                        }}
-                        onRegenerate={
-                          // Offered on every reply, not only the newest. Regenerating an
-                          // earlier one is a branch: the new version takes that position
-                          // and the turns after it step out of the transcript until you
-                          // swipe back, which is what makes rewriting a scene's direction
-                          // possible without losing the scene you had.
-                          !isUser ? () => void run('regenerate', '', message.id) : undefined
-                        }
-                        busy={busy}
-                      />
-                    )
-                  }
-                />
-              )}
-            </Fragment>
-          );
-        })}
+        {path.map((message, index) => (
+          <TurnRow
+            key={message.id}
+            message={message as TurnView}
+            name={message.role === 'user' ? userName : characterName}
+            avatar={
+              message.role === 'user' ? data.persona?.avatar : data.character?.avatar
+            }
+            cast={message.role === 'user' ? undefined : voices}
+            macros={macroContext}
+            sceneState={stateAt.get(message.id)}
+            // The cap belongs to the scene's opening, which is the first row of the whole
+            // path. Index 0 is the whole path's first row only once nothing older is left
+            // to fetch — while `hasMore` is true, index 0 is just the top of the window.
+            isOpening={!hasMore && index === 0}
+            isUser={message.role === 'user'}
+            isTarget={replaceTarget === message.id}
+            overlayText={replaceTarget === message.id && overlay ? overlay.text : null}
+            truncated={truncatedId === message.id}
+            editing={editingId === message.id}
+            busy={busy}
+            onContinue={onContinue}
+            onRegenerate={onRegenerate}
+            onEditStart={onEditStart}
+            onEditCancel={onEditCancel}
+            onEditSave={onEditSave}
+            onSwipe={swipe}
+            onDeleteTurn={onDeleteTurn}
+            after={path.length - 1 - index}
+          />
+        ))}
 
         {/* The reader's own line, before the server has answered. */}
         {overlay?.sent && (
@@ -1123,7 +1283,7 @@ export default function Chat() {
           )}
         </AnimatePresence>
 
-      </div>
+      </main>
 
       {panel && (
         <Modal

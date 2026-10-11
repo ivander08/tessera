@@ -1,9 +1,11 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useParams } from 'react-router';
 import { apiJson } from '../lib/api';
 import { messageOf, useAsync } from '../lib/hooks';
 import { AppBar, BackLink } from '../components/AppBar';
+import { ConfirmPrompt } from '../components/ConfirmPrompt';
 import { useToast } from '../components/Toast';
+import { summaryDateSpan } from '../lib/prompt/memoryBlock';
 import type { RecallHit } from '../lib/memoryTypes';
 
 /**
@@ -63,9 +65,32 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
     [id],
   );
 
-  // Kept for `NewFact`'s validation refusal, which is about the field above it.
-  const [actionError, setActionError] = useState<string | null>(null);
+  // Polled rather than pushed: the extraction runs on the Worker's own schedule, so there is
+  // nothing to subscribe to. A failed or queued job is the state a reader is most likely to
+  // be looking at this panel to understand.
+  const { data: jobs, reload: reloadJobs } = useAsync(
+    () =>
+      apiJson<{
+        job: { kind: string; status: string; attempts: number; error: string | null } | null;
+      }>(`/api/chats/${encodeURIComponent(id)}/memory/jobs`),
+    [id],
+  );
+  const job = jobs?.job ?? null;
+  const jobLine =
+    job === null || job.status === 'delivered'
+      ? null
+      : job.status === 'failed'
+        ? `Last extraction failed${job.attempts > 1 ? ` after ${job.attempts} attempts` : ''}: ${job.error ?? 'no reason recorded'}`
+        : 'Extracting…';
+
   const toast = useToast();
+  // A delete here is permanent — the transcript is untouched, but the row and its recall
+  // index entry are gone — so every one of the four kinds asks first.
+  const [confirming, setConfirming] = useState<{
+    id: string;
+    kind: 'fact' | 'summary' | 'event';
+    tier?: 'scene' | 'arc';
+  } | null>(null);
 
   /** Every mutation re-reads the list: the Worker is the only writer worth trusting. */
   async function mutate(path: string, init: RequestInit, done: string): Promise<void> {
@@ -73,9 +98,16 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
       await apiJson(path, init);
       toast.success(done);
       reload();
+      reloadJobs();
     } catch (cause) {
       toast.failure(messageOf(cause));
     }
+  }
+
+  /** Both reads move together: a new fact or summary is the same event as a new job row. */
+  function refresh(): void {
+    reload();
+    reloadJobs();
   }
 
   const scenes = data?.summaries.filter((entry) => entry.tier === 'scene') ?? [];
@@ -104,15 +136,13 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
 
       {loading && <p className="sheet-sub">Loading…</p>}
         {error && <div className="note danger">{error}</div>}
-        {actionError && <div className="note danger">{actionError}</div>}
-
         {data && (
           <>
             <section className="section">
               <span className="eyebrow">
                 Facts <span className="data">{facts.length}</span>
               </span>
-              <NewFact chatId={id} onCreated={() => reload()} onError={setActionError} />
+              <NewFact chatId={id} onCreated={refresh} />
 
               {facts.length === 0 ? (
                 <div className="empty">
@@ -170,9 +200,7 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
                           fact.status === 'active' ? 'Fact superseded.' : 'Fact restored.',
                         )
                       }
-                      onDelete={() =>
-                        mutate(`/api/memory/facts/${fact.id}`, { method: 'DELETE' }, 'Fact deleted.')
-                      }
+                      onDelete={() => setConfirming({ id: fact.id, kind: 'fact' })}
                     />
                   ))}
                 </ul>
@@ -220,9 +248,7 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
                           at ? 'Date saved.' : 'Date cleared.',
                         )
                       }
-                      onDelete={() =>
-                        mutate(`/api/memory/facts/${event.id}`, { method: 'DELETE' }, 'Event deleted.')
-                      }
+                      onDelete={() => setConfirming({ id: event.id, kind: 'event' })}
                     />
                   ))}
                 </ul>
@@ -255,7 +281,7 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
                     )
                   }
                   onDelete={(entryId) =>
-                    mutate(`/api/memory/summaries/${entryId}`, { method: 'DELETE' }, 'Arc deleted.')
+                    setConfirming({ id: entryId, kind: 'summary', tier: 'arc' })
                   }
                 />
               )}
@@ -287,14 +313,15 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
                     )
                   }
                   onDelete={(entryId) =>
-                    mutate(
-                      `/api/memory/summaries/${entryId}`,
-                      { method: 'DELETE' },
-                      'Scene summary deleted.',
-                    )
+                    setConfirming({ id: entryId, kind: 'summary', tier: 'scene' })
                   }
                 />
               )}
+
+              {/* One quiet line. The extraction job's state is otherwise invisible: a chat
+                  whose summaries are queued or repeatedly failing looks identical to one
+                  with nothing to remember. */}
+              {jobLine && <p className="form-hint">{jobLine}</p>}
             </section>
 
             <section className="section">
@@ -317,6 +344,11 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
                       style={{ borderTop: index > 0 ? '1px solid var(--line)' : undefined }}
                     >
                       <span className="tag accent">{hit.kind}</span>{' '}
+                      {/* The date the block renders, in the same bracket form. The panel's
+                          whole purpose is to show what the narrator was given, and a row
+                          that omitted the date while the prompt carried it would be the
+                          panel disagreeing with the prompt about the same hit. */}
+                      {hit.at && <span className="data">[{hit.at}] </span>}
                       <span style={{ color: 'var(--ink-dim)', fontSize: 'var(--text-sm)' }}>{hit.text}</span>
                     </li>
                   ))}
@@ -333,6 +365,51 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
             </section>
           </>
         )}
+
+      {confirming && (
+        <ConfirmPrompt
+          title={
+            confirming.kind === 'fact'
+              ? 'Delete this fact'
+              : confirming.kind === 'event'
+                ? 'Delete this event'
+                : confirming.tier === 'arc'
+                  ? 'Delete this arc'
+                  : 'Delete this summary'
+          }
+          message={
+            confirming.kind === 'fact'
+              ? 'Delete this fact? It is removed from recall permanently.'
+              : confirming.kind === 'event'
+                ? 'Delete this event? It is removed from the record permanently.'
+                : 'Delete this summary? The messages it covers stay in the transcript, but the summary is gone permanently.'
+          }
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => {
+            const target = confirming;
+            setConfirming(null);
+            if (target.kind === 'fact') {
+              void mutate(`/api/memory/facts/${target.id}`, { method: 'DELETE' }, 'Fact deleted.');
+            } else if (target.kind === 'event') {
+              void mutate(`/api/memory/facts/${target.id}`, { method: 'DELETE' }, 'Event deleted.');
+            } else if (target.tier === 'arc') {
+              void mutate(
+                `/api/memory/summaries/${target.id}`,
+                { method: 'DELETE' },
+                'Arc deleted.',
+              );
+            } else {
+              void mutate(
+                `/api/memory/summaries/${target.id}`,
+                { method: 'DELETE' },
+                'Scene summary deleted.',
+              );
+            }
+          }}
+          onCancel={() => setConfirming(null)}
+        />
+      )}
     </>
   );
 
@@ -341,10 +418,10 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
   return (
     <>
       <AppBar
-        lead={<BackLink to={`/chat/${encodeURIComponent(id)}`} label="Back to chat" />}
+        lead={<BackLink to={`/chat/${encodeURIComponent(id)}`} label="chat" />}
         title={<span className="bar-title">Memory</span>}
       />
-      <div className="sheet">{body}</div>
+      <main className="sheet">{body}</main>
     </>
   );
 }
@@ -361,22 +438,6 @@ function Provenance({ children }: { children: React.ReactNode }) {
       {children}
     </p>
   );
-}
-
-/**
- * A summary's date as one span.
- *
- * Collapsed to a single reading when the span is a point, because "14 April 2026 – 14 April
- * 2026" is noise and a one-line summary covering one afternoon is the common case. Mirrors
- * the server's `summaryDateSpan` so the panel and the prompt block render the same range the
- * same way.
- */
-function summaryDateSpan(from: string | null, to: string | null): string {
-  const start = (from ?? '').trim();
-  const end = (to ?? '').trim();
-  if (start.length === 0) return end;
-  if (end.length === 0 || end === start) return start;
-  return `${start} – ${end}`;
 }
 
 function FactRow({
@@ -401,23 +462,34 @@ function FactRow({
   const [draft, setDraft] = useState(fact.text);
   const [editingDate, setEditingDate] = useState(false);
   const [dateDraft, setDateDraft] = useState(fact.at ?? '');
+  const editButtonRef = useRef<HTMLButtonElement | null>(null);
+  const wasEditing = useRef(false);
   const superseded = fact.status === 'superseded';
   const pinned = fact.pinned === 1;
   const isEvent = fact.kind === 'event';
 
+  // Focus goes back to the control that opened the box. The button unmounts while the
+  // textarea is up, so this cannot be done from the click handler — the node does not
+  // exist yet at that point.
+  useEffect(() => {
+    if (wasEditing.current && !editing) editButtonRef.current?.focus();
+    wasEditing.current = editing;
+  }, [editing]);
+
   return (
     <li
-      className={`p-4 ${bordered ? 'border-t border-line' : ''}`}
-      // Superseded facts stay in the list — the history is the point — but they are
-      // dimmed so the ones still in force read first.
-      style={superseded ? { opacity: 0.55 } : undefined}
+      className={`p-4 ${bordered ? 'border-t border-line' : ''}${superseded ? ' is-superseded' : ''}`}
     >
       {editing ? (
         <div className="space-y-3">
+          {/* Labelled and focused on open: this box had neither, so a screen reader
+              announced an unnamed textarea and the keyboard stayed on BODY. */}
           <textarea
             className="field"
             rows={3}
             value={draft}
+            aria-label={`Edit ${isEvent ? 'event' : 'fact'}`}
+            autoFocus
             onChange={(event) => setDraft(event.target.value)}
           />
           <div className="flex flex-wrap gap-2">
@@ -515,7 +587,12 @@ function FactRow({
           </Provenance>
 
           <RowActions>
-            <button type="button" className="btn quiet" onClick={() => setEditing(true)}>
+            <button
+              type="button"
+              className="btn quiet"
+              ref={editButtonRef}
+              onClick={() => setEditing(true)}
+            >
               Edit
             </button>
             {/* Events are never superseded: a thing that happened cannot become false. */}
@@ -670,13 +747,15 @@ function SummaryRow({
 function NewFact({
   chatId,
   onCreated,
-  onError,
 }: {
   chatId: string;
   onCreated: () => void;
-  onError: (message: string) => void;
 }) {
   const [draft, setDraft] = useState('');
+  // Owned here rather than by the parent: the message is about this field, so it renders
+  // under it. At the top of the FACTS section it sat 125px from the input it described, and
+  // it outlived the failure — a later successful add left the old error on screen.
+  const [failure, setFailure] = useState<string | null>(null);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -688,28 +767,35 @@ function NewFact({
         body: JSON.stringify({ chatId, text }),
       });
       setDraft('');
+      setFailure(null);
       onCreated();
     } catch (cause) {
-      onError(messageOf(cause));
+      setFailure(messageOf(cause));
     }
   }
 
   return (
-    <form
-      onSubmit={submit}
-      className="flex gap-2"
-      style={{ marginBottom: 14, alignItems: 'center' }}
-    >
-      <input
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-        placeholder="Add a fact this chat should always know"
-        className="field"
-        style={{ flex: 1, minWidth: 0 }}
-      />
-      <button type="submit" className="btn primary" disabled={draft.trim().length === 0}>
-        Add
-      </button>
+    <form onSubmit={submit} style={{ marginBottom: 14 }}>
+      <div className="flex gap-2" style={{ alignItems: 'center' }}>
+        <input
+          value={draft}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            if (failure) setFailure(null);
+          }}
+          placeholder="Add a fact this chat should always know"
+          className="field"
+          style={{ flex: 1, minWidth: 0 }}
+        />
+        <button type="submit" className="btn primary" disabled={draft.trim().length === 0}>
+          Add
+        </button>
+      </div>
+      {failure && (
+        <p className="form-hint" style={{ marginTop: 6, color: 'var(--danger)' }}>
+          {failure}
+        </p>
+      )}
     </form>
   );
 }

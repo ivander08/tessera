@@ -15,7 +15,7 @@
   --surface-raised: #26211a;
   --ink: #e9e2d7;
   --ink-dim: #9a8f82;
-  --ink-faint: #6b6157;
+  --ink-faint: #948679;
   --line: rgba(233, 226, 215, 0.1);
   --line-strong: rgba(233, 226, 215, 0.2);
   --brass: #c2a36b;
@@ -40,11 +40,13 @@
   --font-prose: Georgia, "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", serif;
   --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-data: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
-  --text-xs: 11.5px;
-  --text-sm: 13px;
-  --text-base: 15.5px;
-  --text-lg: 18px;
-  --text-xl: 23px;
+  /* In `rem` so the browser's own text-size setting is respected. These are the dark
+     first-paint defaults; `theme.ts` writes the scaled values over them. */
+  --text-xs: 0.719rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.969rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.4375rem;
   --leading: 1.68;
   --measure: 68ch;
   --avatar: 34px;
@@ -187,7 +189,8 @@ body {
   font-size: var(--text-sm);
   font-weight: 500;
   cursor: pointer;
-  transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease;
+  transition: color var(--dur-fast) ease, border-color var(--dur-fast) ease, background-color var(--dur-fast) ease,
+    transform var(--dur-fast) ease-out;
   white-space: nowrap;
 }
 
@@ -195,6 +198,11 @@ body {
   color: var(--ink);
   border-color: var(--ink-faint);
   background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+
+/* Press feedback: the highlight lands on the press, not after it. */
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
 }
 
 /* A primary action is not a voice. Brass used to fill this button, which works while a
@@ -225,9 +233,25 @@ body {
   border-color: var(--line);
 }
 
-.btn.danger:hover:not(:disabled) {
+/* A destructive action should read as destructive before it is hovered, not only after.
+   Scoped away from `.primary`: a `ConfirmPrompt` renders `btn primary danger`, and a
+   resting danger colour would repaint its `--action-ink` text red on the action fill. */
+.btn.danger:not(.primary) {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 50%, transparent);
+}
+
+.btn.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+/* `.btn.danger:hover` and `.btn.primary:hover` have identical specificity and the danger
+   rule comes second, so on `btn primary danger` it used to win and paint danger-on-action
+   at 2.54:1 — the most dangerous button least legible while hovered. Scoped, ordered last. */
+.btn.primary.danger:hover:not(:disabled) {
+  color: var(--action-ink);
+  background: color-mix(in srgb, var(--danger) 22%, var(--action));
+  border-color: transparent;
 }
 
 .btn:disabled {
@@ -247,12 +271,16 @@ body {
   background: transparent;
   color: var(--ink-faint);
   cursor: pointer;
-  transition: color 120ms ease, background-color 120ms ease;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, transform var(--dur-fast) ease-out;
 }
 
 .icon-btn:hover:not(:disabled) {
   color: var(--ink);
   background: color-mix(in srgb, var(--ink) 7%, transparent);
+}
+
+.icon-btn:active:not(:disabled) {
+  transform: scale(0.97);
 }
 
 .icon-btn:disabled {
@@ -270,7 +298,7 @@ body {
   border-radius: var(--radius);
   font-family: var(--font-ui);
   font-size: var(--text-sm);
-  transition: border-color 120ms ease;
+  transition: border-color var(--dur-fast) ease;
 }
 
 .field:hover:not(:disabled) {
@@ -278,9 +306,10 @@ body {
 }
 
 .field:focus {
-  outline: none;
-  /* A focus ring is not a voice. */
-  border-color: var(--line-strong);
+  /* The ring is left to the global `:focus-visible` rule, which is 0-1-0 against this
+     rule's 0-2-0 — so an `outline: none` here would suppress it for keyboard users too.
+     A pointer user gets the border change below; a keyboard user gets both. */
+  border-color: var(--ink-faint);
 }
 
 .field::placeholder {
@@ -319,7 +348,23 @@ textarea.field {
   padding-top: env(safe-area-inset-top);
   background: color-mix(in srgb, var(--ground) 88%, transparent);
   backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid transparent;
+}
+
+/* The same fade the composer uses. A hard rule under a sticky bar cuts the page in half;
+   a rule that dissolves reads as the page ending rather than being truncated. */
+.bar::before {
+  content: "";
+  position: absolute;
+  inset: auto 0 -1px 0;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--line-strong) 22%,
+    var(--line-strong) 78%,
+    transparent
+  );
 }
 
 .bar-title {
@@ -355,9 +400,6 @@ textarea.field {
   letter-spacing: -0.01em;
 }
 
-/* The title as a link home. It stays visually identical to a plain title — the
-   affordance is that it is in the same place on every screen, not that it is underlined —
-   but it brightens on hover so a pointer user discovers it. */
 .bar-home {
   display: inline-flex;
   align-items: center;
@@ -383,7 +425,7 @@ textarea.field {
   transform: rotate(45deg);
   opacity: 0.5;
   flex-shrink: 0;
-  transition: opacity 130ms ease, transform 130ms ease;
+  transition: opacity var(--dur-fast) ease, transform var(--dur-fast) ease;
 }
 
 .bar-home:hover::before {
@@ -397,7 +439,7 @@ textarea.field {
   font-size: var(--text-sm);
   padding: 6px 8px;
   border-radius: var(--radius);
-  transition: color 120ms ease;
+  transition: color var(--dur-fast) ease;
 }
 
 .bar-link:hover {
@@ -412,13 +454,17 @@ textarea.field {
   align-items: center;
   gap: 3px;
   flex-shrink: 0;
+  /* A 24px chevron was the only way back once the label collapses at 480px; `.icon-btn`
+     is 34px, so match it. */
+  min-height: 34px;
+  min-width: 34px;
   padding: 5px 7px 5px 3px;
   margin-right: 2px;
   border-radius: var(--radius);
-  color: var(--ink-faint);
+  color: var(--ink-dim);
   font-size: var(--text-sm);
   text-decoration: none;
-  transition: color 120ms ease, background-color 120ms ease;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease;
 }
 
 .crumb:hover {
@@ -497,12 +543,16 @@ textarea.field {
   text-align: left;
   text-decoration: none;
   cursor: pointer;
-  transition: background-color 100ms ease, color 100ms ease;
+  transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease;
 }
 
 .menu-item:hover {
   background: color-mix(in srgb, var(--ink) 8%, transparent);
   color: var(--ink);
+}
+
+.menu-item:active {
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
 }
 
 .menu-label {
@@ -513,9 +563,9 @@ textarea.field {
   text-transform: uppercase;
   /* Faint, not dim. A section label that matches the weight of the entries under it
      reads as one of them — which is exactly how "THIS CHAT" and "YOU ARE" ended up
-     looking like two entries of the same kind. */
+     looking like two entries of the same kind. The colour token carries the de-emphasis
+     on its own; the extra opacity took the label to 2.06:1. */
   color: var(--ink-faint);
-  opacity: 0.75;
 }
 
 /* A menu entry that carries a current value: the label on the left, what it is set to
@@ -586,12 +636,16 @@ textarea.field {
   font-size: var(--text-sm);
   text-align: left;
   cursor: pointer;
-  transition: background-color 120ms ease, border-color 120ms ease;
+  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 
 .pick-row:hover {
   background: color-mix(in srgb, var(--ink) 5%, transparent);
   border-color: var(--line);
+}
+
+.pick-row:active {
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
 }
 
 /* Selection, not a voice — the same statement the primary button makes. */
@@ -696,7 +750,7 @@ textarea.field {
   display: flex;
   flex-direction: column;
   width: min(720px, 100%);
-  max-height: 88vh;
+  max-height: 88dvh;
   background: var(--surface);
   border: 1px solid var(--line-strong);
   border-bottom: 0;
@@ -741,7 +795,7 @@ textarea.field {
   }
 
   .sheet-panel {
-    max-height: 82vh;
+    max-height: 82dvh;
     border-bottom: 1px solid var(--line-strong);
     border-radius: 14px;
   }
@@ -834,10 +888,12 @@ html[data-layout="bubble"] .turn-segment:not(:first-child) {
   color: var(--warn);
 }
 
-/* Scoped to this marker: `.app-link` is a dangling class elsewhere in the app — referenced
-   by `ThemeEditor` and defined in no stylesheet — so an unscoped rule here would restyle
-   the Settings header as a side effect of a chat feature. Underlined rather than coloured,
-   because the sentence it sits in is already the warning colour. */
+/* Scoped to this marker, and now the only definition of the class. It used to be dangling —
+   `ThemeEditor` referenced it and no stylesheet defined it, so its Reset rendered as
+   unstyled text; that call site is a `btn quiet` now. Scoping stays anyway: this is an
+   inline control inside a sentence, not a button, and an unscoped rule would make any
+   future use of the name inherit that shape. Underlined rather than coloured, because the
+   sentence it sits in is already the warning colour. */
 .turn-truncated .app-link {
   padding: 0;
   border: 0;
@@ -852,13 +908,11 @@ html[data-layout="bubble"] .turn-segment:not(:first-child) {
 /* ---------------------------------------------------------------- transcript */
 
 /* The reading column. `--measure` is the measure in characters — the thing that keeps a
-   line readable — and the transcript adds its own gutter around it. On a wide window the
-   column grows with the viewport up to a ceiling rather than staying phone-width in the
-   middle of a 27-inch monitor: prose at 68ch on a 2560px screen is a column of text with
-   two screens of empty ground beside it. The ceiling is where a line stops being
-   comfortable, which is why it is not simply 100%. */
+   line readable — and the transcript adds its own gutter around it. The ceiling is the
+   real rail width: the avatar column plus the prose plus the grid gap. It used to be an
+   arbitrary 26rem, which let a desktop line run to ~115 characters. */
 .transcript {
-  max-width: min(calc(var(--measure) + 26rem), 100%);
+  max-width: min(calc(var(--measure) + var(--avatar) + 12px), 100%);
   margin: 0 auto;
   padding: 22px 24px 8px;
   /* The browser's own scroll anchoring is off, because the app does this itself.
@@ -878,6 +932,17 @@ html[data-layout="bubble"] .turn-segment:not(:first-child) {
   grid-template-columns: var(--avatar) 1fr;
   gap: 12px;
   padding: 15px 0;
+}
+
+/* `--avatar: 0px` alone leaves a 2px bordered dot and a dead column, because neither a
+   border nor a grid track is a custom property. Collapse both. */
+html[data-avatars="hidden"] .turn {
+  grid-template-columns: 1fr;
+  gap: 0;
+}
+
+html[data-avatars="hidden"] .turn-avatar {
+  display: none;
 }
 
 /* The reader's turn is marked by tone, not by moving the grid. An earlier version
@@ -941,7 +1006,7 @@ html[data-layout="bubble"] .turn-segment:not(:first-child) {
    so the affordance is visible before the click rather than only on the pointer. */
 .turn-avatar.zoomable {
   cursor: zoom-in;
-  transition: border-color 140ms ease, transform 140ms ease;
+  transition: border-color var(--dur-fast) ease, transform var(--dur-fast) ease;
 }
 
 .turn-avatar.zoomable:hover {
@@ -983,7 +1048,7 @@ html[data-layout="bubble"] .turn-segment:not(:first-child) {
 .turn[data-streaming],
 .turn[data-thinking],
 .turn:last-of-type {
-  animation: turn-in 260ms var(--ease) both;
+  animation: turn-in var(--dur-base) var(--ease) both;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1015,6 +1080,32 @@ html[data-layout="bubble"] .turn-segment:not(:first-child) {
   .turn.is-found {
     animation: none;
     background: color-mix(in srgb, var(--action) 12%, transparent);
+  }
+}
+
+/* A card just created, highlighted where it landed. The plate has a border rather than a
+   background band, so the marker is the edge plus a soft wash — the same statement the
+   transcript makes with `.turn.is-found`, in the vocabulary this element already has. */
+.plate.is-found {
+  animation: plate-found 2.2s ease-out both;
+}
+
+@keyframes plate-found {
+  0%,
+  60% {
+    border-color: color-mix(in srgb, var(--action) 55%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--action) 14%, transparent);
+  }
+  100% {
+    border-color: var(--line);
+    box-shadow: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plate.is-found {
+    animation: none;
+    border-color: color-mix(in srgb, var(--action) 55%, transparent);
   }
 }
 
@@ -1061,7 +1152,7 @@ html[data-layout="bubble"] .turn-segment:not(:first-child) {
   align-items: center;
   gap: 2px;
   opacity: 0;
-  transition: opacity 130ms ease;
+  transition: opacity var(--dur-fast) ease;
 }
 
 .turn:hover .turn-tools,
@@ -1086,11 +1177,16 @@ html[data-layout="bubble"] .turn-segment:not(:first-child) {
   background: transparent;
   color: var(--ink-faint);
   cursor: pointer;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, transform var(--dur-fast) ease-out;
 }
 
 .tool:hover:not(:disabled) {
   background: color-mix(in srgb, var(--ink) 9%, transparent);
   color: var(--ink);
+}
+
+.tool:active:not(:disabled) {
+  transform: scale(0.97);
 }
 
 .tool:disabled {
@@ -1112,6 +1208,9 @@ html[data-layout="bubble"] .turn-segment:not(:first-child) {
   font-family: var(--font-prose);
   font-size: var(--text-base);
   line-height: var(--leading);
+  /* The promised measure. Without this a desktop line ran ~115 characters: the container
+     cap below is the avatar column plus the prose, and the prose itself was unbounded. */
+  max-width: var(--measure);
   overflow-wrap: anywhere;
   color: var(--prose, var(--ink));
 }
@@ -1168,7 +1267,7 @@ html[data-layout="bubble"] .turn-segment:not(:first-child) {
   text-transform: uppercase;
   box-shadow: var(--shadow);
   cursor: pointer;
-  transition: color 120ms ease, border-color 120ms ease;
+  transition: color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 
 .jump-latest:hover {
@@ -1344,7 +1443,9 @@ ul.md-list {
   /* A disclosure block, not a speaker. */
   border-left: 2px solid var(--line-strong);
   border-radius: 0 var(--radius) var(--radius) 0;
-  background: color-mix(in srgb, var(--surface-raised) 70%, transparent);
+  /* Opaque, not 70%: the block sits inside a turn band that is itself translucent, and the
+     two composites came out at 1.08:1 — a panel indistinguishable from its own background. */
+  background: var(--surface-raised);
 }
 
 .md-summary {
@@ -1369,7 +1470,7 @@ ul.md-list {
   margin-right: 7px;
   /* A disclosure triangle, not a speaker. */
   color: var(--ink-faint);
-  transition: transform 130ms ease;
+  transition: transform var(--dur-fast) ease;
 }
 
 .md-details[open] .md-summary::before {
@@ -1478,6 +1579,43 @@ ul.md-list {
   }
 }
 
+/* Two preferences the app declared nothing for. `prefers-reduced-transparency` is a real
+   setting on macOS and iOS — the reader has asked for no translucency anywhere — and the
+   blurred chrome is the only place the app uses it. `prefers-contrast: more` asks for
+   harder edges, so the ground goes opaque and every hairline moves to a colour that
+   reads. */
+@media (prefers-reduced-transparency: reduce) {
+  .bar,
+  .scene-bar,
+  .composer,
+  .sheet-commit {
+    background: var(--ground);
+    backdrop-filter: none;
+  }
+
+  .sheet-scrim,
+  .lightbox-scrim {
+    backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .bar,
+  .scene-bar,
+  .composer,
+  .sheet-commit {
+    background: var(--ground);
+    backdrop-filter: none;
+    border-color: var(--ink-faint);
+  }
+
+  .panel,
+  .plate,
+  .sheet-panel {
+    border-color: var(--line-strong);
+  }
+}
+
 /* ---------------------------------------------------------------- composer */
 
 /* Pinned to the bottom, one row, and the input takes every pixel the buttons do not
@@ -1516,7 +1654,7 @@ ul.md-list {
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  max-width: min(calc(var(--measure) + 26rem), 100%);
+  max-width: min(calc(var(--measure) + var(--avatar) + 12px), 100%);
   margin: 0 auto;
 }
 
@@ -1530,7 +1668,7 @@ ul.md-list {
   flex: 1;
   min-width: 0;
   min-height: 40px;
-  max-height: 42vh;
+  max-height: 42dvh;
   padding: 10px 14px;
   background: var(--surface);
   color: var(--ink);
@@ -1541,17 +1679,15 @@ ul.md-list {
   line-height: 1.45;
   resize: none;
   overflow-y: auto;
-  transition: border-color 130ms ease, box-shadow 130ms ease;
+  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
 }
 
 .composer-input:focus {
-  outline: none;
-  /* Not a voice: the field is where you type, and it should read as lit, not as a
-     speaker. */
-  border-color: var(--line-strong);
-  /* A soft ring rather than a hard outline: the field is the one thing you look at when
-     typing, and it should read as lit rather than as selected. */
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 8%, transparent);
+  /* The soft ring composited to 1.20:1, below the 3:1 non-text minimum, and the border
+     it set was the border it already had. The border change reads as focus for a pointer
+     user; the global `:focus-visible` ring draws for a keyboard user, which is why no
+     `outline: none` lives here (this rule is 0-2-0 and would beat the global 0-1-0). */
+  border-color: var(--ink-faint);
 }
 
 .composer-input::placeholder {
@@ -1607,7 +1743,7 @@ ul.md-list {
   min-height: 38px;
   padding: 6px 16px;
   border: 0;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid transparent;
   background: color-mix(in srgb, var(--ground) 90%, transparent);
   backdrop-filter: blur(12px);
   color: var(--ink-dim);
@@ -1617,8 +1753,28 @@ ul.md-list {
   overflow: hidden;
 }
 
+/* `overflow: hidden` clips an overhanging pseudo, so the fade is drawn at `bottom: 0`
+   rather than in the transparent border the way `.bar`'s is — same line, same place. */
+.scene-bar::before {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--line-strong) 22%,
+    var(--line-strong) 78%,
+    transparent
+  );
+}
+
 .scene-bar:hover {
   background: color-mix(in srgb, var(--surface) 60%, transparent);
+}
+
+.scene-bar:active {
+  background: color-mix(in srgb, var(--surface) 85%, transparent);
 }
 
 .scene-bar > svg {
@@ -1686,7 +1842,7 @@ ul.md-list {
   color: var(--ink-faint);
   text-transform: uppercase;
   letter-spacing: 0.09em;
-  font-size: 10px;
+  font-size: calc(var(--text-xs) * 0.91);
   font-weight: 600;
 }
 
@@ -1723,6 +1879,23 @@ ul.md-list {
   flex-shrink: 0;
   color: var(--ink-faint);
   opacity: 0.6;
+}
+
+/* The chevron goes to the far edge, the way it does in the populated strip, so the
+   affordance sits in the same place in both states. */
+.scene-bar-empty > svg:last-child {
+  margin-left: auto;
+}
+
+/* The empty strip is quieter — an italic aside in the faint ink — but it is still the same
+   control, so it keeps its height, its pointer cursor and its hover. It was styled as if
+   inert while being a full-width button, which is the worst of both. */
+.scene-bar.is-empty {
+  color: var(--ink-faint);
+}
+
+.scene-bar.is-empty:hover {
+  background: color-mix(in srgb, var(--surface) 45%, transparent);
 }
 
 /* Narrow: the secondary facts go, then the time. The place is what is left, because a
@@ -1792,13 +1965,17 @@ ul.md-list {
   border-radius: 13px;
   background: var(--surface);
   overflow: hidden;
-  transition: border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+  transition: border-color var(--dur-fast) ease, transform var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
 }
 
 .plate:hover {
   border-color: var(--line-strong);
   transform: translateY(-2px);
   box-shadow: 0 10px 26px -14px rgba(0, 0, 0, 0.7);
+}
+
+.plate:active {
+  transform: translateY(-1px) scale(0.995);
 }
 
 /* The portrait is a square at the top of the plate. `aspect-ratio` rather than a fixed
@@ -1915,7 +2092,7 @@ ul.md-list {
 }
 
 .plate {
-  animation: plate-in 320ms var(--ease) both;
+  animation: plate-in var(--dur-slow) var(--ease) both;
 }
 
 .plate:nth-child(1) { animation-delay: 0ms; }
@@ -1969,7 +2146,7 @@ ul.md-list {
 
 .lightbox-figure img {
   max-width: 100%;
-  max-height: calc(100vh - 130px);
+  max-height: calc(100dvh - 130px);
   object-fit: contain;
   border-radius: 12px;
   border: 1px solid var(--line-strong);
@@ -2014,6 +2191,18 @@ ul.md-list {
   margin-bottom: 18px;
 }
 
+/* A superseded memory row stays in the list — the history is the point — but reads as
+   spent. Dimmed with colour rather than `opacity`, which took the Restore control on the
+   same row to 2.55:1 and its provenance line to 1.72:1: an interactive control must never
+   be inside a dimmed subtree. */
+.is-superseded .prose {
+  color: var(--ink-dim);
+}
+
+.is-superseded .data {
+  color: var(--ink-dim);
+}
+
 /* The commit row of a long form, pinned to the bottom of the viewport.
    A sheet that takes three screens to read should not make the reader scroll all the way
    down to save — and giving the header its own Save instead just puts the same button in
@@ -2030,9 +2219,23 @@ ul.md-list {
   margin: 22px -16px -64px;
   padding: 12px 16px;
   padding-bottom: max(12px, env(safe-area-inset-bottom));
-  border-top: 1px solid var(--line);
+  border-top: 1px solid transparent;
   background: color-mix(in srgb, var(--ground) 92%, transparent);
   backdrop-filter: blur(14px);
+}
+
+.sheet-commit::before {
+  content: "";
+  position: absolute;
+  inset: -1px 0 auto 0;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--line-strong) 22%,
+    var(--line-strong) 78%,
+    transparent
+  );
 }
 
 .sheet-sub {
@@ -2123,7 +2326,7 @@ ul.md-list {
   padding: 0;
   border: 1px solid var(--line);
   cursor: zoom-in;
-  transition: border-color 140ms ease, transform 140ms ease;
+  transition: border-color var(--dur-fast) ease, transform var(--dur-fast) ease;
 }
 
 .chip.zoomable:hover {
@@ -2143,10 +2346,10 @@ ul.md-list {
   border-radius: 4px;
   background: color-mix(in srgb, var(--ink) 8%, transparent);
   font-family: var(--font-data);
-  font-size: 10.5px;
+  font-size: calc(var(--text-xs) * 0.91);
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--ink-dim);
+  color: var(--ink);
 }
 
 /* Category labels, not voices. `brass` was the wrong name for this: brass is a speaker's
@@ -2158,14 +2361,17 @@ ul.md-list {
   color: var(--ink);
 }
 
+/* The tinted ground carries the distinction; the text stays at `--ink`. Colouring the
+   text with the accent it tints put it at 3.8:1 on the raised ground — the tint alone
+   reads, and the label stays legible. */
 .tag.verdigris {
   background: color-mix(in srgb, var(--verdigris) 20%, transparent);
-  color: var(--verdigris);
+  color: var(--ink);
 }
 
 .tag.danger {
   background: color-mix(in srgb, var(--danger) 18%, transparent);
-  color: var(--danger);
+  color: var(--ink);
 }
 
 /* ---------------------------------------------------------------- notes */
@@ -2207,6 +2413,18 @@ ul.md-list {
   gap: 6px;
   width: min(420px, calc(100vw - 32px));
   pointer-events: none;
+}
+
+/* The two live regions are plain wrappers: they exist for the accessibility tree, not for
+   layout, so they must not introduce a gap of their own between their children. */
+.toast-stack > div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.toast-stack > div:empty {
+  display: none;
 }
 
 .toast {
@@ -2275,7 +2493,7 @@ ul.md-list {
   .cast-avatar img,
   .plate-portrait img,
   .lightbox-figure img {
-    animation: img-in 180ms ease both;
+    animation: img-in var(--dur-base) ease both;
   }
 }
 
@@ -2290,11 +2508,37 @@ ul.md-list {
   line-height: 1.65;
 }
 
+/* At 390px the thread text collapsed to 24px beside a 227px status select — a one-word
+   input next to a control that does not need the room. The text gets its own line. */
+@media (max-width: 560px) {
+  .thread-row {
+    flex-wrap: wrap;
+  }
+
+  .thread-row-text {
+    flex: 1 1 100%;
+  }
+}
+
 /* ---------------------------------------------------------------- fields */
 
 .form-row {
   display: block;
   margin-top: 14px;
+}
+
+/* A checkbox is the one control the browser paints itself, and left alone it renders in the
+   OS accent — the only colour in the app that comes from outside the theme. `accent-color`
+   is the supported way to bring it in. */
+.form-row input[type="checkbox"] {
+  accent-color: var(--action);
+  width: 17px;
+  height: 17px;
+  cursor: pointer;
+}
+
+.form-row input[type="checkbox"]:disabled {
+  cursor: default;
 }
 
 .form-label {
@@ -2342,27 +2586,76 @@ ul.md-list {
   flex: 1;
   min-height: 31px;
   padding: 0 13px;
-  border: 0;
+  /* Transparent rather than absent: the selected state sets `border-color`, and a `border:
+     0` would leave that declaration with nothing to paint. `box-sizing: border-box` is
+     global, so the box is the same size either way. */
+  border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
   color: var(--ink-dim);
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   cursor: pointer;
-  transition: background-color 120ms ease, color 120ms ease;
+  transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease, transform var(--dur-fast) ease-out;
 }
 
 .tab:hover {
   color: var(--ink);
 }
 
-.tab[aria-selected="true"] {
+.tab:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* Both spellings: `aria-selected` belongs to a real tab pattern and `aria-pressed` to a set
+   of mutually exclusive buttons. The app's segmented controls are the latter, but a rule
+   that silently stopped matching if one were ever a genuine tab would be a trap. */
+.tab[aria-selected="true"],
+.tab[aria-pressed="true"] {
   background: var(--surface-raised);
+  border-color: var(--line-strong);
   color: var(--ink);
   font-weight: 500;
 }
 
 /* ---------------------------------------------------------------- responsive */
+
+/* A finger is not a mouse. WCAG 2.5.8 asks for 24px minimum and 44px is the size that is
+   actually comfortable; at 390px the app was serving a 27px `.tool`, a 31px `.tab` and a
+   22px toast dismiss — the dismiss was below the legal minimum, not merely small.
+   `pointer: coarse` rather than a width query: a touch laptop at 1400px has the same problem
+   and the same fix. The glyphs keep their own size; it is the hit area that grows. */
+@media (pointer: coarse) {
+  .btn,
+  .icon-btn,
+  .tool,
+  .tab,
+  .menu-item,
+  .pick-row {
+    min-height: 44px;
+  }
+
+  .icon-btn,
+  .tool {
+    min-width: 44px;
+  }
+
+  .toast-close {
+    width: 28px;
+    height: 28px;
+  }
+
+  .scene-bar {
+    min-height: 44px;
+  }
+
+  /* The tools sit in a row of their own under a turn, so widening them wraps rather than
+     squeezing the prose. */
+  .turn-tools {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+}
 
 @media (max-width: 560px) {
   .transcript,
@@ -2411,20 +2704,19 @@ ul.md-list {
   background: var(--surface);
   box-shadow: 0 22px 56px -14px rgba(0, 0, 0, 0.66);
   overflow: hidden;
-  /* The header is the drag handle, so the panel must not fight the browser's own gestures. */
-  touch-action: none;
-  /* `1.2` rather than `1` on the second control point: a small overshoot is what reads as
-     a settle rather than a slide, and CSS cannot spring a custom property. */
-  transition:
-    --dock-right 220ms cubic-bezier(0.22, 1.2, 0.36, 1),
-    --dock-bottom 220ms cubic-bezier(0.22, 1.2, 0.36, 1),
-    --dock-height 220ms cubic-bezier(0.22, 1.2, 0.36, 1);
 }
 
-/* No transition while the finger is down: a transition on the live drag values lags the
-   pointer by the duration of the ease, which is the whole feel of the interaction. */
+/* While the finger is down, a drag across the panel's own text must not select it. */
 .consult-dock.is-dragging {
-  transition: none;
+  user-select: none;
+}
+
+/* The drag surfaces, not the whole dock. An ancestor's `touch-action` does not apply to a
+   descendant that sets its own — the transcript inside resolves against its own `auto` — but
+   scoping it here is free and stops the next reader having to work that out. */
+.consult-grab,
+.consult-pane-head {
+  touch-action: none;
 }
 
 /* Anchored to the bottom on a phone, above the commit row so Save stays reachable. The
@@ -2449,7 +2741,10 @@ ul.md-list {
   .consult-grab {
     display: grid;
     place-items: center;
-    height: 22px;
+    /* 28px rather than 22: it is the only affordance for resizing the sheet, and 22 is
+       below WCAG 2.5.8's minimum. The rule lives here rather than in the coarse-pointer
+       block because this is the only breakpoint at which the bar is displayed at all. */
+    height: 28px;
     cursor: ns-resize;
     flex: 0 0 auto;
   }
@@ -2460,7 +2755,7 @@ ul.md-list {
     border-radius: 999px;
     background: var(--line-strong);
     /* The only affordance telling a thumb the sheet can be resized. */
-    transition: background-color 120ms ease;
+    transition: background-color var(--dur-fast) ease;
   }
 
   .consult-grab:active span {
@@ -2686,7 +2981,7 @@ ul.md-list {
 
 .consult-option:not(.primary) .consult-badge {
   background: color-mix(in srgb, var(--ink) 10%, transparent);
-  color: var(--ink-dim);
+  color: var(--ink);
 }
 
 .consult-options {
@@ -2717,7 +3012,7 @@ ul.md-list {
      grows from there. `resize: vertical` from the shared rule would let a drag stretch it
      over the transcript, so the handle is removed here. */
   resize: none;
-  max-height: 40vh;
+  max-height: 40dvh;
   overflow-y: auto;
   field-sizing: content;
 }
@@ -2873,5 +3168,5 @@ ul.md-list {
 }
 
 .consult-standalone .consult-pane {
-  max-height: calc(100vh - 150px);
+  max-height: calc(100dvh - 150px);
 }

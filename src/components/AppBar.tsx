@@ -53,6 +53,7 @@ export function AppBar({
   const [open, setOpen] = useState(false);
   const reduced = useReducedMotion();
   const wrap = useRef<HTMLDivElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const location = useLocation();
 
   // Close on navigation: the menu is a list of places to go, so arriving anywhere means
@@ -84,6 +85,42 @@ export function AppBar({
       document.removeEventListener('pointerdown', onPointerDown);
       document.removeEventListener('keydown', onKey);
     };
+  }, [open]);
+
+  // `role="menu"` is a promise about how the thing is operated, not just what it is called:
+  // focus moves in on open and the arrow keys walk the entries. Declaring the role and
+  // installing only Escape left a keyboard user with a menu they could not reach.
+  useEffect(() => {
+    if (!open) return;
+    const menu = menuRef.current;
+    if (!menu) return;
+
+    const entries = () =>
+      Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"], a[href], button'));
+
+    entries()[0]?.focus();
+
+    function onKey(event: KeyboardEvent) {
+      const items = entries();
+      if (items.length === 0) return;
+      const at = items.indexOf(document.activeElement as HTMLElement);
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        items[at < 0 ? 0 : (at + 1) % items.length].focus();
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        items[at <= 0 ? items.length - 1 : at - 1].focus();
+      } else if (event.key === 'Home') {
+        event.preventDefault();
+        items[0].focus();
+      } else if (event.key === 'End') {
+        event.preventDefault();
+        items[items.length - 1].focus();
+      }
+    }
+
+    menu.addEventListener('keydown', onKey);
+    return () => menu.removeEventListener('keydown', onKey);
   }, [open]);
 
   return (
@@ -120,6 +157,7 @@ export function AppBar({
             <motion.div
               className="menu"
               role="menu"
+              ref={menuRef}
               initial={{ opacity: 0, y: -4, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               // `pointerEvents` rides in the exit variant rather than in a `style` driven
