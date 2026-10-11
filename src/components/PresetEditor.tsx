@@ -412,7 +412,7 @@ function ConfigFlag({
         type="checkbox"
         checked={checked}
         onChange={(event) => onChange(event.target.checked)}
-        className="h-5 w-5 shrink-0 accent-[var(--brass)]"
+        className="h-5 w-5 shrink-0"
       />
       <span className="text-[var(--text-sm)]">{label}</span>
     </label>

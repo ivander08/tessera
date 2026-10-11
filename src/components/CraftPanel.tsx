@@ -73,64 +73,13 @@ const SIDE: Record<keyof Craft, CostSide> = {
 };
 
 /**
- * The panel's sections.
- *
- * The order the two option lists already imply, named. A flat list of 36 controls is a list
- * nobody reads; grouping them by what they are about is what makes the panel usable without
- * moving anything — every control keeps its own row and its own hint.
+ * Every control, in the order the two option lists already had: toggles first, then the
+ * enums. The topic grouping that used to be here is gone — it added five headings and a fold
+ * per topic and read worse than the list it replaced.
  */
-const SECTIONS: Array<{ title: string; keys: string[] }> = [
-  {
-    title: 'Content',
-    keys: ['contentPolicy', 'profanity', 'consequence'],
-  },
-  {
-    title: 'Prose',
-    keys: [
-      'pov',
-      'register',
-      'tense',
-      'responseLength',
-      'density',
-      'rhythm',
-      'figurative',
-      'vocabulary',
-      'showTell',
-      'narrativeDistance',
-    ],
-  },
-  {
-    title: 'Dialogue',
-    keys: ['dialogueFrequency', 'dialogueNaturalism', 'dialogueDepth', 'vocalisation', 'dialects'],
-  },
-  {
-    title: 'Behaviour',
-    keys: [
-      'momentum',
-      'changeResistance',
-      'traitAdherence',
-      'impulseFirst',
-      'subtext',
-      'dialogueState',
-      'interiority',
-      'earnedKnowledge',
-      'independentNpcs',
-      'antiSlop',
-      'antiParrot',
-      'stagnation',
-    ],
-  },
-  {
-    title: 'World',
-    keys: [
-      'livingWorld',
-      'sideCharacters',
-      'nomenclature',
-      'wordplay',
-      'bonds',
-      'threads',
-    ],
-  },
+const ALL_KEYS: string[] = [
+  ...CRAFT_TOGGLES.map((toggle) => String(toggle.key)),
+  ...CRAFT_ENUMS.map((entry) => String(entry.key)),
 ];
 
 /** The two option lists keyed by their own key, so a lookup is a field access. */
@@ -140,12 +89,6 @@ const TOGGLE_BY_KEY: Record<string, (typeof CRAFT_TOGGLES)[number]> = Object.fro
 const ENUM_BY_KEY: Record<string, (typeof CRAFT_ENUMS)[number]> = Object.fromEntries(
   CRAFT_ENUMS.map((entry) => [String(entry.key), entry]),
 );
-
-/** Every control in the panel's own order. */
-const ALL_KEYS = SECTIONS.flatMap((section) => section.keys);
-
-/** The controls that lead, before the long tail folds away. */
-const COMMON: Record<string, true> = { contentPolicy: true, register: true, antiSlop: true };
 
 /** Which side of the cache boundary a key sits on. */
 function sideOf(key: string): CostSide {
@@ -271,7 +214,7 @@ function CraftControls({
     const toggle = TOGGLE_BY_KEY[key];
     if (toggle) {
       return (
-        <label key={key} className="form-row" aria-busy={pendingKey === key}>
+        <label key={key} className="form-row is-toggle" aria-busy={pendingKey === key}>
           <span className="form-label">
             <span>{toggle.label}</span>
             <span className="form-hint">{toggle.description}</span>
@@ -341,34 +284,22 @@ function CraftControls({
         </select>
       </label>
 
-      {/* Two top-level headings, because the cost is genuinely different on each side of
-          the cache boundary and the old single hint claimed every control cost a cache miss.
-          Within each side the controls keep their topic grouping, so the panel reads the
-          same way it did — it just says which side of the boundary you are on first. */}
+      {/* Two headings, because the cost is genuinely different on each side of the cache
+          boundary and the old single hint claimed every control cost a cache miss.
+
+          Flat within each side, deliberately. A first attempt grouped them into five topic
+          sections with the long tail behind `<details>` folds, which read far worse than the
+          list it replaced: five headings with one control visible under each, a fold for the
+          rest, and the topic headings rendering as bare inline labels because `.eyebrow` is
+          an inline class and only `.section > .eyebrow` is styled. A 36-item list is long,
+          but every item is one row and the reader can see what they are choosing between. */}
       <section className="section">
         <span className="eyebrow">Written into the cached prefix</span>
         <p className="form-hint" style={{ marginTop: 0 }}>
           Changing one of these costs one cache miss, once: the prefix is re-billed the first
           time it is sent after a change, then cached again from there.
         </p>
-        {SECTIONS.map((group) => {
-          const keys = group.keys.filter((key) => prefixKeys.includes(key));
-          const leadKeys = keys.filter((key) => COMMON[key]);
-          const restKeys = keys.filter((key) => !COMMON[key]);
-          if (leadKeys.length === 0 && restKeys.length === 0) return null;
-          return (
-            <div key={group.title}>
-              <span className="eyebrow">{group.title}</span>
-              {leadKeys.map(row)}
-              {restKeys.length > 0 && (
-                <details className="md-details" style={{ marginTop: 8 }}>
-                  <summary className="md-summary">More {group.title.toLowerCase()}</summary>
-                  <div className="md-details-body">{restKeys.map(row)}</div>
-                </details>
-              )}
-            </div>
-          );
-        })}
+        {prefixKeys.map(row)}
       </section>
 
       <section className="section">

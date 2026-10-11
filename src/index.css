@@ -2528,10 +2528,14 @@ ul.md-list {
 }
 
 /* A checkbox is the one control the browser paints itself, and left alone it renders in the
-   OS accent — the only colour in the app that comes from outside the theme. `accent-color`
-   is the supported way to bring it in. */
-.form-row input[type="checkbox"] {
+   OS accent — the only colour in the interface that comes from outside the theme. App-wide
+   rather than scoped to the craft panel, so the app has one answer for this control; brass
+   was the other candidate and it is a speaker's colour, not a control's. */
+input[type="checkbox"] {
   accent-color: var(--action);
+}
+
+.form-row input[type="checkbox"] {
   width: 17px;
   height: 17px;
   cursor: pointer;
@@ -2539,6 +2543,22 @@ ul.md-list {
 
 .form-row input[type="checkbox"]:disabled {
   cursor: default;
+}
+
+/* A toggle row: the label and its hint on the left, the switch on the right. `.form-row` is
+   `display: block` because most of its controls are full-width textareas and selects, which
+   is right for those — but a 17px checkbox laid out that way gets a line of its own under
+   every label, which costs a line per toggle across eighteen of them and reads as a stray
+   mark rather than a switch. */
+.form-row.is-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.form-row.is-toggle .form-label {
+  flex: 1;
+  margin-bottom: 0;
 }
 
 .form-label {
@@ -2649,11 +2669,20 @@ ul.md-list {
     min-height: 44px;
   }
 
-  /* The tools sit in a row of their own under a turn, so widening them wraps rather than
-     squeezing the prose. */
-  .turn-tools {
+  /* The tools get their own row rather than wrapping inside the head. At 44px per tool the
+     row needs ~306px, and beside a speaker it only had ~272 — so it wrapped into two rows,
+     which pushed the speaker label down and left a lone trailing glyph on a line of its own
+     (the "×" under the name in the phone layout). On a full-width row it fits in one. */
+  .turn-head {
     flex-wrap: wrap;
-    row-gap: 4px;
+  }
+
+  .turn-tools {
+    flex: 1 1 100%;
+    margin-left: 0;
+    justify-content: flex-end;
+    flex-wrap: nowrap;
+    row-gap: 0;
   }
 }
 
