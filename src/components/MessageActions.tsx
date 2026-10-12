@@ -1,4 +1,6 @@
 import { useState, type ReactNode } from 'react';
+import { copyText } from '../lib/clipboard';
+import { useToast } from './Toast';
 
 /**
  * A turn's actions: swipe, regenerate, copy, edit, delete.
@@ -38,15 +40,18 @@ export function MessageActions({
   busy = false,
 }: TurnActionsProps) {
   const [copied, setCopied] = useState(false);
+  const toast = useToast();
 
   async function copy() {
-    try {
-      await navigator.clipboard.writeText(onCopy());
+    // The whole message, as stored — not the rendered text, which has had `{{user}}` and
+    // markdown resolved into it. What goes on the clipboard is what the model wrote.
+    if (await copyText(onCopy())) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1100);
-    } catch {
-      // Clipboard permission can be refused. The text is still selectable by hand, so
-      // this is not worth surfacing as an error.
+    } else {
+      // Both paths failed. Saying so is the point: the previous silent `catch` made a
+      // button that never worked on a cleartext origin look like a button that did.
+      toast.failure('Could not reach the clipboard. Select the text and copy it by hand.');
     }
   }
 

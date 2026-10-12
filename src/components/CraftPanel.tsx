@@ -14,6 +14,7 @@ import {
   renderCraftBlock,
   renderVocalisation,
 } from '../lib/prompt/craftBlock';
+import { copyText } from '../lib/clipboard';
 import { useToast } from './Toast';
 
 /**
@@ -324,6 +325,7 @@ function CraftControls({
  */
 function CraftPreview({ craft }: { craft: Craft }) {
   const [copied, setCopied] = useState(false);
+  const toast = useToast();
 
   const blocks: Array<{ title: string; side: CostSide; text: string }> = [
     { title: 'Craft block', side: 'prefix', text: renderCraftBlock(craft) },
@@ -337,12 +339,11 @@ function CraftPreview({ craft }: { craft: Craft }) {
     .join('\n\n');
 
   async function copy() {
-    try {
-      await navigator.clipboard.writeText(all);
+    if (await copyText(all)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1100);
-    } catch {
-      // Clipboard permission can be refused; the text is selectable by hand.
+    } else {
+      toast.failure('Could not reach the clipboard. Select the text and copy it by hand.');
     }
   }
 
