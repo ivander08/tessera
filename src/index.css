@@ -2669,30 +2669,39 @@ input[type="checkbox"] {
     min-height: 44px;
   }
 
-  /* The tools share the speaker's line when the two fit together, and take a line of their
-     own when they do not — the head wraps, the tool row itself does not (its own default
-     `nowrap` keeps a wrapped row on one line rather than splitting the trailing glyph onto
-     a line of its own, which is the bug this replaced).
-     
-     Forcing every row onto a full-width line (as the first fix did) cost a whole 27px line
-     on every turn to solve a problem only the widest row has. At 44px per tool the seven-item
-     swipe row needs ~306px against 320px available, so it wraps by itself; copy/edit/delete
-     needs 132px and a four-tool row 176px, and both fit beside a name with room to spare. */
+  /* The head may still wrap, but only when the NAME alone leaves no room — a name that
+     long is rare, and wrapping there beats overlapping the tools. With `basis: 0` below,
+     the row itself never forces the wrap. */
   .turn-head {
     flex-wrap: wrap;
   }
 
-  /* The row must also FIT once it wraps. Six 44px buttons plus the counter are 306px, and
-     the column at a 360px viewport is 290px, so the row ran 16px past the right edge and
-     scrolled the whole page sideways. The tap targets keep their 44px — shrinking them is
-     the one thing this rule must not do — and the space comes from the two things that can
-     spare it: the 2px gaps between buttons, and the counter's reserved `2.6em`, which is
-     wider than the three characters it holds. That is 284px against 290px, which fits. */
+  /* The tools ride the speaker's line rather than dropping to a line of their own. Only
+     the row that carries every control gives up width.
+
+     Six 44px buttons and the counter are 292px, and a 390px phone has ~265px beside a
+     name — so the old "wrap only when it must" rule wrapped exactly the assistant turns,
+     which are the ones whose swipe controls matter most, while the reader's own three
+     controls stayed inline. Copy/edit/delete is 132px and a four-control row 176px, so
+     those keep their full 44px; the widest row on the narrowest screen shrinks towards
+     27px, which is the size the app served everywhere before the touch audit and still
+     above the 24px WCAG 2.5.8 minimum. A touch laptop at 1400px never shrinks at all.
+     `basis: 0` is what keeps the row from ever wrapping on its own width; the head can
+     still wrap if a name alone exceeds the line. */
   .turn-tools {
+    flex: 1 1 0;
+    min-width: 0;
     gap: 0;
+    justify-content: flex-end;
+  }
+
+  .turn-tools .tool {
+    flex: 0 1 44px;
+    min-width: 27px;
   }
 
   .turn-tools .tool-count {
+    flex: 0 0 auto;
     min-width: 0;
     padding: 0 2px;
   }
