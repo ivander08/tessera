@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { ModelInfo } from '../lib/apiTypes';
 import { buildSupportMap, knobSupport } from '../lib/presets/knobSupport';
 
@@ -41,6 +42,21 @@ export function KnobEditor({
   const knobs = parseKnobs(value);
   const supportMap = buildSupportMap(models);
 
+  /**
+   * What the reader has typed, per knob, until the field is left.
+   *
+   * A knob is stored as a number, so rendering `String(Number(raw))` back into the field
+   * rewrites every keystroke through a numeric round trip. That is what made `0.9`
+   * unenterable: after `0.` the parsed value is `0`, and React wrote `"0"` back over the
+   * dot before the `9` could arrive — so the field only ever accepted digits and a leading
+   * minus. The draft is the field's own text; the number is derived from it, so what the
+   * reader typed stays on screen while the stored value tracks it.
+   *
+   * A knob with no draft renders the stored value, so loading a preset still fills the
+   * fields — the draft only exists where the reader is mid-keystroke.
+   */
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+
   function support(key: string): { enabled: boolean; reason: string } {
     if (!provider || !model) {
       return { enabled: false, reason: 'Choose a provider and model first.' };
@@ -50,10 +66,39 @@ export function KnobEditor({
   }
 
   function update(key: string, raw: string) {
+    setDrafts((previous) => ({ ...previous, [key]: raw }));
+
     const next = { ...knobs };
-    if (raw.trim().length === 0) delete next[key];
-    else next[key] = Number(raw);
+    if (raw.trim().length === 0) {
+      // An emptied field is a deliberate clear: the knob goes back to the provider default.
+      delete next[key];
+    } else {
+      const numeric = Number(raw);
+      // Text that is not yet a number — a lone `-` or `.`, or `1e` with no exponent —
+      // leaves the stored value alone rather than deleting it, so a half-typed keystroke
+      // cannot silently discard the setting that was already there. `0.` DOES parse (as
+      // 0), and is committed as such while the reader finishes typing.
+      if (!Number.isFinite(numeric)) return;
+      next[key] = numeric;
+    }
     onChange(JSON.stringify(next));
+  }
+
+  /**
+   * Drops the draft so the field falls back to the committed value.
+   *
+   * A field left holding text that never became a number — `0.` abandoned, or `abc` pasted
+   * in — would otherwise keep showing something that is not stored anywhere, which is the
+   * same "the control and the value disagree" failure the round trip caused. A draft that
+   * DID parse is left in place, because dropping it would re-render `0.5` as `0.50`.
+   */
+  function commit(key: string) {
+    setDrafts((previous) => {
+      const draft = previous[key];
+      if (draft === undefined || Number.isFinite(Number(draft))) return previous;
+      const { [key]: _dropped, ...rest } = previous;
+      return rest;
+    });
   }
 
   const enabledCount = KNOBS.filter((knob) => support(knob.key).enabled).length;
@@ -81,8 +126,9 @@ export function KnobEditor({
               </span>
               <input
                 className="field"
-                value={current === undefined ? '' : String(current)}
+                value={drafts[knob.key] ?? (current === undefined ? '' : String(current))}
                 onChange={(event) => update(knob.key, event.target.value)}
+                onBlur={() => commit(knob.key)}
                 disabled={!enabled}
                 inputMode="decimal"
                 placeholder={enabled ? 'default' : ''}
