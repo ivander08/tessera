@@ -1,6 +1,7 @@
 import { complete, parseJsonReply } from '../cheap';
 import { asRecord } from '../../../src/lib/json';
 import { visiblePathCte } from '../branch';
+import { buildMatchQuery } from './fts';
 import { datedLine, type DatedMessage } from './dates';
 
 /**
@@ -85,8 +86,35 @@ const SYSTEM = [
   '- Reply with the JSON object only. No prose, no explanation, no markdown fence.',
 ].join('\n');
 
-/** How many existing facts are shown to the model. Bounds the prompt and the id space. */
+/**
+ * How many existing facts are shown to the model. Bounds the prompt and the id space.
+ *
+ * The bound is necessary — a chat can accumulate hundreds of facts, and every one shown
+ * costs prompt tokens on every extraction. What was wrong was HOW the bound was chosen:
+ * the first version took the 60 OLDEST rows (`ORDER BY created_at LIMIT 60`), so a chat
+ * past sixty facts could never supersede anything newer. The model was never shown the
+ * fact its transcript contradicted, the contradiction was not reported, and both versions
+ * stayed `active` — so recall could return "the debt is forty crowns" and "the debt is
+ * sixty crowns" in the same block and let the narrator pick.
+ *
+ * Selection is now relevance-first: facts the block's own words match, then the most
+ * recent facts (the ones a scene is most likely to extend or contradict). Old-but-relevant
+ * facts still surface through the match, which is exactly the case the age window lost.
+ */
 const MAX_EXISTING = 60;
+
+/** How many of the block's matching facts are taken before recency fills the rest. */
+const MAX_MATCHED = 40;
+
+/**
+ * How many distinct terms of the block are used to find matching facts.
+ *
+ * The recall path caps at 24 because it is given ONE message and the cap only trims
+ * prose. Extraction is given a whole 20-message block, where 24 terms is often just the
+ * first message — a fact established halfway through the block would then be invisible
+ * to the match that exists to find it.
+ */
+const MAX_MATCH_TERMS = 120;
 
 export interface ExtractionResult {
   added: number;
@@ -99,6 +127,78 @@ interface ExistingFact {
   subject: string | null;
   /** The in-world date, when one is on file. Shown to the model so it can place the fact. */
   at: string | null;
+}
+
+/**
+ * The existing facts the model is shown, and the set it is deduplicated against.
+ *
+ * Two different sets on purpose:
+ *
+ *  - `candidates` is bounded, because it goes into the prompt. Relevance first (the words
+ *    of the block), then recency, so the fact a scene is extending is present even in a
+ *    chat with hundreds of them.
+ *  - `allActive` is every active fact's normalised text, unbounded, because deduplication
+ *    is a comparison against the whole store rather than against what fits on screen.
+ *    Measured on the failure this fixes: past sixty facts the dedup set was the same
+ *    sixty rows, so a restated later fact was inserted again.
+ *
+ * Superseded facts are excluded from both. They are the story's history, not its state,
+ * and re-offering one lets the model re-retire something already retired — which also
+ * makes the numbering it answers with drift.
+ */
+async function loadExistingFacts(
+  env: Env,
+  chatId: string,
+  blockText: string,
+): Promise<{ candidates: ExistingFact[]; allActive: Set<string> }> {
+  const match = buildMatchQuery(blockText, MAX_MATCH_TERMS);
+
+  const [matched, recent, active] = await Promise.all([
+    match.length > 0
+      ? env.DB.prepare(
+          // `bm25` ascending is best-first, the same ordering recall uses. The join back to
+          // `facts` is required: FTS5 stores only a rowid, and the chat filter has to come
+          // from the base table or this matches every chat's facts.
+          `SELECT f.id, f.text, f.subject, f.at
+             FROM facts_fts
+             JOIN facts f ON f.rowid = facts_fts.rowid
+            WHERE facts_fts MATCH ?2 AND f.chat_id = ?1 AND f.status = 'active' AND f.deleted = 0
+            ORDER BY bm25(facts_fts)
+            LIMIT ?3`,
+        )
+          .bind(chatId, match, MAX_MATCHED)
+          .all<ExistingFact>()
+      : Promise.resolve({ results: [] as ExistingFact[] }),
+
+    env.DB.prepare(
+      // Newest first, not oldest. A new scene most often extends or contradicts something
+      // recently established; the oldest facts reach the list through the match above.
+      `SELECT id, text, subject, at FROM facts
+        WHERE chat_id = ? AND status = 'active' AND deleted = 0
+        ORDER BY created_at DESC LIMIT ?`,
+    )
+      .bind(chatId, MAX_EXISTING)
+      .all<ExistingFact>(),
+
+    env.DB.prepare(`SELECT text FROM facts WHERE chat_id = ? AND status = 'active' AND deleted = 0`)
+      .bind(chatId)
+      .all<{ text: string }>(),
+  ]);
+
+  const candidates: ExistingFact[] = [];
+  const seen = new Set<string>();
+  for (const row of [...matched.results, ...recent.results]) {
+    if (candidates.length >= MAX_EXISTING) break;
+    const key = normalise(row.text);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push(row);
+  }
+
+  return {
+    candidates,
+    allActive: new Set(active.results.map((row) => normalise(row.text))),
+  };
 }
 
 /**
@@ -129,17 +229,15 @@ export async function extractFacts(
 
   if (messages.length === 0) return { added: 0, superseded: 0 };
 
-  const { results: existing } = await env.DB.prepare(
-    // `at` is selected because it is shown to the model: a fact already on file as of a
-    // date is one the model can place, and the Memory panel sorts by the same value.
-    `SELECT id, text, subject, at FROM facts
-      WHERE chat_id = ? AND status = 'active'
-      ORDER BY created_at LIMIT ?`,
-  )
-    .bind(chatId, MAX_EXISTING)
-    .all<ExistingFact>();
-
   const transcript = messages.map(datedLine).join('\n\n');
+
+  // Selected against the block's own text, so a fact this scene might contradict is shown
+  // even when it is far older than the newest sixty. See `loadExistingFacts`.
+  const { candidates: existing, allActive } = await loadExistingFacts(
+    env,
+    chatId,
+    messages.map((message) => message.content).join('\n'),
+  );
   // Numbered, not id'd. The model has to name which existing facts a transcript falsifies,
   // and asking it to reproduce a 36-character UUID verbatim was unreliable once the list
   // grew — measured on a real chat, the sixty-crown correction was added while the
@@ -199,7 +297,7 @@ export async function extractFacts(
   // null rather than a reason to drop the row. `at` is copied from a transcript line prefix
   // or null — never invented, and never defaulted to the range's end, because "this fact has
   // no date" and "this fact is true as of the last turn" are different claims.
-  const seen = new Set(existing.map((fact) => normalise(fact.text)));
+  const seen = new Set(allActive);
   const inserts: Array<{
     id: string;
     text: string;
@@ -214,6 +312,15 @@ export async function extractFacts(
     events: 'event',
   };
 
+  // The clock readings that actually exist in the block, normalised. A date is kept only
+  // when it names one of these. The instruction already said "use only dates you read in
+  // the prefixes" and nothing enforced it — the value was copied straight from the reply
+  // into `facts.at`, so a reformatted, guessed or invented date was written to the database
+  // and presented by the Memory panel as the recorded clock.
+  const recordedDates = new Set(
+    messages.map((message) => normaliseDate(message.at)).filter((date): date is string => date !== null),
+  );
+
   for (const [field, kind] of Object.entries(KIND_BY_FIELD)) {
     for (const entry of asArray(record[field])) {
       const item = asRecord(entry);
@@ -225,6 +332,16 @@ export async function extractFacts(
       const key = normalise(text);
       if (seen.has(key)) continue;
       seen.add(key);
+      const claimedAt = typeof item?.at === 'string' && item.at.trim().length > 0
+        ? item.at.trim()
+        : null;
+      // Kept as the model wrote it when it names a real reading, because that is what the
+      // Memory panel shows and the reader can check against the transcript. Dropped to null
+      // when it does not: an undated fact is honest, an invented date is a false claim about
+      // when something became true.
+      const at = claimedAt !== null && recordedDates.has(normaliseDate(claimedAt) ?? '')
+        ? claimedAt
+        : null;
       inserts.push({
         id: crypto.randomUUID(),
         text,
@@ -232,7 +349,7 @@ export async function extractFacts(
           typeof item?.subject === 'string' && item.subject.trim().length > 0
             ? item.subject.trim()
             : null,
-        at: typeof item?.at === 'string' && item.at.trim().length > 0 ? item.at.trim() : null,
+        at,
         kind,
       });
     }
@@ -282,3 +399,39 @@ function asArray(value: unknown): unknown[] {
 function normalise(text: string): string {
   return text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
 }
+
+/**
+ * A clock reading reduced to the numbers that identify the instant, or null.
+ *
+ * Models reformat a date even when told to copy it: the weekday is dropped, the comma
+ * becomes a dash, "05:34" becomes "5:34". Those are the same reading and must match. What
+ * must NOT match is a different instant, so only the numeric fields are compared — day,
+ * month, year, hour, minute — and a reading with no numbers at all (a free-text clock like
+ * "late evening") is not comparable and is therefore not accepted as a match.
+ *
+ * The month is resolved from its name rather than its position, because a model writing
+ * "30 September 2026" and the transcript's "Wednesday, 30 September 2026" agree on the
+ * instant but not on the word order.
+ */
+function normaliseDate(value: string | null): string | null {
+  if (value === null) return null;
+  const text = value.toLowerCase();
+  const month = MONTHS.findIndex((name) => text.includes(name));
+  const day = text.match(/\b(\d{1,2})\b/)?.[1];
+  const year = text.match(/\b(1[89]\d{2}|2\d{3})\b/)?.[1];
+  const time = text.match(/\b(\d{1,2}):(\d{2})\b/);
+  if (month < 0 || day === undefined || year === undefined) return null;
+  return [
+    year,
+    String(month + 1).padStart(2, '0'),
+    day.padStart(2, '0'),
+    time?.[1].padStart(2, '0') ?? '',
+    time?.[2] ?? '',
+  ].join('-');
+}
+
+/** Full and three-letter month names, in calendar order. */
+const MONTHS = [
+  'january', 'february', 'march', 'april', 'may', 'june',
+  'july', 'august', 'september', 'october', 'november', 'december',
+];

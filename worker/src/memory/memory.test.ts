@@ -328,8 +328,44 @@ describe('recall', () => {
     expect(refIds).toContain('fact:f-match');
     expect(refIds).toContain('summary:'.concat(hits.find((h) => h.kind === 'summary')?.refId ?? ''));
     expect(hits.some((hit) => hit.kind === 'summary')).toBe(true);
-    // Summary hits carry score 0 — a LIKE hit is a weaker signal than bm25.
-    expect(hits.find((hit) => hit.kind === 'summary')?.score).toBe(0);
+    // A summary hit is a LIKE match, not a bm25 rank, so it sorts last: score 1 on the
+    // normalised scale. It used to score 0, which put every summary ahead of every bm25 hit
+    // — the same class of bug as comparing raw bm25 across indexes.
+    expect(hits.find((hit) => hit.kind === 'summary')?.score).toBe(1);
+    // And the bm25 sources are ranked within themselves, so the best fact scores 0 even when
+    // a message index produces a much lower raw number.
+    const factHit = hits.find((hit) => hit.kind === 'fact' && hit.refId === 'f-match');
+    expect(factHit?.score).toBe(0);
+  });
+
+  test('a fact is not outranked by messages merely because its index scores lower', async () => {
+    // bm25 is per-index: document count and average length differ, so the same query yields
+    // disjoint score ranges in `messages_fts` and `facts_fts`. Measured on a real chat,
+    // messages scored -12..-17 and facts -4..-9, so sorting the merged list by raw score put
+    // every message ahead of every fact — "Established facts" never rendered, and the
+    // narrator answered from raw transcript instead of the distilled statement.
+    //
+    // This seeds a long chat whose messages are verbose (a big message index) and one short
+    // fact, then asserts the fact still reaches a bounded result list.
+    const { env, db } = makeEnv();
+    const chatId = seedChat(db);
+    for (let index = 0; index < 30; index += 1) {
+      seedMessage(
+        db,
+        chatId,
+        `The lantern room is cold and the register mentions Marisol on the north road, entry ${index}.`,
+      );
+    }
+    exec(
+      db,
+      `INSERT INTO facts (id, chat_id, text, subject, status, pinned, created_at)
+       VALUES ('f-sister', ?, 'The traveller has a sister named Marisol who lives on the north road.', 'Marisol', 'active', 0, ?)`,
+      chatId,
+      Date.now(),
+    );
+
+    const hits = await recall(env, chatId, 'Marisol north road', 8);
+    expect(hits.some((hit) => hit.refId === 'f-sister')).toBe(true);
   });
 
   test('a fact and an event come back with the date they carry, split by kind', async () => {
@@ -403,6 +439,124 @@ describe('recall', () => {
     const summaries = hits.filter((hit) => hit.kind === 'summary');
     expect(summaries).toHaveLength(1);
     expect(summaries[0].text).toContain('100%');
+  });
+
+  test('finds a summary the reader rephrased, rather than requiring a verbatim sentence', async () => {
+    // The defect: `content LIKE '%<whole message>%'`. A summary exists to rephrase, so the
+    // reader's exact sentence never appears in one — the summary source was dead in
+    // practice, and the failure was silent (no error, just no summary hit).
+    const { env, db } = makeEnv();
+    const chatId = seedChat(db);
+    seedScene(
+      db,
+      chatId,
+      1,
+      3,
+      'Odile said no warrant was ever recorded against the lease, and the key was never reported lost.',
+    );
+
+    const hits = await recall(env, chatId, 'Did Odile record a warrant against the lease?', 10);
+    const summaries = hits.filter((hit) => hit.kind === 'summary');
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0].text).toContain('Odile');
+  });
+
+  test('a long message is not truncated to its first clause', async () => {
+    // D1 caps a LIKE pattern at 50 bytes and the old code cut the READER'S MESSAGE to 48,
+    // so the meaningful words at the end of a question were never searched for. Measured on
+    // a real chat: a 66-character question about the register of deeds matched nothing,
+    // while a summary containing both "register" and "deeds" existed.
+    const { env, db } = makeEnv();
+    const chatId = seedChat(db);
+    seedScene(db, chatId, 1, 3, 'The register of deeds is kept by the harbour master.');
+
+    const hits = await recall(
+      env,
+      chatId,
+      'I ask the innkeeper about the register of deeds at the west quay and whether it lists any warrants',
+      10,
+    );
+    expect(hits.filter((hit) => hit.kind === 'summary')).toHaveLength(1);
+  });
+
+  test('pinned facts are bounded, so a large pin set cannot outgrow the block', async () => {
+    // Pinning means "always include", and there is no limit on how many a reader can pin.
+    // Unbounded, the rendered block exceeded its own token budget: facts are trimmed LAST,
+    // so the shrink loop had nothing left to give and the tail carried more recalled text
+    // than the scene. Newest survive, because the recent ones are what the next turn needs.
+    const { env, db } = makeEnv();
+    const chatId = seedChat(db);
+    seedMessage(db, chatId, 'The lantern room is cold.');
+    const base = Date.now();
+    for (let index = 0; index < 30; index += 1) {
+      exec(db,
+        `INSERT INTO facts (id, chat_id, text, status, pinned, created_at)
+         VALUES (?, ?, ?, 'active', 1, ?)`,
+        `p${index}`,
+        chatId,
+        `Pinned fact number ${index}.`,
+        base + index,
+      );
+    }
+
+    const hits = await recall(env, chatId, 'lantern', 8);
+    const pinned = hits.filter((hit) => hit.kind === 'fact');
+    expect(pinned).toHaveLength(20);
+    // The newest twenty, not the oldest: 10-29.
+    expect(pinned[0].text).toBe('Pinned fact number 29.');
+    expect(pinned.some((hit) => hit.text === 'Pinned fact number 0.')).toBe(false);
+  });
+
+  test('a removed fact is not recalled, and comes back when restored', async () => {
+    // The tombstone is only worth anything if every reader honours it. A deleted fact that
+    // still reaches the prompt would make Delete look broken while claiming to work.
+    const { env, db } = makeEnv();
+    const chatId = seedChat(db);
+    seedMessage(db, chatId, 'The brass key opens the sea-gate.');
+    exec(db,
+      `INSERT INTO facts (id, chat_id, text, status, pinned, created_at)
+       VALUES ('f-del', ?, 'The brass key opens the sea-gate.', 'active', 0, ?)`,
+      chatId,
+      Date.now(),
+    );
+
+    expect((await recall(env, chatId, 'brass key', 10)).some((hit) => hit.refId === 'f-del')).toBe(true);
+
+    await mutateMemory(
+      env,
+      new Request('http://x/api/memory/facts/f-del', { method: 'DELETE' }),
+      'facts',
+      'f-del',
+    );
+    expect((await recall(env, chatId, 'brass key', 10)).some((hit) => hit.refId === 'f-del')).toBe(false);
+
+    await mutateMemory(
+      env,
+      new Request('http://x/api/memory/facts/f-del', {
+        method: 'PATCH',
+        body: JSON.stringify({ deleted: false }),
+      }),
+      'facts',
+      'f-del',
+    );
+    expect((await recall(env, chatId, 'brass key', 10)).some((hit) => hit.refId === 'f-del')).toBe(true);
+  });
+
+  test('a removed fact is not offered to extraction, so it cannot come back as a duplicate', async () => {
+    // The extractor's existing list and dedup set are reads too. A removed fact offered to
+    // the model would be re-superseded or re-added, undoing the reader's delete.
+    const { env, db } = makeEnv();
+    const chatId = seedChat(db);
+    seedMessage(db, chatId, 'The debt is forty crowns.');
+    exec(db,
+      `INSERT INTO facts (id, chat_id, text, status, pinned, created_at, deleted)
+       VALUES ('f-gone', ?, 'The debt is forty crowns.', 'active', 0, ?, 1)`,
+      chatId,
+      Date.now(),
+    );
+
+    const hits = await recall(env, chatId, 'debt crowns', 10);
+    expect(hits.some((hit) => hit.refId === 'f-gone')).toBe(false);
   });
 
   test('recall results are returned, never written back into history', async () => {
@@ -1184,7 +1338,10 @@ describe('memory viewer API', () => {
     });
   });
 
-  test('deleting a summary removes it', async () => {
+  test('deleting a summary tombstones it, and it can be restored', async () => {
+    // This was a hard DELETE — the only irreversible action in the panel, and the one thing
+    // the rest of the table is built to avoid (a fact is superseded, never destroyed). A
+    // tombstone keeps the row and the FTS index intact, so restoring needs no rebuild.
     const { env, db } = makeEnv();
     const chatId = seedChat(db);
     seedScene(db, chatId, 1, 5, 'the lantern gutters');
@@ -1197,7 +1354,24 @@ describe('memory viewer API', () => {
       id,
     );
     expect(res.status).toBe(200);
-    expect(one<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM summaries')).toEqual({ n: 0 });
+    expect(one<{ n: number; deleted: number }>(
+      db,
+      'SELECT COUNT(*) AS n, MAX(deleted) AS deleted FROM summaries',
+    )).toEqual({ n: 1, deleted: 1 });
+
+    const restored = await mutateMemory(
+      env,
+      new Request('http://x/api/memory/summaries/x', {
+        method: 'PATCH',
+        body: JSON.stringify({ deleted: false }),
+      }),
+      'summaries',
+      id,
+    );
+    expect(restored.status).toBe(200);
+    expect(one<{ deleted: number }>(db, 'SELECT deleted FROM summaries WHERE id = ?', id)).toEqual({
+      deleted: 0,
+    });
   });
 
   test('a summary edit must be non-empty', async () => {
@@ -1343,10 +1517,46 @@ describe('scheduleMemory', () => {
       expect(call.sql).not.toMatch(/SELECT\s+seq\s+FROM\s+messages\s+WHERE\s+chat_id\s*=\s*\?\s+AND\s+active/);
     }
 
-    // The walk is one query, and it is recursive — not a flat scan of the chat.
-    const walk = calls.find((call) => /WITH RECURSIVE path/.test(call.sql));
-    expect(walk).toBeDefined();
-    // `pathSeqsAfter` is called once, so the whole decision is one bounded query.
-    expect(calls.filter((call) => /WITH RECURSIVE path/.test(call.sql))).toHaveLength(1);
+    // The walk is recursive, not a flat scan of the chat.
+    const walks = calls.filter((call) => /WITH RECURSIVE path/.test(call.sql));
+    expect(walks.length).toBeGreaterThan(0);
+    // Two now, both bounded: one decides how much is already covered (path-scoped, so an
+    // abandoned-branch summary cannot claim the visible transcript), one reads the next
+    // block. Neither scans `messages` flat.
+    expect(walks.length).toBeLessThanOrEqual(2);
+  });
+
+  test('a summary on an abandoned branch does not stall summarization forever', async () => {
+    // The defect: coverage was `MAX(covers_to)` over EVERY summary row. A summary written
+    // before the reader swiped back still carries the highest `covers_to` in the table, so
+    // the scheduler believed the whole visible transcript was covered and enqueued nothing
+    // — permanently. Reproduced with 30 visible messages and one abandoned-branch summary:
+    // zero jobs, and no later turn could ever unblock it.
+    const { env, db } = makeEnv();
+    const chatId = seedChat(db);
+    await putSetting(env, 'provider', 'openrouter');
+    await putSetting(env, 'model', 'test/model');
+    const now = Date.now();
+
+    // A visible path of `SUMMARY_EVERY` messages, all unsummarized.
+    exec(db, `INSERT INTO messages (id, chat_id, parent_id, role, content, active, created_at)
+              VALUES ('root', ?, NULL, 'assistant', 'opening', 1, ?)`, chatId, now);
+    for (let index = 1; index <= SUMMARY_EVERY - 1; index += 1) {
+      exec(db, `INSERT INTO messages (id, chat_id, parent_id, role, content, active, created_at)
+                VALUES (?, ?, ?, 'user', ?, 1, ?)`,
+        `v${index}`, chatId, index === 1 ? 'root' : `v${index - 1}`, `visible ${index}`, now + index);
+    }
+
+    // An abandoned branch with a higher seq, and a summary covering it.
+    exec(db, `INSERT INTO messages (id, chat_id, parent_id, role, content, active, created_at)
+              VALUES ('b1', ?, 'root', 'user', 'abandoned', 0, ?)`, chatId, now + 500);
+    seedScene(db, chatId, 1, 900, 'a scene the reader swiped away from');
+
+    await scheduleMemory(env, chatId);
+
+    const jobs = allOf<{ kind: string; payload: string }>(db, 'SELECT kind, payload FROM jobs');
+    expect(jobs.length).toBe(2);
+    const payload = JSON.parse(jobs[0].payload) as { fromSeq: number; toSeq: number };
+    expect(payload).toEqual({ fromSeq: 1, toSeq: SUMMARY_EVERY });
   });
 });

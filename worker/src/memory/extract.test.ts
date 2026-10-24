@@ -291,6 +291,91 @@ describe('extractFacts', () => {
     const second = await extractFacts(env, 'chat-1', 0, 9999);
     expect(second.superseded).toBe(0);
   });
+
+  /**
+   * A chat past the prompt's fact bound.
+   *
+   * The first version selected `ORDER BY created_at LIMIT 60` — the 60 OLDEST facts — so a
+   * fact recorded after that point was never shown to the model. A transcript that
+   * contradicted it produced no supersession, both versions stayed `active`, and recall
+   * could return them side by side. These two tests are the boundary of that failure.
+   */
+  function seedManyFacts(db: Database, count: number, text: (index: number) => string): void {
+    const base = Date.now();
+    for (let index = 1; index <= count; index += 1) {
+      exec(db,
+        `INSERT INTO facts (id, chat_id, text, subject, status, pinned, created_at)
+         VALUES (?, 'chat-1', ?, NULL, 'active', 0, ?)`,
+        `f${index}`,
+        text(index),
+        base + index,
+      );
+    }
+  }
+
+  /** Captures the prompt the model was sent, and answers with a fixed JSON body. */
+  function captureProvider(reply: string): () => string {
+    let seen = '';
+    globalThis.fetch = (async (_url: unknown, init: { body?: string }) => {
+      seen = String(init?.body ?? '');
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: reply } }], usage: {} }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    }) as unknown as typeof fetch;
+    return () => seen;
+  }
+
+  test('shows the model a matching fact older than the newest sixty', async () => {
+    // 200 facts, and the debt is #100 — outside the OLD window (the 60 oldest, f1-f60) and
+    // outside the new recency window (the 60 newest, f141-f200). Only relevance can surface
+    // it, which is the whole point: a contradiction the block names must reach the model
+    // no matter how old the fact is.
+    const { env, db } = makeEnv();
+    seedManyFacts(db, 200, (index) =>
+      index === 100 ? 'The debt to the innkeeper is forty crowns.' : `Filler fact number ${index}.`,
+    );
+    exec(db,
+      `UPDATE messages SET content = 'I tell the innkeeper the debt is sixty crowns now.' WHERE id = 'm1'`,
+    );
+
+    const seenPrompt = captureProvider(
+      JSON.stringify({
+        facts: [{ text: 'The debt to the innkeeper is sixty crowns.' }],
+        supersede: [{ id: 1 }],
+      }),
+    );
+
+    const result = await extractFacts(env, 'chat-1', 0, 9999);
+    expect(result).toEqual({ added: 1, superseded: 1 });
+
+    expect(seenPrompt()).toContain('The debt to the innkeeper is forty crowns.');
+    expect(db.query("SELECT status FROM facts WHERE id = 'f100'").get()).toEqual({
+      status: 'superseded',
+    });
+  });
+
+  test('deduplicates against every active fact, not just the ones shown', async () => {
+    // 200 facts and a restated one at #100: not matched by the block, and in neither the old
+    // window (f1-f60) nor the new one (f141-f200). Deduplication has to consult the whole
+    // store, or every extraction over that text inserts the sentence again.
+    const { env, db } = makeEnv();
+    seedManyFacts(db, 200, (index) =>
+      index === 100 ? 'Ada keeps her charts in a leather tube.' : `Filler fact number ${index}.`,
+    );
+    exec(db, `UPDATE messages SET content = 'The weather turns cold.' WHERE id = 'm1'`);
+
+    const seenPrompt = captureProvider(
+      JSON.stringify({ facts: [{ text: 'ada keeps her charts in a leather tube' }] }),
+    );
+
+    const result = await extractFacts(env, 'chat-1', 0, 9999);
+    expect(result.added).toBe(0);
+    // The row was outside the prompt window, so the skip came from the full-store check
+    // rather than from the model being told it already exists.
+    expect(seenPrompt()).not.toContain('Ada keeps her charts in a leather tube.');
+    expect(db.query('SELECT COUNT(*) n FROM facts').get()).toEqual({ n: 200 });
+  });
 });
 
 describe('extractFacts — in-world dates', () => {
@@ -369,6 +454,13 @@ describe('extractFacts — in-world dates', () => {
     // rule that governs a fact.
     const { env, db } = makeEnv();
     seedFact(db, 'f1', 'The debt is forty crowns.');
+    // Both readings the reply quotes must exist in the transcript, or they are dropped as
+    // invented — which is the point of the validation added after this test was written.
+    // It previously asserted two dates that appeared in no message.
+    exec(db,
+      `UPDATE messages SET seq = 1, state_json = ? WHERE id = 'm1'`,
+      JSON.stringify({ time: 'Friday, 2 October 2026, 10:00' }),
+    );
 
     stubProvider(
       JSON.stringify({
@@ -388,9 +480,11 @@ describe('extractFacts — in-world dates', () => {
       at: 'Friday, 2 October 2026, 10:00',
       kind: 'fact',
     });
+    // The event's own date was never in the transcript, so it is stored undated rather than
+    // with a claim nobody can verify.
     expect(rows[2]).toEqual({
       text: 'Sydney found out about the affair on 14 April 2026.',
-      at: 'Tuesday, 14 April 2026, 20:00',
+      at: null,
       kind: 'event',
     });
   });
@@ -408,5 +502,58 @@ describe('extractFacts — in-world dates', () => {
     const result = await extractFacts(env, 'chat-1', 0, 9999);
     expect(result.added).toBe(1);
     expect(datedRows(db)).toHaveLength(1);
+  });
+
+  test('a date the transcript never recorded is dropped, not stored', async () => {
+    // The instruction says "use only dates you read in the prefixes", and nothing enforced
+    // it: the value was copied straight from the model's JSON into `facts.at`. A model that
+    // reformats, guesses, or invents a date wrote it to the database, where the Memory panel
+    // presents it as the recorded clock and the timeline sorts by it.
+    //
+    // The transcript here carries exactly ONE reading, and the reply claims a different one.
+    const { env, db } = makeEnv();
+    exec(db,
+      `UPDATE messages SET seq = 1, state_json = ? WHERE id = 'm1'`,
+      JSON.stringify({ time: 'Wednesday, 30 September 2026, 05:34' }),
+    );
+    stubProvider(
+      JSON.stringify({
+        facts: [{ text: 'They met at the docks.', at: 'Tuesday, 14 April 2026, 20:00' }],
+        events: [],
+        supersede: [],
+      }),
+    );
+
+    await extractFacts(env, 'chat-1', 0, 9999);
+    // Stored, but undated: a fact with no date is honest, a fact with an invented one is not.
+    expect(datedRows(db)).toEqual([
+      { text: 'They met at the docks.', at: null, kind: 'fact' },
+    ]);
+  });
+
+  test('a date copied from the transcript is kept even when the model reformats it', async () => {
+    // The converse: normalisation must not throw away a real reading. Models drop the
+    // weekday, change the comma, or use a different separator.
+    const { env, db } = makeEnv();
+    exec(db,
+      `UPDATE messages SET seq = 1, state_json = ? WHERE id = 'm1'`,
+      JSON.stringify({ time: 'Wednesday, 30 September 2026, 05:34' }),
+    );
+    stubProvider(
+      JSON.stringify({
+        facts: [
+          { text: 'They met at the docks.', at: '30 September 2026 05:34' },
+          { text: 'The docks are closed on Sundays.', at: 'Tuesday, 14 April 2026, 20:00' },
+        ],
+        events: [],
+        supersede: [],
+      }),
+    );
+
+    await extractFacts(env, 'chat-1', 0, 9999);
+    const rows = datedRows(db);
+    // The reformatted real reading survives; the invented one does not.
+    expect(rows[0]).toEqual({ text: 'They met at the docks.', at: '30 September 2026 05:34', kind: 'fact' });
+    expect(rows[1].at).toBeNull();
   });
 });

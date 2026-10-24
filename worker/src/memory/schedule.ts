@@ -1,5 +1,5 @@
 import { enqueue, claim, recoverStale, start, finish, type JobRow } from '../jobs';
-import { pathSeqsAfter } from '../branch';
+import { pathSeqsAfter, VISIBLE_PATH_SEQ_CTE } from '../branch';
 import { summarize } from './summarize';
 import { extractFacts } from './extract';
 import { consolidate, SCENES_PER_ARC } from './consolidate';
@@ -42,8 +42,21 @@ export async function scheduleMemory(env: Env, chatId: string): Promise<void> {
     // The range to cover is `covered + 1` onward, so asking for the first `SUMMARY_EVERY`
     // visible messages after the last summary is enough to decide both whether to enqueue
     // and what to enqueue. Nothing beyond that block is read.
+    // Coverage is measured on the VISIBLE PATH, not over every summary row.
+    //
+    // A summary written before the reader swiped back lives on the abandoned branch. Its
+    // `covers_to` is still the highest in the table, so `MAX(covers_to)` reported the whole
+    // visible transcript as covered when none of it had been summarized: measured in a
+    // reproduction with 30 visible messages and one abandoned-branch summary, the
+    // scheduler enqueued NOTHING and the chat's memory stopped growing for good.
+    //
+    // The `EXISTS` is the same test the prompt and recall use to decide a summary is still
+    // describing the story, so the scheduler and the reader agree on what is covered.
     const lastSummary = await env.DB.prepare(
-      'SELECT MAX(covers_to) AS covered FROM summaries WHERE chat_id = ?',
+      `${VISIBLE_PATH_SEQ_CTE}
+       SELECT MAX(summaries.covers_to) AS covered FROM summaries
+        WHERE summaries.chat_id = ?1 AND summaries.deleted = 0
+          AND EXISTS (SELECT 1 FROM path WHERE path.seq = summaries.covers_to)`,
     )
       .bind(chatId)
       .first<{ covered: number | null }>();

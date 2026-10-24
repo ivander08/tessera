@@ -31,6 +31,8 @@ interface SummaryEntry {
   content: string;
   tokens: number | null;
   created_at: number;
+  /** 1 when the reader removed it. Listed so it can be restored. */
+  deleted: number;
 }
 
 interface FactEntry {
@@ -45,6 +47,8 @@ interface FactEntry {
   /** The in-world date, verbatim, or null when none was recorded. */
   at: string | null;
   created_at: number;
+  /** 1 when the reader removed it. Listed so it can be restored. */
+  deleted: number;
 }
 
 interface MemoryPayload {
@@ -201,6 +205,13 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
                         )
                       }
                       onDelete={() => setConfirming({ id: fact.id, kind: 'fact' })}
+                      onRestore={() =>
+                        mutate(
+                          `/api/memory/facts/${fact.id}`,
+                          { method: 'PATCH', body: JSON.stringify({ deleted: false }) },
+                          'Fact restored.',
+                        )
+                      }
                     />
                   ))}
                 </ul>
@@ -249,6 +260,13 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
                         )
                       }
                       onDelete={() => setConfirming({ id: event.id, kind: 'event' })}
+                      onRestore={() =>
+                        mutate(
+                          `/api/memory/facts/${event.id}`,
+                          { method: 'PATCH', body: JSON.stringify({ deleted: false }) },
+                          'Event restored.',
+                        )
+                      }
                     />
                   ))}
                 </ul>
@@ -283,6 +301,13 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
                   onDelete={(entryId) =>
                     setConfirming({ id: entryId, kind: 'summary', tier: 'arc' })
                   }
+                  onRestore={(entryId) =>
+                    mutate(
+                      `/api/memory/summaries/${entryId}`,
+                      { method: 'PATCH', body: JSON.stringify({ deleted: false }) },
+                      'Arc restored.',
+                    )
+                  }
                 />
               )}
             </section>
@@ -314,6 +339,13 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
                   }
                   onDelete={(entryId) =>
                     setConfirming({ id: entryId, kind: 'summary', tier: 'scene' })
+                  }
+                  onRestore={(entryId) =>
+                    mutate(
+                      `/api/memory/summaries/${entryId}`,
+                      { method: 'PATCH', body: JSON.stringify({ deleted: false }) },
+                      'Scene summary restored.',
+                    )
                   }
                 />
               )}
@@ -379,10 +411,10 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
           }
           message={
             confirming.kind === 'fact'
-              ? 'Delete this fact? It is removed from recall permanently.'
+              ? 'Delete this fact? It stops being recalled, and you can restore it here.'
               : confirming.kind === 'event'
-                ? 'Delete this event? It is removed from the record permanently.'
-                : 'Delete this summary? The messages it covers stay in the transcript, but the summary is gone permanently.'
+                ? 'Delete this event? It stops being recalled, and you can restore it here.'
+                : 'Delete this summary? It stops being used, and you can restore it here. The messages it covers stay in the transcript either way.'
           }
           confirmLabel="Delete"
           danger
@@ -448,6 +480,7 @@ function FactRow({
   onTogglePin,
   onToggleStatus,
   onDelete,
+  onRestore,
 }: {
   fact: FactEntry;
   bordered: boolean;
@@ -457,6 +490,8 @@ function FactRow({
   onTogglePin?: () => void;
   onToggleStatus?: () => void;
   onDelete: () => void;
+  /** Undoes a delete. Present because DELETE is a tombstone, not a removal. */
+  onRestore: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(fact.text);
@@ -467,6 +502,7 @@ function FactRow({
   const superseded = fact.status === 'superseded';
   const pinned = fact.pinned === 1;
   const isEvent = fact.kind === 'event';
+  const removed = fact.deleted === 1;
 
   // Focus goes back to the control that opened the box. The button unmounts while the
   // textarea is up, so this cannot be done from the click handler — the node does not
@@ -478,7 +514,7 @@ function FactRow({
 
   return (
     <li
-      className={`p-4 ${bordered ? 'border-t border-line' : ''}${superseded ? ' is-superseded' : ''}`}
+      className={`p-4 ${bordered ? 'border-t border-line' : ''}${superseded || removed ? ' is-superseded' : ''}`}
     >
       {editing ? (
         <div className="space-y-3">
@@ -518,7 +554,7 @@ function FactRow({
         </div>
       ) : (
         <>
-          {(pinned || superseded) && (
+          {(pinned || superseded || removed) && (
             <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: 8 }}>
               {pinned && (
                 <span className="tag accent" title="Recalled into every prompt">
@@ -526,6 +562,11 @@ function FactRow({
                 </span>
               )}
               {superseded && <span className="tag">superseded</span>}
+              {removed && (
+                <span className="tag" title="Not recalled until restored">
+                  removed
+                </span>
+              )}
             </div>
           )}
 
@@ -620,9 +661,15 @@ function FactRow({
                 </button>
               </>
             )}
-            <button type="button" className="btn quiet danger" onClick={onDelete}>
-              Delete
-            </button>
+            {removed ? (
+              <button type="button" className="btn quiet" onClick={onRestore}>
+                Restore
+              </button>
+            ) : (
+              <button type="button" className="btn quiet danger" onClick={onDelete}>
+                Delete
+              </button>
+            )}
           </RowActions>
         </>
       )}
@@ -634,10 +681,12 @@ function SummaryList({
   entries,
   onSave,
   onDelete,
+  onRestore,
 }: {
   entries: SummaryEntry[];
   onSave: (id: string, content: string) => void;
   onDelete: (id: string) => void;
+  onRestore: (id: string) => void;
 }) {
   return (
     <ul className="panel">
@@ -648,6 +697,7 @@ function SummaryList({
           bordered={index > 0}
           onSave={(content) => onSave(entry.id, content)}
           onDelete={() => onDelete(entry.id)}
+          onRestore={() => onRestore(entry.id)}
         />
       ))}
     </ul>
@@ -659,17 +709,22 @@ function SummaryRow({
   bordered,
   onSave,
   onDelete,
+  onRestore,
 }: {
   entry: SummaryEntry;
   bordered: boolean;
   onSave: (content: string) => void;
   onDelete: () => void;
+  onRestore: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(entry.content);
+  const removed = entry.deleted === 1;
 
   return (
-    <li className={`p-4 ${bordered ? 'border-t border-line' : ''}`}>
+    <li
+      className={`p-4 ${bordered ? 'border-t border-line' : ''}${removed ? ' is-superseded' : ''}`}
+    >
       {editing ? (
         <div className="space-y-3">
           <textarea
@@ -729,9 +784,15 @@ function SummaryRow({
             <button type="button" className="btn quiet" onClick={() => setEditing(true)}>
               Edit
             </button>
-            <button type="button" className="btn quiet danger" onClick={onDelete}>
-              Delete
-            </button>
+            {removed ? (
+              <button type="button" className="btn quiet" onClick={onRestore}>
+                Restore
+              </button>
+            ) : (
+              <button type="button" className="btn quiet danger" onClick={onDelete}>
+                Delete
+              </button>
+            )}
           </RowActions>
         </>
       )}

@@ -42,21 +42,45 @@ export function escapeFtsToken(token: string): string {
  * and they inflate the expression. A query that is ALL stopwords keeps them — an empty
  * MATCH is a syntax error, and `''` tells the caller to skip recall entirely.
  */
-export function buildMatchQuery(userText: string): string {
+export function buildMatchQuery(userText: string, maxTerms: number = MAX_TERMS): string {
+  return matchTerms(userText, maxTerms).map(escapeFtsToken).join(' OR ');
+}
+
+/**
+ * The terms a query is matched by, before quoting.
+ *
+ * Shared rather than re-derived, because the summary source matches with LIKE instead of
+ * FTS and must agree with the other two about what the query means. Two tokenizers would
+ * drift, and the drift would be invisible: one source would find a row the others could
+ * not.
+ */
+export function matchTerms(userText: string, maxTerms: number = MAX_TERMS): string[] {
   const tokens = userText
     .split(/\s+/)
     .map((token) => token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ''))
     .filter((token) => token.length > 0);
 
-  if (tokens.length === 0) return '';
+  if (tokens.length === 0) return [];
 
   const meaningful = tokens.filter((token) => !STOPWORDS.has(token.toLowerCase()));
   const used = meaningful.length > 0 ? meaningful : tokens;
 
   // A long message is mostly prose; the cap keeps the expression bounded and the terms
   // that carry meaning tend to be the less common ones anyway.
-  const capped = used.slice(0, MAX_TERMS);
-  return capped.map(escapeFtsToken).join(' OR ');
+  //
+  // Deduplicated, because the caller can pass a whole multi-message block: a scene that
+  // says "the innkeeper" on every line would otherwise spend the entire term budget on
+  // one word and the rest of the block would contribute nothing.
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const token of used) {
+    const key = token.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(token);
+    if (unique.length >= maxTerms) break;
+  }
+  return unique;
 }
 
 /**

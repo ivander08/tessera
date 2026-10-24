@@ -1,4 +1,4 @@
-import { buildMatchQuery } from './fts';
+import { buildMatchQuery, matchTerms } from './fts';
 import { VISIBLE_PATH_SEQ_CTE } from '../branch';
 import { factIsTrueSql } from './facts';
 import { summaryDateSpan } from '../../../src/lib/prompt/memoryBlock';
@@ -32,6 +32,16 @@ interface PinnedRow {
 }
 
 /**
+ * How many pinned facts are injected regardless of the query.
+ *
+ * A bound exists because pinning has no natural limit and the block budget trims facts
+ * last, so an unbounded pin set produced a block that could not be shrunk to fit. Twenty is
+ * generous for "things the narrator must not forget" and small enough to leave the rest of
+ * the tail for the scene.
+ */
+const MAX_PINNED = 20;
+
+/**
  * Full-text recall over a chat's own history.
  *
  * Results are RETURNED, never applied. The caller renders them into the prompt TAIL.
@@ -47,7 +57,7 @@ interface PinnedRow {
  *                      small is noise anyway.
  *
  * Pinned facts lead the result unconditionally: that is what pinning means. `limit`
- * bounds only the ranked matches.
+ * bounds only the ranked matches, and `MAX_PINNED` bounds the pins themselves.
  *
  * `beforeSeq` bounds the two SOURCED sources — message hits and summary hits — to the part
  * of the story that already happened at that point. A regenerate re-rolls an earlier turn,
@@ -71,6 +81,13 @@ export async function recall(
   // `MATCH ''` is an fts5 syntax error, not an empty result. An empty query also has
   // nothing to rank against, so pinned facts are not returned either.
   if (match.length === 0 || limit <= 0) return [];
+
+  // The summary read cannot use FTS — `summaries` has no index and does not need one for a
+  // handful of rows — so it gets the same terms as LIKE patterns instead. They come from
+  // the same tokenizer the other two sources use, so all three agree on what the query
+  // means.
+  const terms = matchTerms(query).map(likeTerm);
+  const termCount = terms.length;
 
   const [messages, facts, summaries, pinned] = await Promise.all([
     env.DB.prepare(
@@ -115,7 +132,7 @@ export async function recall(
               f.text AS text, f.id AS ref_id, f.at AS at, f.kind AS kind
          FROM facts_fts
          JOIN facts f ON f.rowid = facts_fts.rowid
-        WHERE facts_fts MATCH ?2 AND f.chat_id = ?1
+        WHERE facts_fts MATCH ?2 AND f.chat_id = ?1 AND f.deleted = 0
           AND ${factIsTrueSql('f', '?4')}
         ORDER BY score
         LIMIT ?3`,
@@ -130,33 +147,57 @@ export async function recall(
       // The date span is read from the row rather than from the prose: it is the clock
       // reading that was actually recorded for the covered range, so it stays right even
       // when the summariser omits a date from its text.
+      //
+      // Matching is per TERM, ORed, not `content LIKE '%<whole message>%'`. The verbatim
+      // version asked for the reader's entire sentence to appear inside a summary — which
+      // a summary by construction never contains, since its whole job is to rephrase. It
+      // also silently truncated at 48 bytes (D1's LIKE cap), so a long message searched
+      // for its first clause and nothing else. Measured on a real chat: a message about the
+      // register of deeds and key 417 matched no summary, while a summary containing both
+      // words existed. `likePatterns` returns one bound parameter per term.
       `${VISIBLE_PATH_SEQ_CTE}
        SELECT id AS ref_id, content AS text, covers_to, covers_date_from, covers_date_to
          FROM summaries
-        WHERE chat_id = ?1 AND content LIKE ?2 ESCAPE '\\'
-          AND (?4 IS NULL OR covers_to < ?4)
+        WHERE chat_id = ?1 AND deleted = 0 AND (${summaryTermClauses(termCount)})
+          AND (?${termCount + 2} IS NULL OR covers_to < ?${termCount + 2})
           AND EXISTS (SELECT 1 FROM path WHERE path.seq = summaries.covers_to)
         ORDER BY covers_to DESC
-        LIMIT ?3`,
+        LIMIT ?${termCount + 3}`,
     )
-      .bind(chatId, likePattern(query), limit, beforeSeq)
+      .bind(chatId, ...terms, beforeSeq, limit)
       .all<SummaryFtsRow>(),
 
     env.DB.prepare(
       // Pinning overrides RANKING, never status or provenance: a pinned fact that has since
       // been superseded is still superseded, and a pinned fact recorded at turn 5 is still
       // not true at turn 4.
+      //
+      // Bounded, because "pinned" means "always include" and there is no upper limit on how
+      // many a reader can pin. Unbounded, a large pin set made the rendered block exceed its
+      // own token budget: facts are trimmed LAST (see `renderMemoryBlock`), so the loop that
+      // shrinks the block had nothing left to give and returned an oversized tail — recalled
+      // memory crowding out the scene it was supposed to help write. Newest first, so the
+      // most recent intentions survive the cap.
       `${VISIBLE_PATH_SEQ_CTE}
        SELECT id, text, at, kind FROM facts
-        WHERE chat_id = ?1 AND pinned = 1
+        WHERE chat_id = ?1 AND pinned = 1 AND deleted = 0
           AND ${factIsTrueSql('facts', '?2')}
-        ORDER BY created_at`,
+        ORDER BY created_at DESC
+        LIMIT ?3`,
     )
-      .bind(chatId, beforeSeq)
+      .bind(chatId, beforeSeq, MAX_PINNED)
       .all<PinnedRow>(),
   ]);
 
-  const matched: RecallHit[] = [
+  // bm25 is NOT comparable across tables: it is computed over the rows of one index, with
+  // that index's own document count and average length. Measured on a real chat, the same
+  // query scored messages -12 to -17 and facts -4 to -9, so sorting the merged list by raw
+  // score put every message ahead of every fact — the "Established facts" section could
+  // never render, and the narrator answered from raw transcript instead of the distilled
+  // statement the subsystem exists to provide. `rankScores` maps each source's own ordering
+  // onto a shared scale, so the merge compares rank within a source rather than a number
+  // that only means something inside one index.
+  const matched: RecallHit[] = rankScores([
     ...messages.results.map((row) => ({
       kind: 'message' as const,
       refId: row.ref_id,
@@ -183,7 +224,7 @@ export async function recall(
       score: 0,
       at: summaryDateSpan(row.covers_date_from, row.covers_date_to),
     })),
-  ].sort((a, b) => a.score - b.score);
+  ]);
 
   const seen = new Set<string>();
   const out: RecallHit[] = [];
@@ -207,20 +248,84 @@ export async function recall(
 }
 
 /**
- * D1 caps a LIKE/GLOB pattern at 50 bytes. Escape the wildcards so a query containing
- * `%` or `_` matches literally, then truncate to fit the cap without splitting a
- * multi-byte character.
+ * Merge hits from several bm25 indexes onto one comparable scale, best-first.
+ *
+ * Each source arrives already sorted best-first by its own `bm25`, and those numbers are
+ * only meaningful inside the index that produced them: document count and average document
+ * length are per-index, so a fact index and a message index produce disjoint score ranges
+ * for the same query. Sorting a merged list by the raw numbers is therefore not a ranking,
+ * it is a comparison of units — measured on a real chat, messages scored -12..-17 and facts
+ * -4..-9 for the same query, so facts sorted behind every message and never reached the
+ * prompt.
+ *
+ * Normalising by RANK WITHIN the source is what makes the merge honest. A hit that is the
+ * best match in its own source scores the same as the best match in any other, so the
+ * strongest fact competes with the strongest message rather than losing to a mediocre one.
+ * A source that returned nothing contributes nothing, and a single-hit source is not
+ * unfairly promoted: with one hit, rank 0 of 1 is still the best available.
+ *
+ * Summaries are the exception and are handled by the caller: a LIKE match is not a bm25
+ * rank at all, so it is pinned to the worst score and sorts last regardless.
  */
-function likePattern(query: string): string {
-  const escaped = query.trim().replace(/[\\%_]/g, (char) => `\\${char}`);
+function rankScores(hits: RecallHit[]): RecallHit[] {
+  const bySource = new Map<string, RecallHit[]>();
+  for (const hit of hits) {
+    const list = bySource.get(hit.kind);
+    if (list) list.push(hit);
+    else bySource.set(hit.kind, [hit]);
+  }
+
+  const ranked: RecallHit[] = [];
+  for (const [kind, list] of bySource) {
+    // Already best-first from SQL; sorted here so the contract does not depend on it.
+    const ordered = [...list].sort((a, b) => a.score - b.score);
+    ordered.forEach((hit, index) => {
+      // 0 for the best, approaching 1 for the worst — the same direction as bm25, where a
+      // lower number is a better match.
+      ranked.push({
+        ...hit,
+        score: kind === 'summary' ? 1 : ordered.length > 1 ? index / (ordered.length - 1) : 0,
+      });
+    });
+  }
+  return ranked.sort((a, b) => a.score - b.score);
+}
+
+/**
+ * One LIKE pattern for one term.
+ *
+ * D1 caps a LIKE/GLOB pattern at 50 bytes, so the wildcards and escapes are counted and
+ * the term is truncated to fit without splitting a multi-byte character. A term is a word,
+ * so this only bites on pathological input — the previous version truncated the READER'S
+ * WHOLE MESSAGE to 48 bytes, which is why a long question searched for its first clause
+ * and silently found nothing.
+ */
+function likeTerm(term: string): string {
+  const escaped = term.replace(/[\\%_]/g, (char) => `\\${char}`);
   const encoder = new TextEncoder();
-  let bytes = 0;
+  let bytes = 2; // the two `%` wildcards
   let out = '';
-  for (const char of `%${escaped}%`) {
+  for (const char of escaped) {
     const size = encoder.encode(char).length;
     if (bytes + size > 48) break;
     bytes += size;
     out += char;
   }
-  return out;
+  return `%${out}%`;
+}
+
+/**
+ * `(?n LIKE ?n AND ?n LIKE ?n …)` for `count` terms, ORed.
+ *
+ * Built rather than written because the number of terms varies with the query. Each term
+ * is one bound parameter, so the caller binds chat id, then the terms, then the remaining
+ * arguments — see the numbering in the summary query.
+ */
+function summaryTermClauses(count: number): string {
+  const clauses: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    // `?1` is the chat id, so the patterns start at `?2`.
+    clauses.push(`content LIKE ?${index + 2} ESCAPE '\\'`);
+  }
+  return clauses.join(' OR ');
 }

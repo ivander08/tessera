@@ -29,6 +29,8 @@ interface SummaryRow {
   content: string;
   tokens: number | null;
   created_at: number;
+  /** 1 when the reader removed it. Listed so it can be restored. */
+  deleted: number;
 }
 
 interface FactRow {
@@ -44,6 +46,8 @@ interface FactRow {
   learned_at_seq: number;
   superseded_at_seq: number;
   created_at: number;
+  /** 1 when the reader removed it. Listed so it can be restored. */
+  deleted: number;
 }
 
 export async function listMemory(env: Env, chatId: string): Promise<Response> {
@@ -55,7 +59,9 @@ export async function listMemory(env: Env, chatId: string): Promise<Response> {
   const [summaries, facts, lastUser] = await Promise.all([
     // Newest coverage first: the arc/scene you just made is the one you want to read.
     env.DB.prepare(
-      `SELECT id, tier, covers_from, covers_to, covers_date_from, covers_date_to, content, tokens, created_at
+      // `deleted` rides back on the row rather than filtering it out: the panel lists a
+      // removed memory so it can be restored, which is what makes the delete reversible.
+      `SELECT id, tier, covers_from, covers_to, covers_date_from, covers_date_to, content, tokens, created_at, deleted
          FROM summaries WHERE chat_id = ? ORDER BY covers_from DESC`,
     )
       .bind(chatId)
@@ -66,7 +72,7 @@ export async function listMemory(env: Env, chatId: string): Promise<Response> {
       // that reported "superseded" for it would contradict the prompt it is explaining.
       `${VISIBLE_PATH_SEQ_CTE}
        SELECT id, text, subject, ${factStatusSql('facts')} AS status, superseded_by,
-              pinned, kind, at, learned_at_seq, superseded_at_seq, created_at
+              pinned, kind, at, learned_at_seq, superseded_at_seq, created_at, deleted
          FROM facts WHERE chat_id = ?1 ORDER BY pinned DESC, created_at`,
     )
       .bind(chatId)
@@ -239,15 +245,26 @@ export async function mutateMemory(
   if (kind !== 'facts' && kind !== 'summaries') return notFound();
 
   if (req.method === 'DELETE') {
-    // The FTS delete trigger keeps the index in step, so no manual unindexing here.
-    await env.DB.prepare(`DELETE FROM ${kind} WHERE id = ?`).bind(id).run();
+    // A tombstone, not a DELETE. This was the only irreversible action in the panel — no
+    // undo, and no record the memory had ever existed — while the rest of the table is
+    // built on supersession precisely so that history stays auditable. A hard DELETE also
+    // fires the FTS delete trigger and drops the text out of the index, so restoring would
+    // need a rebuild; `deleted = 0` keeps the index row intact.
+    await env.DB.prepare(`UPDATE ${kind} SET deleted = 1 WHERE id = ?`).bind(id).run();
     return json({ ok: true });
   }
 
   if (req.method !== 'PATCH') return notFound();
 
   if (kind === 'summaries') {
-    const body = await readJson<{ content?: string }>(req);
+    const body = await readJson<{ content?: string; deleted?: boolean }>(req);
+    // Restore is its own flag, separate from the text, so a tombstoned summary can be
+    // brought back without re-typing it. The panel offers Restore on a removed row for the
+    // same reason it offers it on a superseded one.
+    if (body?.deleted === false) {
+      await env.DB.prepare('UPDATE summaries SET deleted = 0 WHERE id = ?').bind(id).run();
+      return json({ ok: true });
+    }
     if (typeof body?.content !== 'string' || body.content.trim().length === 0) {
       return badRequest('content required');
     }
@@ -262,10 +279,17 @@ export async function mutateMemory(
     subject?: string | null;
     pinned?: boolean;
     status?: string;
+    /** false restores a removed fact; there is no true, because DELETE is the removal. */
+    deleted?: boolean;
     /** The in-world date, or null to clear it. */
     at?: string | null;
   }>(req);
   if (!body) return badRequest('invalid body');
+
+  if (body.deleted === false) {
+    await env.DB.prepare('UPDATE facts SET deleted = 0 WHERE id = ?').bind(id).run();
+    return json({ ok: true });
+  }
 
   const sets: string[] = [];
   const values: Array<string | number | null> = [];

@@ -253,7 +253,14 @@ export async function buildPrompt(
   // Both blocks go in the TAIL. Recalled content and world state change as the scene
   // moves; putting either in the head would rewrite the cached prefix every turn.
   const [memoryBlock, stateBlock] = await Promise.all([
-    buildMemoryBlock(env, chat.id, recallQuery, calibration, options.statePoint.seq),
+    buildMemoryBlock(
+      env,
+      chat.id,
+      recallQuery,
+      calibration,
+      settings.contextBudget,
+      options.statePoint.seq,
+    ),
     buildStateBlock(env, chat.id, calibration, options.statePoint, {
       bonds: setup.craft.bonds,
       threads: setup.craft.threads,
@@ -463,8 +470,27 @@ function headMessages(
   return out;
 }
 
-/** Tokens reserved for the memory block, taken out of the history budget. */
-const MEMORY_BLOCK_TOKENS = 800;
+/**
+ * Tokens reserved for the memory block, taken out of the history budget.
+ *
+ * A SHARE of the window rather than a constant. 800 is the researched figure for a 128k
+ * context (`docs/research/05-memory.md` §(e): rolling summary + retrieved memories are
+ * ~5-10%, and the allocation grows with chat length "rather than staying fixed at 200"),
+ * and a fixed 800 gave a 200k model the same memory as an 8k one — the long-chat case the
+ * whole subsystem exists for. The share is clamped at both ends: the floor keeps a small
+ * window from starving memory entirely, the ceiling keeps a huge one from handing the
+ * narrator more recalled text than it can use coherently, which the same research warns
+ * about ("adding tokens is not free even when they fit").
+ */
+const MEMORY_BLOCK_SHARE = 0.06;
+const MEMORY_BLOCK_MIN = 400;
+const MEMORY_BLOCK_MAX = 4000;
+
+function memoryBlockTokens(contextBudget: number): number {
+  return Math.round(
+    Math.min(MEMORY_BLOCK_MAX, Math.max(MEMORY_BLOCK_MIN, contextBudget * MEMORY_BLOCK_SHARE)),
+  );
+}
 
 /**
  * How many history rows a bounded walk should read for this budget.
@@ -580,6 +606,7 @@ async function buildMemoryBlock(
   chatId: string,
   query: string,
   calibration: number,
+  contextBudget: number,
   beforeSeq: number | null,
 ): Promise<string> {
   try {
@@ -598,12 +625,37 @@ async function buildMemoryBlock(
         // Without this they keep being injected, describing a scene the reader removed.
         // `covers_to` is tested against the path rather than merely against `?2` because a
         // deleted turn's rows are still in the table with their old seqs.
+        //
+        // THREE, not `LIMIT 3` over every row. Taking the newest three by `covers_to` made
+        // an ARC unreachable the moment three newer scenes existed — and an arc is the only
+        // surviving record of the scenes it folded, because folding does not delete them
+        // but the prompt never reads anything but the newest rows. Measured on a real chat:
+        // 27 scenes plus one arc covering 1913-2112, and the block carried scenes 2767-2826
+        // — so ~2,000 messages of story were in the database and in no prompt. An arc that
+        // is still the newest thing covering its range is the compressed form of it, so the
+        // two tiers are read separately and both fit in the block.
         `${VISIBLE_PATH_SEQ_CTE}
-         SELECT id, content, covers_date_from, covers_date_to FROM summaries
-          WHERE chat_id = ?1
-            AND (?2 IS NULL OR covers_to < ?2)
-            AND EXISTS (SELECT 1 FROM path WHERE path.seq = summaries.covers_to)
-          ORDER BY covers_to DESC LIMIT 3`,
+         SELECT id, tier, content, covers_date_from, covers_date_to FROM (
+           SELECT id, tier, content, covers_date_from, covers_date_to, covers_to
+             FROM summaries
+            WHERE chat_id = ?1
+              AND (?2 IS NULL OR covers_to < ?2)
+              AND EXISTS (SELECT 1 FROM path WHERE path.seq = summaries.covers_to)
+              AND summaries.deleted = 0
+              AND tier = 'scene'
+            ORDER BY covers_to DESC LIMIT 3
+         )
+         UNION ALL
+         SELECT id, tier, content, covers_date_from, covers_date_to FROM (
+           SELECT id, tier, content, covers_date_from, covers_date_to, covers_to
+             FROM summaries
+            WHERE chat_id = ?1
+              AND (?2 IS NULL OR covers_to < ?2)
+              AND EXISTS (SELECT 1 FROM path WHERE path.seq = summaries.covers_to)
+              AND summaries.deleted = 0
+              AND tier = 'arc'
+            ORDER BY covers_to DESC LIMIT 2
+         )`,
       )
         .bind(chatId, beforeSeq)
         .all<{
@@ -628,7 +680,7 @@ async function buildMemoryBlock(
         // Anything that is neither a fact nor an event is raw recalled transcript.
         recalled: hits.filter((hit) => hit.kind !== 'fact' && hit.kind !== 'event'),
       },
-      Math.round(MEMORY_BLOCK_TOKENS * calibration),
+      Math.round(memoryBlockTokens(contextBudget) * calibration),
       estimateTokens,
     );
   } catch (error) {

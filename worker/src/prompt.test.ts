@@ -577,6 +577,130 @@ describe('the craft block reaches the prompt', () => {
   });
 });
 
+describe('an arc reaches the prompt even when newer scenes exist', () => {
+  const options = {
+    mode: 'send' as const,
+    historyCutoff: null,
+    statePoint: { seq: null, inclusive: true },
+    userContent: 'hello',
+    tailExtra: '',
+  };
+
+  function seedSummary(
+    db: Database,
+    id: string,
+    tier: 'scene' | 'arc',
+    from: number,
+    to: number,
+    content: string,
+  ): void {
+    exec(
+      db,
+      `INSERT INTO summaries (id, chat_id, tier, covers_from, covers_to, content, tokens, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 10, ?)`,
+      id,
+      CHAT_ID,
+      tier,
+      from,
+      to,
+      content,
+      Date.now(),
+    );
+  }
+
+  test('the arc covering the oldest scenes is still read', async () => {
+    // The defect: the summary read was `ORDER BY covers_to DESC LIMIT 3` over both tiers,
+    // so an arc was pushed out the moment three newer scenes existed — and an arc is the
+    // only surviving account of the range it folded. Measured on a real chat: 27 scenes and
+    // one arc covering 1913-2112, with the prompt carrying scenes 2767-2826 and nothing
+    // older. Roughly 2,000 messages were in the database and in no prompt.
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    const seqs = seedChain(db, 12);
+
+    seedSummary(db, 'arc-1', 'arc', seqs[0], seqs[3], 'An arc from the beginning of the story.');
+    for (let index = 0; index < 4; index += 1) {
+      seedSummary(
+        db,
+        `scene-${index}`,
+        'scene',
+        seqs[4 + index * 2],
+        seqs[5 + index * 2],
+        `A recent scene, number ${index}.`,
+      );
+    }
+
+    const prompt = await buildPrompt(env, chat, settings(8000), options);
+    const tail = prompt.messages.slice(prompt.tailStart).map((message) => message.content).join('\n');
+    expect(tail).toContain('An arc from the beginning of the story.');
+    // And the newest scenes are still there: reading the arc must not displace them.
+    expect(tail).toContain('A recent scene, number 3.');
+  });
+});
+
+describe('the memory block scales with the context window', () => {
+  const options = {
+    mode: 'send' as const,
+    historyCutoff: null,
+    statePoint: { seq: null, inclusive: true },
+    userContent: 'hello',
+    tailExtra: '',
+  };
+
+  /** A chat whose newest scenes are long enough to exceed a small block budget. */
+  function seedLongScenes(db: Database, seqs: number[]): void {
+    for (let index = 0; index < 3; index += 1) {
+      exec(
+        db,
+        `INSERT INTO summaries (id, chat_id, tier, covers_from, covers_to, content, tokens, created_at)
+         VALUES (?, ?, 'scene', ?, ?, ?, 10, ?)`,
+        `scene-${index}`,
+        CHAT_ID,
+        seqs[index * 2],
+        seqs[index * 2 + 1],
+        `Scene ${index}: ${'the lantern room is cold and the ledger is open. '.repeat(30)}`,
+        Date.now(),
+      );
+    }
+  }
+
+  function memoryLength(prompt: { messages: Array<{ role: string; content: string }>; tailStart: number }) {
+    return prompt.messages
+      .slice(prompt.tailStart)
+      .filter((message) => message.content.includes('Story so far'))
+      .reduce((total, message) => total + message.content.length, 0);
+  }
+
+  test('a large window gets a larger memory block than a small one', async () => {
+    // The defect: `MEMORY_BLOCK_TOKENS = 800` for every model. A 200k-context model got the
+    // same recalled memory as an 8k one, so the long chats this subsystem exists for were
+    // served the same handful of lines. The research argues for a SHARE of the window that
+    // grows with the chat.
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    const seqs = seedChain(db, 12);
+    seedLongScenes(db, seqs);
+
+    const small = await buildPrompt(env, chat, settings(8000), options);
+    const large = await buildPrompt(env, chat, settings(200000), options);
+
+    expect(memoryLength(large)).toBeGreaterThan(memoryLength(small));
+  });
+
+  test('a huge window is still capped, so recalled text cannot crowd out the scene', async () => {
+    // The other half: more room is not free. The cap keeps a 1M-token window from turning
+    // the tail into a memory dump.
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    const seqs = seedChain(db, 12);
+    seedLongScenes(db, seqs);
+
+    const huge = await buildPrompt(env, chat, settings(1_000_000), options);
+    const large = await buildPrompt(env, chat, settings(200000), options);
+    expect(memoryLength(huge)).toBe(memoryLength(large));
+  });
+});
+
 /**
  * The world state a turn is written against.
  *

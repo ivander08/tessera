@@ -57,7 +57,7 @@ const SYSTEM = [
 export async function consolidate(env: Env, chatId: string): Promise<ConsolidateResult | null> {
   // Everything at or below the newest arc's `covers_to` has already been folded.
   const lastArc = await env.DB.prepare(
-    'SELECT MAX(covers_to) AS covered FROM summaries WHERE chat_id = ? AND tier = ?',
+    'SELECT MAX(covers_to) AS covered FROM summaries WHERE chat_id = ? AND tier = ? AND deleted = 0',
   )
     .bind(chatId, 'arc')
     .first<{ covered: number | null }>();
@@ -65,7 +65,7 @@ export async function consolidate(env: Env, chatId: string): Promise<Consolidate
 
   const { results: scenes } = await env.DB.prepare(
     `SELECT id, covers_from, covers_to, covers_date_from, covers_date_to, content FROM summaries
-      WHERE chat_id = ? AND tier = 'scene' AND covers_to > ?
+      WHERE chat_id = ? AND tier = 'scene' AND covers_to > ? AND deleted = 0
       ORDER BY covers_from
       LIMIT ?`,
   )
