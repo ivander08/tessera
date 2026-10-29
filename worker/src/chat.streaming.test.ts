@@ -87,7 +87,7 @@ function stubEnv(): Env {
         if (trimmed.startsWith('SELECT * FROM characters')) return character;
         if (trimmed.includes('FROM token_calibration')) return { factor: 1, samples: 0 };
         if (trimmed.includes('FROM settings')) return null;
-        if (trimmed.includes('RETURNING seq')) return { seq: 2 };
+        if (trimmed.startsWith('SELECT seq FROM messages')) return { seq: 2 };
         return null;
       },
       all: async () => {

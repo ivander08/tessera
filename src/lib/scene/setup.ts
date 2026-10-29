@@ -703,7 +703,8 @@ export const PROFANITY_OPTIONS: Array<{
   {
     value: 'heavy',
     label: 'Heavy',
-    description: 'Profanity is a normal part of speech and narration: frequent and strong.',
+    description:
+      'Profanity is a normal, frequent part of both dialogue and narration: fuck, shit, cock, pussy, ass — a swear in most lines of a heated or explicit scene, narration included. Never downgrade a strong word to a milder one.',
   },
   {
     value: 'settingAppropriate',

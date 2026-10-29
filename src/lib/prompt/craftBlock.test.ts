@@ -231,6 +231,25 @@ describe('renderCraftBlock', () => {
     );
   });
 
+  test("profanity 'heavy' is load-bearing, not advisory", () => {
+    // The failure the wording exists to fix: a conservative model (deepseek-v4.1-flash)
+    // reads "frequent and strong" as permission and swears like the "natural" tier. So
+    // the line carries the word list, the frequency floor, narration coverage, and a
+    // no-downgrade rule. Pinning the pieces is what stops a rewrite back to the soft
+    // sentence.
+    const block = renderCraftBlock({ ...DEFAULT_CRAFT, profanity: 'heavy' });
+    expect(block).toContain('fuck, shit, cock, pussy, ass');
+    expect(block).toContain('a swear in most of its lines');
+    expect(block).toContain('Never downgrade a strong word');
+    // The softer tiers do not pick up the floor: they are different promises.
+    expect(renderCraftBlock({ ...DEFAULT_CRAFT, profanity: 'natural' })).not.toContain(
+      'a swear in most of its lines',
+    );
+    expect(renderCraftBlock({ ...DEFAULT_CRAFT, profanity: 'off' })).not.toContain(
+      '<craft_profanity>',
+    );
+  });
+
   test('vocalisation is NOT in the prefix, whatever its toggle says', () => {
     // It is a tail renderer (`renderVocalisation`) because position decides whether the
     // model obeys it — in the prefix the same text was ignored. Pinning the absence here
@@ -251,6 +270,19 @@ describe('renderVocalisation', () => {
     // and the model over-generates, which is the measured failure mode it exists to
     // prevent (arXiv 2412.12710: 12.9 insertions/sample against a human 5.0).
     expect(block).toMatch(/most lines carry no sound at all/i);
+  });
+
+  test('carries the explicit sound shapes, so an explicit scene uses them', () => {
+    // The shapes are the fix for "the model invents only a handful of generic moans and
+    // never an oral or kissing or wet sound". They are vocabulary, not a script, so the
+    // assertion is on a spread of them — not the whole bank — to stop a rewrite from
+    // quietly dropping the explicit rows.
+    const block = renderVocalisation(DEFAULT_CRAFT);
+    expect(block).toContain('Glk—glk—glk—'); // oral
+    expect(block).toContain('Mwah'); // kissing
+    expect(block).toContain('*squelch*'); // wet
+    expect(block).toContain('Kyaa'); // gasp
+    expect(block).toContain('Slurp… slurrrp');
   });
 
   test('is the empty string when the toggle is off', () => {

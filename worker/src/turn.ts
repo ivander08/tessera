@@ -198,13 +198,20 @@ async function runTurn(
   const reserved = mode === 'send' ? reserveUserMessage() : null;
   const userId = reserved?.id ?? null;
 
+  // The seq of the row that was just written, for the history cutoff. `send` is the only
+  // mode that writes a reader row here; the other modes pass it as null and keep the
+  // cutoff the modes themselves derive.
+  let newReaderSeq: number | null = null;
   if (userId) {
-    await insertUserMessage(env, chat.id, { id: userId, content, parentId });
+    newReaderSeq = await insertUserMessage(env, chat.id, { id: userId, content, parentId });
   }
-  // The history window must stop where the transcript stops. For a recovery `continue` the
-  // reader's row is the tail rather than history, and for a `regenerate` the target and
-  // everything after it are being replaced. See `historyCutoffFor`.
-  const historyCutoff = historyCutoffFor(mode, target, answeringPendingUser);
+  // The history window must stop where the transcript stops. For a `send` the transcript
+  // stops at the row just written: the walk would otherwise include the reader's own new
+  // row, and the same text also arrives as `userContent` in the tail — the message
+  // reaching the model twice. For a recovery `continue` the reader's row is the tail
+  // rather than history, and for a `regenerate` the target and everything after it are
+  // being replaced. See `historyCutoffFor`.
+  const historyCutoff = historyCutoffFor(mode, target, answeringPendingUser) ?? newReaderSeq;
 
   // The reply answers the reader's message when there is one, so it is that row's child
   // rather than the position the reader's message occupies.

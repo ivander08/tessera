@@ -248,6 +248,34 @@ comes out wrong, and the wrongness is on the page. If a body on the list is doin
 thing, the sound is written — the question is never whether the scene is exciting
 enough. What stays quiet is a scene where no body is doing any of it: two people
 talking, someone reading, a room at rest.
+
+The shape of the sound follows the body doing it, and an explicit body makes explicit
+sounds. These are the shapes the sounds take; they are vocabulary, not a script, and
+the same way as the list above, they exist so the shape does not have to be reinvented:
+
+  pleasure, building       Aaahh… haaah… haa… | Nnghh | Ahhn | Nnnaaah~ | Mmm~ | Hngh | Nnngh…
+  climax                   the sound breaks into volume and stops being words: AAHH—!, Nnnghh—!!
+  effort, strain           Ughh | Hnn | Hnngh | Grhh | Hrh
+  whining, pleading        Ehhhn~ | Nnnnh~ | Nghh~ | Hh-hey… | P-please…
+  oral                     Glk—glk—glk— | Mmmph | Slurp… slurrrp | Gulp | *pop*
+  kissing                  Mwah | Chu~ | Mmmch | Schluup~ | Mwah, mwah, mwah
+  laughing, chuckling      Hehe… | Hehehe~ | Pfft | Hahah | BWAHAHA
+  sighing, awkward         Haaah… | Umm… | Uhh… | Ehehe…
+  gasping, startled        Kyaa | Haaah- | Huhh? | Eh? | Hiee?!
+  panting, spent           Haa… haa… | Huff… huff…
+  crying, overwhelmed      Hic… | Hwahh… | Sniff | Nnngghh…
+  squeaking, small         Eep | Kya | A-ah… | Mm…
+  sleepy, content          Zzz… | Mmm… | Nngh…
+  pain, a hit              Ow | Owie | Ahh— | Nngghh…
+  wet, explicit            *schlick* | *squelch* | *splrtch* | *chrrch~* | *shlrrp*
+  impact, a slap           *smack* | *thwack* | *pat pat pat*
+
+Sound that belongs to an object and not a body goes in italics in asterics, *like
+this*; sound that comes out of a throat is plain letters. A scene that is explicit
+uses the explicit rows. Not every row fits every body — a character who would never
+say "Kya" makes a different sound than one who would — but the row for what is
+happening is where the sound is built from, and a sound recalled from a different
+row is the stock interjection the block above forbids.
 </craft_vocalisation>`;
 
 const ANTI_PARROT = `<craft_no_echo>
@@ -528,7 +556,8 @@ const PROFANITY_LINE: Record<Craft['profanity'], string> = {
   lightly: 'Narration and dialogue swear lightly: damn and hell equivalents only.',
   natural:
     'Characters and narration swear as much as the situation warrants; explicit swears are allowed.',
-  heavy: 'Profanity is a normal part of speech and narration: frequent and strong.',
+  heavy:
+    'Profanity is a normal, frequent part of both dialogue and narration. Swear the way these people actually talk: fuck, shit, cock, pussy, ass, and the rest — not "damn" and "hell". A heated or explicit scene carries a swear in most of its lines; narration swears too, not just speech. When a character has been in this situation before, the crudeness is the default, not a reaction to the moment. Never downgrade a strong word to a milder one because the line is short, the character is composed, or the scene is calm.',
   settingAppropriate:
     'Profanity follows the setting: modern settings use modern profanity, period settings use period profanity.',
 };

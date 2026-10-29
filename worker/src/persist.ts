@@ -45,7 +45,7 @@ export async function insertUserMessage(
     content: string;
     parentId: string | null;
   },
-): Promise<void> {
+): Promise<number> {
   const now = Date.now();
   await env.DB.batch([
     env.DB.prepare(
@@ -54,6 +54,20 @@ export async function insertUserMessage(
     ).bind(message.id, chatId, message.parentId, message.content, estimateTokens(message.content), now),
     env.DB.prepare('UPDATE chats SET updated_at = ? WHERE id = ?').bind(now, chatId),
   ]);
+  // The row is written BEFORE the prompt is assembled (so it survives a Stop or a
+  // dropped connection), and the caller cuts the history window at this seq: the walk
+  // would otherwise include the reader's own new row, and the same text also rides in
+  // the tail as `userContent` — the message arriving at the model twice.
+  //
+  // A read rather than a `RETURNING` on the insert, because the two writes are one
+  // atomic batch and the batch seam does not hand back a row: the insert is a plain
+  // write on both the real driver and the stub drivers, and the seq is read back after
+  // it commits.
+  const row = await env.DB.prepare('SELECT seq FROM messages WHERE id = ?')
+    .bind(message.id)
+    .first<{ seq: number }>();
+  if (!row) throw new Error('user message not found after insert');
+  return row.seq;
 }
 
 /**
