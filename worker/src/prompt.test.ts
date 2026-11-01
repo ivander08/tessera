@@ -320,6 +320,67 @@ describe('buildPrompt reads a bounded window', () => {
     expect(tails[0].rows).toBe(400);
     for (const call of calls) expect(call.rows).toBeLessThanOrEqual(400);
   });
+
+  test('the configured context is a ceiling, tail included', async () => {
+    // It was not. The tail reserve was a flat 3,000 while the memory block alone is a 6%
+    // share of the window and the reply reserves its own `maxTokens`; a live chat ran 7.6k
+    // tokens past its configured 64k (71,607 against 64,000). The property: head + history
+    // + tail stays inside the configured context.
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    seedChain(db, 600);
+    const budget = 16384;
+
+    const prompt = await buildPrompt(env, chat, { ...settings(budget), maxTokens: 2048 }, {
+      mode: 'send',
+      historyCutoff: null,
+      statePoint: { seq: null, inclusive: true },
+      userContent: 'hello',
+      tailExtra: '',
+    });
+
+    expect(prompt.headTokens + prompt.bodyTokens + prompt.tailTokens).toBeLessThanOrEqual(budget);
+  });
+
+  test('a forward turn persists the window anchor; a truncated view leaves it', async () => {
+    // `send` reads the full path, so its anchor belongs to the chat — that persistence is
+    // what keeps the window's start FIXED while the window grows, which is the basis of the
+    // provider's prefix cache. `regenerate` reads a view that stops at the target, and an
+    // anchor derived from it would shrink the chat's context for every later turn.
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    const seqs = seedChain(db, 500);
+    exec(db, 'UPDATE chats SET window_start_seq = ? WHERE id = ?', seqs[0], CHAT_ID);
+    chat.window_start_seq = seqs[0];
+
+    await buildPrompt(env, chat, settings(2000), {
+      mode: 'send',
+      historyCutoff: null,
+      forward: true,
+      statePoint: { seq: null, inclusive: true },
+      userContent: 'hello',
+      tailExtra: '',
+    });
+    const afterSendRow = db
+      .query('SELECT window_start_seq FROM chats WHERE id = ?')
+      .get(CHAT_ID) as { window_start_seq: number } | null;
+    const afterSend = afterSendRow?.window_start_seq ?? -1;
+    expect(afterSend).not.toBe(seqs[0]);
+
+    chat.window_start_seq = afterSend;
+    await buildPrompt(env, chat, settings(2000), {
+      mode: 'regenerate',
+      historyCutoff: seqs[300],
+      forward: false,
+      statePoint: { seq: seqs[300], inclusive: false },
+      userContent: '',
+      tailExtra: '',
+    });
+    const afterRegenerateRow = db
+      .query('SELECT window_start_seq FROM chats WHERE id = ?')
+      .get(CHAT_ID) as { window_start_seq: number } | null;
+    expect(afterRegenerateRow?.window_start_seq).toBe(afterSend);
+  });
 });
 
 /**

@@ -68,6 +68,20 @@ export interface PromptOptions {
    */
   historyCutoff: number | null;
   /**
+   * Whether this turn reads the FULL visible path, so the window anchor it computes may
+   * be persisted.
+   *
+   * `send` reads the full path — its cutoff excludes only the reader's own new row, which
+   * sits after every history row — so it must persist the anchor. That persistence is what
+   * keeps the window's start FIXED while the window grows, which is the whole basis of the
+   * cache. `regenerate` and a recovery `continue` read a view that STOPS at the target, and
+   * an anchor derived from that truncated view would shrink the chat's context for every
+   * later turn.
+   *
+   * Defaults to `historyCutoff === null`, the meaning it had before `send` carried a cutoff.
+   */
+  forward?: boolean;
+  /**
    * Where the turn's world state is read from — an anchor row on the visible path plus
    * whether the anchor's own snapshot counts. See `statePointFor`.
    *
@@ -135,6 +149,7 @@ export async function buildPrompt(
   // message from being dropped — `computeWindowStart` has to SEE the message that does
   // not fit in order to decide where to re-anchor.
   const cutoff = options.historyCutoff;
+  const forward = options.forward ?? cutoff === null;
 
   // The budget is expressed in real prompt tokens, but `content_tokens` is a local
   // estimate with a per-model bias. Applying the stored factor keeps the budget honest
@@ -144,9 +159,25 @@ export async function buildPrompt(
   const headTokens = estimateChatTokens(
     headMessages(card, personaRow, settings, craftBlock),
   );
+  // Measured, not guessed: the pieces of the tail that are static this turn are counted
+  // here, and the dynamic maxima are added at their own caps. See `tailReserveTokens`.
+  const tailReserve = tailReserveTokens(
+    settings,
+    [
+      renderContentPolicy(setup.craft),
+      renderVocalisation(setup.craft),
+      renderAntiRepetition(setup.craft),
+      settings.presetPostHistory,
+      settings.authorsNote,
+      settings.responseLengthRule,
+      options.tailExtra,
+      options.userContent,
+    ].join('\n'),
+    calibration,
+  );
   const historyBudget = Math.max(
     MIN_HISTORY_BUDGET,
-    settings.contextBudget - headTokens - TAIL_RESERVE_TOKENS,
+    settings.contextBudget - headTokens - tailReserve,
   );
 
   const readWindow = (rows: BranchRow[]): Array<{
@@ -190,7 +221,7 @@ export async function buildPrompt(
   //
   // The window start is still WRITTEN back below, from the full-path calculation, so the
   // chat's caching is unaffected by this turn's narrower read.
-  const floor = cutoff === null ? chat.window_start_seq : 0;
+  const floor = forward ? chat.window_start_seq : 0;
 
   let windowStart = computeWindowStart(entries(results), floor, historyBudget);
 
@@ -223,7 +254,7 @@ export async function buildPrompt(
     // window from a truncated view, so persisting that value would record a window start
     // derived from the re-roll and shrink the chat's context for every later turn. The
     // persisted start belongs to the full path, which only a forward turn sees.
-    if (cutoff === null) {
+    if (forward) {
       await env.DB.prepare('UPDATE chats SET window_start_seq = ? WHERE id = ?')
         .bind(windowStart, chat.id)
         .run();
@@ -409,16 +440,46 @@ export async function buildPrompt(
  * Tokens reserved for everything that is not history.
  *
  * The tail is assembled AFTER the window is chosen, so its size cannot be measured when
- * the window is decided — it has to be reserved. The number covers the memory block
- * (800), the state block (800), a matched lore block (up to the preset's budget), the
- * authors note, and the reply the model is about to write.
+ * the window is decided — it has to be reserved. It used to be a flat 3,000, and that was
+ * not a ceiling in two ways:
  *
- * Deliberately generous. Reserving too much costs a slightly shorter history and a
- * slightly less warm cache; reserving too little is what produced a prompt that ran over
- * the configured context and would eventually be rejected outright by a provider with a
- * hard limit.
+ *  - the memory block is a SHARE of the window (6%), so it is 3,840 at a 64k context, not
+ *    the 800 the old comment assumed;
+ *  - the reply reserves its own `maxTokens` (the reply is part of the context the provider
+ *    is asked to fit), which the preset sets to 5,000.
+ *
+ * Those two alone are 8,840 before a word of matched lore, the state block, the author's
+ * note, or the card's post-history instructions. Measured on the live chat: a prompt of
+ * 71,607 tokens against a configured 64,000 — 7.6k of overshoot, exactly the gap between
+ * the old constant and what the tail actually costs.
+ *
+ * So it is measured: the static tail text is counted, and the dynamic maxima are added at
+ * their own caps. Reserving too much costs a slightly shorter history; reserving too
+ * little is what produced a prompt that ran over the configured context.
  */
-const TAIL_RESERVE_TOKENS = 3000;
+function tailReserveTokens(
+  settings: EffectiveSettings,
+  /** The static tail text for this turn: craft tail blocks, notes, and the reader's message. */
+  tailStatic: string,
+  calibration: number,
+): number {
+  return (
+    estimateTokens(tailStatic) +
+    // The memory block's own cap, which `buildMemoryBlock` is given below.
+    memoryBlockTokens(settings.contextBudget) +
+    // `renderStateBlock` is called with `800 * calibration`.
+    Math.round(800 * calibration) +
+    // Matched lore is capped by the preset's budget, calibrated the same way.
+    Math.round(settings.loreTokenBudget * calibration) +
+    // The reply the model is about to write. Part of the context, not free.
+    settings.maxTokens +
+    // The cast block, which is built after the window is chosen.
+    CAST_BLOCK_ALLOWANCE
+  );
+}
+
+/** Room for a `Speakers in this scene:` block, which the window cannot see. */
+const CAST_BLOCK_ALLOWANCE = 400;
 
 /** Even an enormous card must leave room for a conversation. */
 const MIN_HISTORY_BUDGET = 2048;

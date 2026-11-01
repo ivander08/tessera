@@ -225,6 +225,11 @@ async function runTurn(
     const prompt = await buildPrompt(env, chat, settings, {
       mode,
       historyCutoff,
+      // A `send`'s cutoff excludes only the row it just wrote, so its view is still the
+      // full path and its window anchor must be persisted. `regenerate` and a recovery
+      // `continue` stop at the target: their anchor belongs to the full path, which only a
+      // forward turn sees.
+      forward: !(mode === 'regenerate' || answeringPendingUser),
       statePoint,
       // A recovery `continue` has no new text, but the prompt's tail needs the reader's
       // message — that is what the reply is answering. Without it the model would be
