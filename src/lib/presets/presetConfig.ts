@@ -33,6 +33,22 @@ export interface PresetConfig {
    */
   provider?: string;
   model?: string;
+  /**
+   * The side-channel model: memory summarisation, fact extraction, world-state patches,
+   * the consultant. Empty falls back to `provider`/`model`.
+   *
+   * Here rather than in Settings because it is generation configuration: a preset is
+   * authored against a model pair, and a cheap model chosen for one preset's workload is
+   * not automatically right for another's.
+   */
+  cheapProvider?: string;
+  cheapModel?: string;
+  /** Input ceiling for every cheap-model call, in estimated tokens. 0 means no ceiling. */
+  cheapContextBudget?: number;
+  /** Let the narrator model reason. Off by default: it is latency the reader pays for. */
+  reasoning?: boolean;
+  /** The reader's standing note, injected in the tail. Safe to change every turn. */
+  authorsNote?: string;
   /** Replaces the global system prompt. A card's own prompt still wins over this. */
   systemPrompt?: string;
   /** Injected before the history. Part of the cached prefix, so it must be static. */
@@ -174,6 +190,11 @@ export function responseLengthRule(
 export const DEFAULT_PRESET_CONFIG: PresetConfig = {
   provider: '',
   model: '',
+  cheapProvider: '',
+  cheapModel: '',
+  cheapContextBudget: 0,
+  reasoning: false,
+  authorsNote: '',
   systemPrompt: '',
   preHistoryInstructions: '',
   postHistoryInstructions: '',
@@ -206,6 +227,7 @@ export const DEFAULT_PRESET_CONFIG: PresetConfig = {
 const BOUNDS = {
   maxTokens: [16, 65536],
   contextSize: [1024, 1048576],
+  cheapContextBudget: [0, 65536],
   loreScanDepth: [0, 100],
   loreTokenBudget: [0, 65536],
 } as const;
@@ -255,6 +277,11 @@ export function parsePresetConfig(raw: string | null | undefined): PresetConfig 
   return {
     provider: typeof record.provider === 'string' ? record.provider : '',
     model: typeof record.model === 'string' ? record.model : '',
+    cheapProvider: typeof record.cheapProvider === 'string' ? record.cheapProvider : '',
+    cheapModel: typeof record.cheapModel === 'string' ? record.cheapModel : '',
+    cheapContextBudget: clampNumber(record.cheapContextBudget, 'cheapContextBudget'),
+    reasoning: record.reasoning === true,
+    authorsNote: typeof record.authorsNote === 'string' ? record.authorsNote : '',
     systemPrompt: typeof record.systemPrompt === 'string' ? record.systemPrompt : '',
     preHistoryInstructions:
       typeof record.preHistoryInstructions === 'string' ? record.preHistoryInstructions : '',

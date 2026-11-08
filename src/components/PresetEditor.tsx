@@ -49,12 +49,15 @@ export function PresetEditor({
   onSaved: () => void;
   onCancel: () => void;
 }) {
+  const [config, setConfig] = useState<PresetConfig>(preset.config);
   const settings = useAsync(
     () => apiJson<{ provider?: string; model?: string }>('/api/settings'),
     [],
   );
-  const provider = settings.data?.provider ?? '';
-  const model = settings.data?.model ?? '';
+  // The preset's own pair is what it will send with, so knob support is gated on THAT —
+  // falling back to whatever the install still carries while it has not been migrated.
+  const provider = config.provider || (settings.data?.provider ?? '');
+  const model = config.model || (settings.data?.model ?? '');
   const models = useAsync(
     () => (provider ? apiJson<ModelInfo[]>(`/api/models/${provider}`) : Promise.resolve([])),
     [provider],
@@ -65,7 +68,6 @@ export function PresetEditor({
   // the same provider/model pair the chat will send with. KnobEditor takes the numeric
   // half as JSON text and owns the support gating; this component owns the rest.
   const [knobsJson, setKnobsJson] = useState(() => JSON.stringify(numericKnobs(preset.knobs)));
-  const [config, setConfig] = useState<PresetConfig>(preset.config);
   const [stopText, setStopText] = useState(() => (preset.config.stopStrings ?? []).join('\n'));
   const [busy, setBusy] = useState(false);
   const toast = useToast();
@@ -94,6 +96,15 @@ export function PresetEditor({
         ? apiJson<ModelInfo[]>(`/api/models/${config.provider}`)
         : Promise.resolve([]),
     [config.provider],
+  );
+
+  // The side-channel pair can name a different provider, so it gets its own list.
+  const cheapModels = useAsync(
+    () =>
+      config.cheapProvider
+        ? apiJson<ModelInfo[]>(`/api/models/${config.cheapProvider}`)
+        : Promise.resolve([]),
+    [config.cheapProvider],
   );
 
   async function save() {
@@ -181,9 +192,78 @@ export function PresetEditor({
 
       <section className="space-y-3">
         <h3 className="text-[var(--text-sm)] font-semibold uppercase tracking-wide text-[var(--ink-dim)]">
+          Side channel
+        </h3>
+        <p className="form-hint" style={{ marginTop: 0 }}>
+          The cheap model does the work behind the scene: memory summaries, fact
+          extraction, world-state patches and the consultant. Empty means "the pair above".
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="block space-y-1">
+            <span className="text-[var(--text-xs)] text-[var(--ink-dim)]">Cheap provider</span>
+            <select
+              className="field"
+              value={config.cheapProvider ?? ''}
+              onChange={(event) =>
+                setConfig({ ...config, cheapProvider: event.target.value, cheapModel: '' })
+              }
+            >
+              <option value="">— same as above —</option>
+              <option value="openrouter">openrouter</option>
+              <option value="kenari">kenari</option>
+            </select>
+          </label>
+          <label className="block space-y-1">
+            <span className="text-[var(--text-xs)] text-[var(--ink-dim)]">Cheap model</span>
+            <select
+              className="field"
+              value={config.cheapModel ?? ''}
+              disabled={!config.cheapProvider}
+              onChange={(event) => setConfig({ ...config, cheapModel: event.target.value })}
+            >
+              <option value="">— same as above —</option>
+              {(cheapModels.data ?? []).map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.name ? `${entry.name} (${entry.id})` : entry.id}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {cheapModels.error && <p className="note warn">{cheapModels.error}</p>}
+        <ConfigNumber
+          label="Cheap context budget (0 for no ceiling)"
+          value={config.cheapContextBudget}
+          onChange={(value) => setConfig({ ...config, cheapContextBudget: value })}
+        />
+        <label className="flex min-h-10 items-center gap-3">
+          <input
+            type="checkbox"
+            checked={config.reasoning === true}
+            onChange={(event) => setConfig({ ...config, reasoning: event.target.checked })}
+          />
+          <span className="form-label" style={{ margin: 0 }}>
+            <span>Let the narrator model reason</span>
+            <span className="form-hint">
+              Off by default. A scene has no place to show a reasoning trace, so thinking is
+              latency and output tokens spent on nothing.
+            </span>
+          </span>
+        </label>
+      </section>
+
+      <section className="space-y-3">
+        <h3 className="text-[var(--text-sm)] font-semibold uppercase tracking-wide text-[var(--ink-dim)]">
           Prompt structure
         </h3>
 
+        <ConfigText
+          label="Author's note"
+          hint="In the prompt tail, so it is safe to change every turn. This is where a standing instruction belongs."
+          value={config.authorsNote ?? ''}
+          onChange={(value) => setConfig({ ...config, authorsNote: value })}
+          rows={2}
+        />
         <ConfigText
           label="System prompt"
           hint="Used when the card defines none. Part of the cached prefix, so it must not change per turn."

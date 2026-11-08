@@ -1,31 +1,32 @@
 import { useEffect, useState } from 'react';
 import { apiJson } from '../lib/api';
-import type { ModelInfo, ProviderKeyRow } from '../lib/apiTypes';
+import type { ProviderKeyRow } from '../lib/apiTypes';
 import { messageOf, useAsync } from '../lib/hooks';
 import { AppBar } from '../components/AppBar';
-import { KnobEditor } from '../components/KnobEditor';
 import { ThemeEditor, useLiveTheme } from '../components/ThemeEditor';
 import { useToast } from '../components/Toast';
+import type { PresetSummary } from '../components/PresetEditor';
 import { parseTheme, type Theme } from '../lib/theme';
 
 const PROVIDERS = ['openrouter', 'kenari'] as const;
 
 /**
- * The reason a numeric field is not usable, or null when it is.
+ * What is left of the settings row.
  *
- * An empty value is allowed: `save` sends the empty string and the Worker's `||` default
- * applies, which is the documented way to say "use the default".
+ * Everything that shapes a generation belongs to a PRESET now — the model pair, the cheap
+ * model pair, every prompt, the token budgets, the lore settings, the sampler knobs. This
+ * screen keeps the things that are about the app rather than about a scene: where the keys
+ * live, what money is worth, how it looks, and which preset a chat uses when it names none.
+ *
+ * That split is the whole point. It used to be half and half: the global screen had a
+ * system prompt and a context budget but no pre-history, no post-history, no stop strings
+ * and no response length, so neither layer could be understood on its own.
  */
-function numericProblem(label: string, value: string | undefined, min: number, max: number): string | null {
-  const trimmed = (value ?? '').trim();
-  if (trimmed.length === 0) return null;
-  if (!/^\d+$/.test(trimmed)) return `${label} must be a whole number.`;
-  const parsed = Number(trimmed);
-  if (parsed < min || parsed > max) return `${label} must be between ${min} and ${max}.`;
-  return null;
-}
-
 interface SettingsShape {
+  idrPerUsd?: string;
+  default_preset_id?: string;
+  theme?: string;
+  // Legacy generation keys. Read only by the migration card below; nothing here writes them.
   provider?: string;
   model?: string;
   systemPrompt?: string;
@@ -33,13 +34,13 @@ interface SettingsShape {
   maxTokens?: string;
   contextBudget?: string;
   cheapContextBudget?: string;
-  knobs?: string;
-  idrPerUsd?: string;
   cheapProvider?: string;
   cheapModel?: string;
-  /** `'on'` keeps the model's reasoning; anything else (including absent) suppresses it. */
+  knobs?: string;
+  loreScanDepth?: string;
+  loreTokenBudget?: string;
+  loreRecursive?: string;
   reasoning?: string;
-  theme?: string;
 }
 
 export default function Settings() {
@@ -48,20 +49,15 @@ export default function Settings() {
     [],
   );
   const keys = useAsync(() => apiJson<ProviderKeyRow[]>('/api/keys'), []);
+  const presets = useAsync(() => apiJson<PresetSummary[]>('/api/presets'), []);
 
   const [edits, setEdits] = useState<SettingsShape>({});
   const [theme, setTheme] = useState<Theme>(() => parseTheme(null));
   const [keyDraft, setKeyDraft] = useState<Record<string, string>>({});
-  // Every other form in the app says what it is doing while it does it; this one changed
-  // nothing on save, so a slow round trip was indistinguishable from a dead button.
   const [busy, setBusy] = useState(false);
-  const [numericFailure, setNumericFailure] = useState<string | null>(null);
+  const [migrating, setMigrating] = useState(false);
   const toast = useToast();
 
-  // The loaded settings are the base; local edits layer on top. Deriving the form
-  // during render rather than copying `data` into state in an effect removes a
-  // cascading render and a stale-clone class of bug where an edit made before the
-  // fetch resolved would be silently discarded.
   const form: SettingsShape = { ...data, ...edits };
 
   // Seed the theme editor from storage once, then let it own the value. Re-seeding on
@@ -70,80 +66,105 @@ export default function Settings() {
     if (data?.theme) setTheme(parseTheme(data.theme));
   }, [data?.theme]);
 
-  // Apply while editing, so a slider shows its effect as it moves rather than after a
-  // save round trip.
   useLiveTheme(theme);
-  const setForm = (next: SettingsShape) => setEdits(next);
 
-  const provider = form.provider ?? '';
-  const model = form.model ?? '';
+  const presetList = presets.data ?? [];
+  const presetName = (id: string): string =>
+    presetList.find((entry) => entry.id === id)?.name ?? 'a deleted preset';
 
-  const models = useAsync(
-    () => (provider ? apiJson<ModelInfo[]>(`/api/models/${provider}`) : Promise.resolve([])),
-    [provider, keys.data],
+  // A row written before the split still holds generation settings. The card below offers
+  // to move them; until then `loadEffectiveSettings` keeps reading them, so nothing breaks.
+  const legacy = Boolean(
+    data &&
+      (data.provider ||
+        data.model ||
+        data.systemPrompt ||
+        data.authorsNote ||
+        data.maxTokens ||
+        data.contextBudget ||
+        data.cheapProvider ||
+        data.cheapModel ||
+        data.cheapContextBudget),
   );
-
-  const modelList = models.data ?? [];
-
-  // The cheap model is an independent setting, so its fetch is gated on the cheap provider
-  // and not on the main one. An empty provider means "fall back to the main model" —
-  // `worker/src/cheap.ts` reads `raw.cheapProvider || raw.provider` — so there is nothing
-  // to fetch in that case.
-  const cheapModels = useAsync(
-    () =>
-      form.cheapProvider
-        ? apiJson<ModelInfo[]>(`/api/models/${form.cheapProvider}`)
-        : Promise.resolve([]),
-    [form.cheapProvider, keys.data],
-  );
-
-  const cheapModelList = cheapModels.data ?? [];
-
-  const keyed = new Set((keys.data ?? []).map((row) => row.provider));
 
   async function save() {
-    // Validated before the request. The Worker coerces a bad value to the default
-    // (`Number(raw.maxTokens ?? 1024) || 1024`), which means "abc" saved silently becomes
-    // 1024 — the reader's typo is not rejected, it is overwritten.
-    const bad =
-      numericProblem('Max output tokens', form.maxTokens, 1, 200000) ??
-      numericProblem('Context budget', form.contextBudget, 512, 2000000) ??
-      numericProblem('Cheap context budget', form.cheapContextBudget, 512, 2000000);
-    if (bad) {
-      setNumericFailure(bad);
-      return;
-    }
-    setNumericFailure(null);
     setBusy(true);
-
-    // One request for the whole form. This used to be a `PUT` per key — eleven round trips
-    // for one button, each its own chance to fail and leave the form half-saved.
     const settings: Record<string, string> = {
-      provider: form.provider ?? '',
-      model: form.model ?? '',
-      systemPrompt: form.systemPrompt ?? '',
-      authorsNote: form.authorsNote ?? '',
-      maxTokens: form.maxTokens ?? '',
-      contextBudget: form.contextBudget ?? '',
-      cheapContextBudget: form.cheapContextBudget ?? '',
-      knobs: form.knobs ?? '{}',
       idrPerUsd: form.idrPerUsd ?? '',
-      cheapProvider: form.cheapProvider ?? '',
-      cheapModel: form.cheapModel ?? '',
-      reasoning: form.reasoning ?? 'off',
+      default_preset_id: form.default_preset_id ?? '',
       theme: JSON.stringify(theme),
     };
     try {
-      await apiJson('/api/settings', {
-        method: 'PUT',
-        body: JSON.stringify({ settings }),
-      });
+      await apiJson('/api/settings', { method: 'PUT', body: JSON.stringify({ settings }) });
       toast.success('Settings saved.');
       reload();
     } catch (cause) {
       toast.failure(messageOf(cause));
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * Moves the legacy generation settings into a new preset and makes it the default.
+   *
+   * Two calls rather than a bespoke endpoint: create the preset, fill it, then point
+   * `default_preset_id` at it. The order matters — the pointer is written LAST, so a
+   * failure halfway leaves the install on the legacy row rather than on an empty preset.
+   */
+  async function migrate() {
+    if (!data) return;
+    setMigrating(true);
+    try {
+      const created = await apiJson<{ id: string }>('/api/presets', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'Default (moved from settings)' }),
+      });
+
+      let knobs: unknown = {};
+      try {
+        knobs = JSON.parse(data.knobs ?? '{}');
+      } catch {
+        knobs = {};
+      }
+
+      await apiJson(`/api/presets/${encodeURIComponent(created.id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          id: created.id,
+          knobs,
+          config: {
+            provider: data.provider ?? '',
+            model: data.model ?? '',
+            cheapProvider: data.cheapProvider ?? '',
+            cheapModel: data.cheapModel ?? '',
+            cheapContextBudget: Number(data.cheapContextBudget ?? '') || 0,
+            reasoning: data.reasoning === 'on',
+            authorsNote: data.authorsNote ?? '',
+            systemPrompt: data.systemPrompt ?? '',
+            maxTokens: Number(data.maxTokens ?? '') || 1024,
+            contextSize: Number(data.contextBudget ?? '') || 16384,
+            loreScanDepth: Number(data.loreScanDepth ?? '') || 4,
+            loreTokenBudget: Number(data.loreTokenBudget ?? '') || 1024,
+            loreRecursive: data.loreRecursive === 'true',
+          },
+        }),
+      });
+
+      await apiJson('/api/settings', {
+        method: 'PUT',
+        body: JSON.stringify({
+          settings: { default_preset_id: created.id },
+        }),
+      });
+
+      toast.success('Moved into a preset and made it the default.');
+      presets.reload();
+      reload();
+    } catch (cause) {
+      toast.failure(messageOf(cause));
+    } finally {
+      setMigrating(false);
     }
   }
 
@@ -169,6 +190,58 @@ export default function Settings() {
   return (
     <Frame>
       <section className="section panel panel-pad">
+        <h2 className="eyebrow">Generation</h2>
+        <p className="form-hint" style={{ marginTop: 0 }}>
+          Every generation setting lives in a preset: the model and its cheap sibling, the
+          prompts, the token budgets, the lore settings and the sampler knobs. The preset a
+          chat uses is chosen on the chat screen; this is the one new chats start with.
+        </p>
+
+        <label className="form-row" htmlFor="settings-default-preset">
+          <span className="form-label">
+            <span>Default preset</span>
+            <span className="form-hint">
+              {form.default_preset_id
+                ? `New chats use “${presetName(form.default_preset_id)}”.`
+                : 'No default yet — the legacy settings below are still being used.'}
+            </span>
+          </span>
+          <select
+            id="settings-default-preset"
+            className="field"
+            value={form.default_preset_id ?? ''}
+            onChange={(event) => setEdits({ ...form, default_preset_id: event.target.value })}
+          >
+            <option value="">— none —</option>
+            {presetList.map((preset) => (
+              <option key={preset.id} value={preset.id}>
+                {preset.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {presets.error && <p className="note warn">{presets.error}</p>}
+
+        {legacy && (
+          <div className="note" style={{ marginTop: 14 }}>
+            <p style={{ margin: '0 0 8px' }}>
+              This install still has generation settings in the old place (model, prompts,
+              budgets). They keep working, but they are no longer editable here.
+            </p>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => void migrate()}
+              disabled={migrating || busy}
+            >
+              {migrating ? 'Moving…' : 'Move them into a preset'}
+            </button>
+          </div>
+        )}
+      </section>
+
+      <section className="section panel panel-pad">
         <h2 className="eyebrow">Provider keys</h2>
         {PROVIDERS.map((providerId) => (
           <div key={providerId} className="form-row">
@@ -183,14 +256,15 @@ export default function Settings() {
                 onChange={(event) =>
                   setKeyDraft((current) => ({ ...current, [providerId]: event.target.value }))
                 }
-                placeholder={keyed.has(providerId) ? 'stored — replace' : 'not set'}
-                className="field" style={{ fontFamily: 'var(--font-data)' }}
+                placeholder={
+                  (keys.data ?? []).some((row) => row.provider === providerId)
+                    ? 'stored — replace'
+                    : 'not set'
+                }
+                className="field"
+                style={{ fontFamily: 'var(--font-data)' }}
               />
-              <button
-                type="button"
-                onClick={() => void saveKey(providerId)}
-                className="btn"
-              >
+              <button type="button" onClick={() => void saveKey(providerId)} className="btn">
                 Save
               </button>
             </div>
@@ -199,194 +273,16 @@ export default function Settings() {
       </section>
 
       <section className="section panel panel-pad">
-        <h2 className="eyebrow">Model</h2>
-        <div className="field-list two">
-          <label className="block" htmlFor="settings-provider">
-            <span className="form-label">
-              <span>Provider</span>
-            </span>
-            <select
-              id="settings-provider"
-              value={provider}
-              onChange={(event) => setForm({ ...form, provider: event.target.value, model: '' })}
-              className="field"
-            >
-              <option value="">— provider —</option>
-              {PROVIDERS.map((providerId) => (
-                <option key={providerId} value={providerId}>
-                  {providerId}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="block" htmlFor="settings-model">
-            <span className="form-label">
-              <span>Model</span>
-            </span>
-            <select
-              id="settings-model"
-              value={model}
-              onChange={(event) => setForm({ ...form, model: event.target.value })}
-              disabled={modelList.length === 0}
-              className="field"
-            >
-              <option value="">— model —</option>
-              {modelList.map((entry) => (
-                <option key={entry.id} value={entry.id}>
-                  {entry.name ? `${entry.name} (${entry.id})` : entry.id}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        {models.error && <p className="note warn">{models.error}</p>}
-        <p className="form-hint">
-          No default model ships with Tessera. Nothing sends until both are chosen here.
-        </p>
-      </section>
-
-      <KnobEditor
-        provider={provider}
-        model={model}
-        models={modelList}
-        value={form.knobs ?? '{}'}
-        onChange={(next) => setForm({ ...form, knobs: next })}
-      />
-
-      <section className="section panel panel-pad">
-        <h2 className="eyebrow">Prompt</h2>
-        <Field label="System prompt (used when the card defines none)">
-          <textarea
-            value={form.systemPrompt ?? ''}
-            onChange={(event) => setForm({ ...form, systemPrompt: event.target.value })}
-            rows={4}
-            className="field"
-          />
-        </Field>
-        <Field label="Author's note (tail — safe to change every turn)">
-          <input
-            value={form.authorsNote ?? ''}
-            onChange={(event) => setForm({ ...form, authorsNote: event.target.value })}
-            className="field"
-          />
-        </Field>
-        <div className="field-list two items-end">
-          <Field label="Max output tokens">
-            <input
-              value={form.maxTokens ?? ''}
-              onChange={(event) => {
-                setForm({ ...form, maxTokens: event.target.value });
-                setNumericFailure(null);
-              }}
-              inputMode="numeric"
-              className="field" style={{ maxWidth: 32 * 4 }}
-              aria-invalid={numericProblem('Max output tokens', form.maxTokens, 1, 200000) !== null}
-            />
-          </Field>
-          <Field label="Context budget (prompt tokens)">
-            <input
-              value={form.contextBudget ?? ''}
-              onChange={(event) => {
-                setForm({ ...form, contextBudget: event.target.value });
-                setNumericFailure(null);
-              }}
-              inputMode="numeric"
-              className="field" style={{ maxWidth: 40 * 4 }}
-              aria-invalid={numericProblem('Context budget', form.contextBudget, 512, 2000000) !== null}
-            />
-          </Field>
-        </div>
-        {/* Rendered rather than tooltipped, the way `KnobEditor` does it: a rejected field
-            with no visible reason is the complaint that rule exists to answer. */}
-        {numericFailure && (
-          <p className="form-hint" style={{ color: 'var(--danger)' }}>
-            {numericFailure}
-          </p>
-        )}
-        <div className="field-list two">
-          <label className="block" htmlFor="settings-cheap-provider">
-            <span className="form-label">
-              <span>Cheap provider</span>
-            </span>
-            <select
-              id="settings-cheap-provider"
-              value={form.cheapProvider ?? ''}
-              onChange={(event) =>
-                setForm({ ...form, cheapProvider: event.target.value, cheapModel: '' })
-              }
-              className="field"
-            >
-              {/* Load-bearing: an empty value is how the fallback to the main model is
-                  expressed, and it is what every existing install stores. */}
-              <option value="">— same as above —</option>
-              {PROVIDERS.map((providerId) => (
-                <option key={providerId} value={providerId}>
-                  {providerId}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="block" htmlFor="settings-cheap-model">
-            <span className="form-label">
-              <span>Cheap model</span>
-            </span>
-            <select
-              id="settings-cheap-model"
-              value={form.cheapModel ?? ''}
-              onChange={(event) => setForm({ ...form, cheapModel: event.target.value })}
-              disabled={!form.cheapProvider}
-              className="field"
-            >
-              <option value="">— same as above —</option>
-              {cheapModelList.map((entry) => (
-                <option key={entry.id} value={entry.id}>
-                  {entry.name ? `${entry.name} (${entry.id})` : entry.id}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        {cheapModels.error && <p className="note warn">{cheapModels.error}</p>}
-        <Field label="Cheap context budget (prompt tokens; 0 for no ceiling)">
-          <input
-            value={form.cheapContextBudget ?? ''}
-            onChange={(event) => {
-              setForm({ ...form, cheapContextBudget: event.target.value });
-              setNumericFailure(null);
-            }}
-            inputMode="numeric"
-            className="field" style={{ maxWidth: 40 * 4 }}
-          />
-        </Field>
+        <h2 className="eyebrow">Cost</h2>
         <Field label="IDR per USD (Kenari bills in Rupiah; blank leaves costs unreported)">
           <input
             value={form.idrPerUsd ?? ''}
-            onChange={(event) => setForm({ ...form, idrPerUsd: event.target.value })}
+            onChange={(event) => setEdits({ ...form, idrPerUsd: event.target.value })}
             inputMode="decimal"
-            className="field" style={{ maxWidth: 32 * 4 }}
+            className="field"
+            style={{ maxWidth: 32 * 4 }}
           />
         </Field>
-        <label className="block" htmlFor="settings-reasoning">
-          <span className="form-label">
-            <span>Reasoning</span>
-            <span className="form-hint">
-              {form.reasoning === 'on'
-                ? 'The model thinks before every reply. Slower, and the thinking is billed as output tokens you never read.'
-                : 'The model answers directly. A scene has no place to show a reasoning trace, so thinking is latency and tokens spent on nothing.'}
-            </span>
-          </span>
-          <select
-            id="settings-reasoning"
-            value={form.reasoning ?? 'off'}
-            onChange={(event) => setForm({ ...form, reasoning: event.target.value })}
-            className="field"
-          >
-            <option value="off">Off — answer directly (recommended)</option>
-            <option value="on">On — let the model reason first</option>
-          </select>
-        </label>
       </section>
 
       <ThemeEditor value={theme} onChange={setTheme} />
@@ -394,12 +290,7 @@ export default function Settings() {
       {/* 26px, matching the gap between the sections above it. The button was flush
           against the Appearance panel once that panel gained its own spacing. */}
       <div className="flex items-center gap-3" style={{ marginTop: 26 }}>
-        <button
-          type="button"
-          onClick={() => void save()}
-          className="btn primary"
-          disabled={busy}
-        >
+        <button type="button" onClick={() => void save()} className="btn primary" disabled={busy}>
           {busy ? 'Saving…' : 'Save settings'}
         </button>
       </div>

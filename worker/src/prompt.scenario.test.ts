@@ -44,6 +44,8 @@ function settings(contextBudget: number): EffectiveSettings {
   return {
     provider: 'openrouter',
     model: 'test/model',
+    cheapProvider: null,
+    cheapModel: null,
     systemPrompt: 'You are a narrator.',
     authorsNote: '',
     maxTokens: 1024,

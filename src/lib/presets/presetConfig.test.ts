@@ -144,6 +144,11 @@ describe('parsePresetConfig — a complete config', () => {
     const full: PresetConfig = {
       provider: 'openrouter',
       model: 'anthropic/claude-sonnet-4',
+      cheapProvider: 'kenari',
+      cheapModel: 'deepseek-v4-flash',
+      cheapContextBudget: 24000,
+      reasoning: true,
+      authorsNote: 'Keep it grounded.',
       systemPrompt: 'Write in present tense.',
       preHistoryInstructions: 'The scene opens in a rain-soaked alley.',
       postHistoryInstructions: 'Never end a reply with a question.',

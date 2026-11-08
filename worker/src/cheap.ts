@@ -1,4 +1,4 @@
-import { getSettings, loadChatSettings } from './db';
+import { loadEffectiveSettings } from './effective';
 import type { ChatSettings } from './db';
 import { keyErrorMessage, loadProviderKey } from './keys';
 import { getProvider } from './providers';
@@ -21,14 +21,27 @@ export interface CheapModel {
   model: string;
 }
 
-export async function loadCheapModel(env: Env): Promise<CheapModel | null> {
-  const raw = await getSettings(env);
-  const provider = raw.cheapProvider || raw.provider;
-  const model = raw.cheapModel || raw.model;
+/**
+ * The side-channel pair, from the settings it is handed.
+ *
+ * Null when the install has no model configured at all, which the callers turn into one
+ * actionable message rather than a failed request.
+ */
+export function cheapFrom(settings: ChatSettings): CheapModel | null {
+  const provider = settings.cheapProvider || settings.provider;
+  const model = settings.cheapModel || settings.model;
   if (!provider || !model) return null;
   if (!getProvider(provider)) return null;
   return { provider, model };
 }
+
+export async function loadCheapModel(env: Env): Promise<CheapModel | null> {
+  // The default preset, not the legacy settings row: the cheap pair is generation
+  // configuration and lives with the rest of it. `loadEffectiveSettings` falls back to the
+  // legacy row for an install with no preset, so this is the same value in that case.
+  return cheapFrom(await loadEffectiveSettings(env, null));
+}
+
 
 export interface CompletionResult {
   text: string;
@@ -121,9 +134,14 @@ async function prepare(
     maxTokens?: number;
   },
 ): Promise<Prepared> {
-  const cheap = await loadCheapModel(env);
+  // One read for the pair and the ceilings it is subject to; both come from the same
+  // default preset now.
+  const settings = await loadEffectiveSettings(env, null);
+  const cheap = cheapFrom(settings);
   if (!cheap) {
-    throw new Error('No cheap model configured. Set cheapProvider/cheapModel (or provider/model) in settings.');
+    throw new Error(
+      'No cheap model configured. Set the cheap model pair (or the model pair) on the default preset.',
+    );
   }
 
   const provider = getProvider(cheap.provider);
@@ -142,7 +160,6 @@ async function prepare(
   if (opts.messages) messages.push(...opts.messages);
   else messages.push({ role: 'user', content: opts.user ?? '' });
 
-  const settings: ChatSettings = await loadChatSettings(env);
   applyCheapContextBudget(messages, settings.cheapContextBudget);
   const { url, init } = provider.buildRequest(
     {

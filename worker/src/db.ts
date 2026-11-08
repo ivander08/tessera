@@ -110,6 +110,9 @@ export async function getPersona(env: Env, id: string): Promise<PersonaRow | nul
 export interface ChatSettings {
   provider: string | null;
   model: string | null;
+  /** The side-channel model pair. Falls back to `provider`/`model` when unset. */
+  cheapProvider: string | null;
+  cheapModel: string | null;
   systemPrompt: string;
   authorsNote: string;
   maxTokens: number;
@@ -183,7 +186,7 @@ export const DEFAULT_KNOBS: Record<string, number> = { temperature: 0.7, top_p: 
  * for. A malformed value falls back rather than throwing, on the same principle as the
  * rest of this reader — a corrupt settings row must not break every turn.
  */
-function parseKnobs(raw: string | undefined): Record<string, number | string | string[]> {
+export function parseKnobs(raw: string | undefined): Record<string, number | string | string[]> {
   if (!raw) return DEFAULT_KNOBS;
   try {
     const parsed = JSON.parse(raw) as Record<string, number | string | string[]>;
@@ -207,11 +210,21 @@ function parseCheapContextBudget(raw: string | undefined): number {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
+/**
+ * The LEGACY generation settings: what an install that has no preset still carries in the
+ * `settings` row.
+ *
+ * Everything generation-shaped now lives in a preset (`effective.ts` reads it from there).
+ * This reader stays for two reasons: an install that has never created a preset must keep
+ * working, and the migration that moves these values into the default preset needs them.
+ */
 export async function loadChatSettings(env: Env): Promise<ChatSettings> {
   const raw = await getSettings(env);
   return {
     provider: raw.provider ?? null,
     model: raw.model ?? null,
+    cheapProvider: raw.cheapProvider || raw.provider || null,
+    cheapModel: raw.cheapModel || raw.model || null,
     systemPrompt: raw.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
     authorsNote: raw.authorsNote ?? '',
     maxTokens: Number(raw.maxTokens ?? 1024) || 1024,

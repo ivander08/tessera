@@ -22,6 +22,8 @@ function settings(over: Partial<EffectiveSettings> = {}): EffectiveSettings {
   return {
     provider: 'kenari',
     model: 'deepseek-v4-1-flash',
+    cheapProvider: null,
+    cheapModel: null,
     systemPrompt: 'You are a narrator.',
     authorsNote: '',
     maxTokens: 1024,

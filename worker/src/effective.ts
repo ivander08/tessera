@@ -1,6 +1,6 @@
-import { getSettings, loadChatSettings } from './db';
+import { DEFAULT_SYSTEM_PROMPT, getSettings, loadChatSettings, parseKnobs } from './db';
 import type { ChatSettings } from './db';
-import { responseLengthRule, type ResponseLength } from '../../src/lib/presets/presetConfig';
+import { parsePresetConfig, responseLengthRule } from '../../src/lib/presets/presetConfig';
 
 /**
  * Effective generation settings for one chat: the chat's preset layered over the global
@@ -36,91 +36,75 @@ export interface EffectiveSettings extends ChatSettings {
   presetPreHistory: string;
 }
 
+/**
+ * The generation settings for one chat.
+ *
+ * ONE owner per fact: a preset carries every generation setting, and `settings` supplies
+ * only what is not generation (the IDR rate used to price a turn). The chat's preset wins
+ * when it has one; otherwise the DEFAULT preset is used; and an install that has never
+ * created a preset still reads its legacy `settings` row, so nothing breaks before the
+ * one-click migration in the settings screen has run.
+ *
+ * The old layering — a preset over a global that was itself half a preset — is what made
+ * "where do I change the system prompt?" unanswerable: both screens had one, and the
+ * global was missing the fields the preset had.
+ */
 export async function loadEffectiveSettings(
   env: Env,
   presetId: string | null,
 ): Promise<EffectiveSettings> {
-  const base = await loadChatSettings(env);
+  const raw = await getSettings(env);
+  const defaultId = (raw.default_preset_id ?? '').trim();
+  const id = (presetId ?? '').trim() || defaultId;
 
-  const effective: EffectiveSettings = {
+  const row = id
+    ? await env.DB.prepare('SELECT knobs_json, config_json FROM presets WHERE id = ?')
+        .bind(id)
+        .first<{ knobs_json: string; config_json: string | null }>()
+    : null;
+
+  const config = row ? parsePresetConfig(row.config_json) : null;
+
+  // Provider and model fall back to the legacy row rather than to null: a preset authored
+  // before these fields existed (or one that only shapes prompts) must not leave the chat
+  // with no model at all.
+  const base: ChatSettings = config
+    ? {
+        provider: config.provider || raw.provider || null,
+        model: config.model || raw.model || null,
+        // The side channel defaults to the pair right above it — a preset that names one
+        // model should not have to name it twice.
+        cheapProvider: config.cheapProvider || config.provider || raw.cheapProvider || raw.provider || null,
+        cheapModel: config.cheapModel || config.model || raw.cheapModel || raw.model || null,
+        // A preset authored before these two moved into it must not silently drop the
+        // reader's own prompt text. Once the preset sets one, the preset wins.
+        systemPrompt: config.systemPrompt || raw.systemPrompt || DEFAULT_SYSTEM_PROMPT,
+        authorsNote: config.authorsNote || raw.authorsNote || '',
+        maxTokens: config.maxTokens ?? 1024,
+        contextBudget: config.contextSize ?? 16384,
+        cheapContextBudget: config.cheapContextBudget ?? 0,
+        knobs: parseKnobs(row?.knobs_json),
+        idrPerUsd: raw.idrPerUsd ? Number(raw.idrPerUsd) : null,
+        loreScanDepth: config.loreScanDepth ?? 4,
+        loreTokenBudget: config.loreTokenBudget ?? 1024,
+        loreRecursive: config.loreRecursive === true,
+        disableReasoning: config.reasoning !== true,
+      }
+    : await loadChatSettings(env);
+
+  return {
     ...base,
-    stopStrings: [],
-    assistantPrefill: '',
-    includeNames: false,
-    responseLengthRule: '',
-    presetPostHistory: '',
-    presetSystemPrompt: '',
-    presetImpersonation: '',
-    presetPreHistory: '',
+    stopStrings: config?.stopStrings ?? [],
+    assistantPrefill: config?.assistantPrefill ?? '',
+    includeNames: config?.includeNames === true,
+    responseLengthRule: config
+      ? responseLengthRule(config.responseLength, config.responseLengthCustom)
+      : '',
+    presetPostHistory: config?.postHistoryInstructions ?? '',
+    presetSystemPrompt: config?.systemPrompt ?? '',
+    presetImpersonation: config?.impersonationPrompt ?? '',
+    presetPreHistory: config?.preHistoryInstructions ?? '',
   };
-
-  if (!presetId) return effective;
-
-  const row = await env.DB.prepare(
-    'SELECT knobs_json, config_json FROM presets WHERE id = ?',
-  )
-    .bind(presetId)
-    .first<{
-      knobs_json: string;
-      config_json: string | null;
-    }>();
-  if (!row) return effective;
-
-  // Sampler knobs from the preset replace the global ones wholesale. Merging them
-  // key-by-key would leave a stale global value in play for any knob the preset omits,
-  // which is rarely what "use this preset" means.
-  try {
-    const knobs = JSON.parse(row.knobs_json) as Record<string, number | string | string[]>;
-    if (knobs && typeof knobs === 'object') effective.knobs = knobs;
-  } catch {
-    // A malformed preset must not break the chat; the global knobs stand.
-  }
-
-  if (row.config_json) {
-    try {
-      const config = JSON.parse(row.config_json) as Record<string, unknown>;
-      // The model is part of the preset, not a separate setting. Sampler values are
-      // per-model, so a preset authored against one model produces different prose on
-      // another — carrying the pair here is what makes "use this preset" a single choice.
-      // Empty means the preset has no opinion, and the chat's own selection stands.
-      if (typeof config.provider === 'string' && config.provider) effective.provider = config.provider;
-      if (typeof config.model === 'string' && config.model) effective.model = config.model;
-      if (typeof config.maxTokens === 'number') effective.maxTokens = config.maxTokens;
-      if (typeof config.contextSize === 'number') effective.contextBudget = config.contextSize;
-      if (typeof config.systemPrompt === 'string') effective.presetSystemPrompt = config.systemPrompt;
-      if (typeof config.postHistoryInstructions === 'string') {
-        effective.presetPostHistory = config.postHistoryInstructions;
-      }
-      if (typeof config.preHistoryInstructions === 'string') {
-        effective.presetPreHistory = config.preHistoryInstructions;
-      }
-      if (typeof config.impersonationPrompt === 'string') {
-        effective.presetImpersonation = config.impersonationPrompt;
-      }
-      if (typeof config.assistantPrefill === 'string') {
-        effective.assistantPrefill = config.assistantPrefill;
-      }
-      if (config.includeNames === true) effective.includeNames = true;
-      if (typeof config.responseLength === 'string') {
-        effective.responseLengthRule = responseLengthRule(
-          config.responseLength as ResponseLength,
-          typeof config.responseLengthCustom === 'string' ? config.responseLengthCustom : '',
-        );
-      }
-      if (Array.isArray(config.stopStrings)) {
-        effective.stopStrings = config.stopStrings.filter(
-          (entry): entry is string => typeof entry === 'string' && entry.length > 0,
-        );
-      }
-      if (typeof config.loreScanDepth === 'number') effective.loreScanDepth = config.loreScanDepth;
-      if (typeof config.loreTokenBudget === 'number') effective.loreTokenBudget = config.loreTokenBudget;
-      if (typeof config.loreRecursive === 'boolean') effective.loreRecursive = config.loreRecursive;
-    } catch {
-      // Same reasoning as the knobs above.
-    }
-  }
-
-  return effective;
 }
 
 /** Re-exported so callers do not need two imports for the common case. */
