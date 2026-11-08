@@ -1,5 +1,13 @@
 import { notFound } from '../http';
-import { assistMemoryRoute, createFact, listMemory, listMemoryJobs, mutateMemory } from '../memory/api';
+import {
+  assistMemoryRoute,
+  compactApplyRoute,
+  compactRoute,
+  createFact,
+  listMemory,
+  listMemoryJobs,
+  mutateMemory,
+} from '../memory/api';
 
 /** `GET /api/chats/:chatId/memory`. */
 export async function memoryRoute(req: Request, env: Env, chatId: string): Promise<Response> {
@@ -31,4 +39,24 @@ export async function memoryAssistRoute(
 ): Promise<Response> {
   if (req.method !== 'POST') return notFound();
   return assistMemoryRoute(env, req, chatId);
+}
+
+/** `POST /api/chats/:chatId/memory/compact` — propose a fact-store cleanup. */
+export async function memoryCompactRoute(
+  req: Request,
+  env: Env,
+  chatId: string,
+): Promise<Response> {
+  if (req.method !== 'POST') return notFound();
+  return compactRoute(env, chatId);
+}
+
+/** `POST /api/chats/:chatId/memory/compact/apply` — apply the reviewed proposal. */
+export async function memoryCompactApplyRoute(
+  req: Request,
+  env: Env,
+  chatId: string,
+): Promise<Response> {
+  if (req.method !== 'POST') return notFound();
+  return compactApplyRoute(env, req, chatId);
 }

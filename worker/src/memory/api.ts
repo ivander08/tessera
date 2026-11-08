@@ -8,6 +8,7 @@ import { renderMemoryBlock } from '../../../src/lib/prompt/memoryBlock';
 import { estimateTokens } from '../../../src/lib/tokenEstimate';
 import type { RecallHit } from '../../../src/lib/memoryTypes';
 import { assistMemory } from './assist';
+import { applyCompaction, parseClientOps, proposeCompaction } from './compact';
 
 /**
  * HTTP surface for the memory viewer (`src/routes/Memory.tsx`).
@@ -357,6 +358,42 @@ export async function assistMemoryRoute(
       instruction: typeof body.instruction === 'string' ? body.instruction : undefined,
     });
     return json({ ok: true, text });
+  } catch (cause) {
+    return json({ error: messageOf(cause) }, 502);
+  }
+}
+
+/**
+ * `POST /api/chats/:chatId/memory/compact` — propose a cleanup of the fact store.
+ *
+ * Reads one batch and writes nothing. The reader sees the diff and applies it; see
+ * `compact.ts` for why the store needs this at all.
+ */
+export async function compactRoute(env: Env, chatId: string): Promise<Response> {
+  const chat = await env.DB.prepare('SELECT id FROM chats WHERE id = ?')
+    .bind(chatId)
+    .first<{ id: string }>();
+  if (!chat) return notFound('chat not found');
+
+  try {
+    return json({ proposal: await proposeCompaction(env, chatId) });
+  } catch (cause) {
+    return json({ error: messageOf(cause) }, 502);
+  }
+}
+
+/** `POST /api/chats/:chatId/memory/compact/apply` — apply a reviewed proposal. */
+export async function compactApplyRoute(
+  env: Env,
+  req: Request,
+  chatId: string,
+): Promise<Response> {
+  const body = await readJson<{ ops?: unknown }>(req);
+  const ops = parseClientOps(body?.ops);
+  if (ops === null) return badRequest('ops must be an array of valid operations');
+
+  try {
+    return json({ ok: true, ...(await applyCompaction(env, chatId, ops)) });
   } catch (cause) {
     return json({ error: messageOf(cause) }, 502);
   }

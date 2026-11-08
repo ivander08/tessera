@@ -161,8 +161,22 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
             )}
             <section className="section">
               <span className="eyebrow">
-                Facts <span className="data">{facts.length}</span>
+                Facts{' '}
+                <span className="data">
+                  {facts.filter((fact) => fact.status === 'active' && fact.deleted === 0).length}
+                </span>{' '}
+                active
+                {facts.some((fact) => fact.status === 'superseded') && (
+                  <>
+                    {' · '}
+                    <span className="data">
+                      {facts.filter((fact) => fact.status === 'superseded').length}
+                    </span>{' '}
+                    superseded
+                  </>
+                )}
               </span>
+              <Compaction chatId={id} facts={facts} onApplied={refresh} />
               <NewFact chatId={id} onCreated={refresh} />
 
               {facts.length === 0 ? (
@@ -1042,5 +1056,167 @@ function MemoryModeSection({ chatId }: { chatId: string }) {
         </>
       )}
     </section>
+  );
+}
+
+interface CompactOp {
+  op: 'merge' | 'rewrite' | 'supersede';
+  ids: string[];
+  text: string;
+  reason: string;
+}
+
+interface CompactProposal {
+  ops: CompactOp[];
+  examined: number;
+  remaining: number;
+}
+
+/**
+ * Fact cleanup, proposed by the cheap model and applied by the reader.
+ *
+ * The store grows because the extractor can only supersede what it is shown, and it is
+ * shown sixty facts. This reads a batch of them, proposes merges and retirements, and
+ * writes nothing until Apply — the same contract as every other destructive action here.
+ *
+ * One batch per press on purpose: every press is one model call, and the reader can see
+ * what it costs (`remaining`) before spending another.
+ */
+function Compaction({
+  chatId,
+  facts,
+  onApplied,
+}: {
+  chatId: string;
+  facts: FactEntry[];
+  onApplied: () => void;
+}) {
+  const [proposal, setProposal] = useState<CompactProposal | null>(null);
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+
+  const byId = new Map(facts.map((fact) => [fact.id, fact.text]));
+
+  async function propose(): Promise<void> {
+    setBusy(true);
+    try {
+      const result = await apiJson<{ proposal: CompactProposal }>(
+        `/api/chats/${encodeURIComponent(chatId)}/memory/compact`,
+        { method: 'POST', body: '{}' },
+      );
+      setProposal(result.proposal);
+      if (result.proposal.ops.length === 0) toast.success('Nothing to clean up in this batch.');
+    } catch (cause) {
+      toast.failure(messageOf(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function apply(): Promise<void> {
+    if (!proposal) return;
+    setBusy(true);
+    try {
+      const result = await apiJson<{ applied: number; skipped: number }>(
+        `/api/chats/${encodeURIComponent(chatId)}/memory/compact/apply`,
+        { method: 'POST', body: JSON.stringify({ ops: proposal.ops }) },
+      );
+      toast.success(
+        result.skipped > 0
+          ? `Applied ${result.applied}; ${result.skipped} skipped (the fact changed since it was read).`
+          : `Applied ${result.applied} change${result.applied === 1 ? '' : 's'}.`,
+      );
+      setProposal(null);
+      onApplied();
+    } catch (cause) {
+      toast.failure(messageOf(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const label = (op: CompactOp): string =>
+    op.op === 'merge'
+      ? `Merge ${op.ids.length} facts`
+      : op.op === 'rewrite'
+        ? 'Rewrite'
+        : 'Retire';
+
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-2" style={{ marginTop: 6 }}>
+        <button
+          type="button"
+          className="btn"
+          disabled={busy || facts.length === 0}
+          onClick={() => void propose()}
+        >
+          {busy ? 'Reading…' : 'Compact'}
+        </button>
+        <span className="form-hint">
+          Merges duplicates and retires facts the story has moved past. Proposes only —
+          nothing changes until you apply it.
+        </span>
+      </div>
+
+      {proposal && (
+        <div className="panel panel-pad" style={{ marginTop: 12 }}>
+          <span className="eyebrow">
+            {proposal.ops.length === 0
+              ? 'No changes proposed'
+              : `${proposal.ops.length} change${proposal.ops.length === 1 ? '' : 's'} proposed`}
+            <span className="form-hint"> · {proposal.examined} facts read</span>
+          </span>
+
+          {proposal.ops.map((op, index) => (
+            <div key={index} className="consult-field">
+              <span className="eyebrow consult-field-label">
+                {label(op)}
+                {op.reason.length > 0 && (
+                  <span className="form-hint" style={{ textTransform: 'none', letterSpacing: 0 }}>
+                    {' '}
+                    — {op.reason}
+                  </span>
+                )}
+              </span>
+              {op.ids.map((id) => (
+                <p key={id} className="consult-before">
+                  {byId.get(id) ?? id}
+                </p>
+              ))}
+              {op.text.length > 0 && <p className="consult-after">{op.text}</p>}
+            </div>
+          ))}
+
+          {proposal.remaining > 0 && (
+            <p className="form-hint" style={{ marginTop: 10 }}>
+              {proposal.remaining} more facts were not read in this pass. Compact again after
+              applying this set.
+            </p>
+          )}
+
+          {proposal.ops.length > 0 && (
+            <div className="flex items-center gap-2" style={{ marginTop: 12 }}>
+              <button
+                type="button"
+                className="btn primary"
+                disabled={busy}
+                onClick={() => void apply()}
+              >
+                {busy ? 'Applying…' : 'Apply'}
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={busy}
+                onClick={() => setProposal(null)}
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </>
   );
 }
