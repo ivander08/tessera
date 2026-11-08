@@ -44,7 +44,7 @@ export interface SceneSetup {
   startDate: string;
   /** Who maintains the world state. */
   stateMode: 'automatic' | 'manual' | 'off';
-  /** Generate time/weather/location/outfits from the greeting when the scene opens. */
+  /** Generate time, place and weather from the greeting when the scene opens. */
   generateOpeningState: boolean;
   /** How the scene is written. */
   craft: Craft;

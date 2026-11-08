@@ -50,19 +50,7 @@ const SYSTEM = [
   '                location, not the weather, and a smell recorded here is carried for the',
   '                rest of the scene. When the scene changes place or moves to another day',
   '                or night, restate "weather" if it would plausibly differ (indoors vs',
-  '                outdoors, midnight vs noon); otherwise leave it alone.',
-  '  "present"    array of character NAMES currently in the scene',
-  '  "away"       object mapping a character name -> where they are instead, for',
-  '                anyone who has left the scene. Use this when someone departs:',
-  '                move them out of "present" and into "away" in the same reply.',
-  '  "conditions" object mapping character name -> short condition, e.g. {"Ada":"bleeding"}.',
-  '                Include only the characters whose condition changed. Set an entry to',
-  '                null to remove it once it no longer applies.',
-  '  "outfits"    object mapping character name -> what they are wearing right now, e.g.',
-  '                {"Sydney":"school uniform, blazer open"}. Include a character only when',
-  '                their clothing is established or changes. Record what the text says:',
-  '                colours, layers, notable items. Do not invent an outfit, and do not',
-  '                restate one that has not changed.{{BONDS_KEY}}{{THREADS_KEY}}',
+  '                outdoors, midnight vs noon); otherwise leave it alone.{{BONDS_KEY}}{{THREADS_KEY}}',
   '',
   'Rules:',
   '- Emit a key ONLY when the exchange actually establishes a new value for it.',
@@ -72,16 +60,6 @@ const SYSTEM = [
   '  that is not yet a departure. If the text is ambiguous, change nothing.',
   '- Never invent names, places, or items that do not appear in the exchange or state.',
   '{{TIME_BULLET}}',
-  '- "present" holds names only. Never put a pronoun or a role there: "me", "you",',
-  '  "the user" and "someone" are not names, and they make the cast list useless.',
-  '- A character cannot be both present and away. Leaving is one change: remove them',
-  '  from "present" and add them to "away". Returning is the reverse.',
-  '- "outfits" is what a character is WEARING, not what they own or what is in the room.',
-  '  A character who changes clothes gets a new entry; one who does not is left alone.',
-  '- "conditions" and "outfits" MERGE with what is already recorded: an entry you do not',
-  '  mention is left exactly as it was, so never restate an unchanged one. To remove an',
-  '  entry, set it to null. To remove the whole field, set the field to null.',
-  '- "present" replaces the previous list entirely when present.',
   '- Reply with the JSON object only. No prose, no explanation, no markdown fence.',
 ].join('\n');
 
@@ -331,7 +309,7 @@ export async function updateState(
 /**
  * The one-shot opening seed.
  *
- * A scene that opens with a time, a place and an outfit already recorded reads correctly
+ * A scene that opens with a time and a place already recorded reads correctly
  * from the first turn instead of the narrator discovering where it is three exchanges in.
  * The greeting is the only text that exists at this point, so it is the only source —
  * which is why the instruction is explicit that anything the greeting does not establish
@@ -396,7 +374,7 @@ export async function seedOpeningState(
 
     // The seed must exist ON the visible path, not only in the live row: every turn reads
     // the path at its anchor, and a seed that lives only in the live document is invisible
-    // to them — the first turn would re-derive time, place and outfit from nothing.
+    // to them — the first turn would re-derive time and place from nothing.
     // The greeting is the anchor every early turn reads back to, so the snapshot goes there.
     if (greetingId) {
       await env.DB.prepare('UPDATE messages SET state_json = ? WHERE id = ?')
@@ -421,8 +399,8 @@ function openingRule(setup: SceneSetup): string {
   const start = setup.startDate.trim();
   return [
     'This is the OPENING of a scene. Nothing has happened yet. Establish the initial "time",',
-    '"location", "weather" and "outfits" that the greeting implies, and leave everything else',
-    'empty. If the greeting does not establish something, omit it rather than inventing it.',
+    '"location" and "weather" that the greeting implies, and leave everything else empty.',
+    'If the greeting does not establish something, omit it rather than inventing it.',
     'Emit "time" as a full date and 24-hour clock reading when the greeting implies one,',
     'including when it only gives a time of day ("late evening" -> 21:00).',
     // The reader's epoch wins over anything the greeting implies: it is a decision they made

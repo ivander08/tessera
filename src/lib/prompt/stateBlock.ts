@@ -8,9 +8,9 @@ import type { WorldState } from '../state/schema';
  *
  *  1. It is DETERMINISTIC. The same state must render byte-for-byte identically every
  *     turn, or the tail churns and (worse) any future move of this block into the head
- *     would silently break caching. Sections are emitted in a fixed order and
- *     `conditions` is sorted, so the order a patch happened to be written in cannot
- *     leak out.
+ *     would silently break caching. Sections are emitted in a fixed order and thread and
+ *     bond lists are sorted, so the order a patch happened to be written in cannot leak
+ *     out.
  *  2. It is BUDGETED. The block competes for tail space with recall results and the
  *     authors note. Over budget it sheds whole sections, lowest value first, rather
  *     than being truncated mid-sentence.
@@ -18,16 +18,7 @@ import type { WorldState } from '../state/schema';
  * Nothing here varies per turn except the state itself: no clock, no ids, no counters.
  */
 
-type SectionKey =
-  | 'time'
-  | 'location'
-  | 'weather'
-  | 'present'
-  | 'away'
-  | 'conditions'
-  | 'outfits'
-  | 'bonds'
-  | 'threads';
+type SectionKey = 'time' | 'location' | 'weather' | 'bonds' | 'threads';
 
 interface Section {
   key: SectionKey;
@@ -35,26 +26,18 @@ interface Section {
 }
 
 /**
- * Shedding order, least valuable first. Time, location and who is present are the
- * facts a scene cannot be written without, so they are the last to go.
+ * Shedding order, least valuable first. Time, location and weather are the facts a scene
+ * cannot be written without, so they are the last to go.
  */
 const DROP_ORDER: SectionKey[] = [
   // Bonds and threads shed first: they are the least load-bearing of the tracked facts —
-  // a scene can be written without either — and they are the newest, so they are the
-  // least proven.
+  // a scene can be written without either — and they are the newest, so the least proven.
   'threads',
   'bonds',
-  'conditions',
-  // Between a condition note and who is present: an outfit is more useful to the
-  // narrator than a condition, less load-bearing than the cast list.
-  'outfits',
-  'away',
   'weather',
-  'present',
   'location',
   'time',
 ];
-
 export const DEFAULT_STATE_BUDGET = 800;
 
 /**
@@ -114,20 +97,6 @@ function collect(state: WorldState, options: { bonds?: boolean; threads?: boolea
   const weather = state.weather?.trim() ?? '';
   add('weather', weather.length > 0 ? `Weather: ${weather}` : '');
 
-  const present = (state.present ?? []).map((entry) => entry.trim()).filter((entry) => entry.length > 0);
-  add('present', present.length > 0 ? `Present: ${present.join(', ')}` : '');
-
-  // Rendered right after `present`, because the two answer the same question — who is in
-  // the room — and a narrator that reads only one of them writes the other person into
-  // the scene. Only characters who are AWAY appear here, so the common case costs nothing.
-  add('away', renderAway(state.away));
-
-  add('conditions', renderConditions(state.conditions));
-
-  // What everyone is wearing. Sits after `conditions` because the two are the same kind
-  // of fact — a short note about a named character — and a narrator reads them together.
-  add('outfits', renderOutfits(state.outfits));
-
   // Bonds and threads are gated on the craft toggle: with the toggle off the engine is not
   // asked to maintain them, so rendering a stale entry would be a fact the reader turned
   // off coming back.
@@ -155,38 +124,8 @@ function collect(state: WorldState, options: { bonds?: boolean; threads?: boolea
   return out;
 }
 
-/** Sorted by name: a record's iteration order is insertion order, which is not stable. */
-function renderAway(away: Record<string, string> | undefined): string {
-  const entries = Object.entries(away ?? {})
-    .map(([name, place]) => [name.trim(), place.trim()] as const)
-    .filter(([name, place]) => name.length > 0 && place.length > 0)
-    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
 
-  if (entries.length === 0) return '';
-  return `Elsewhere: ${entries.map(([name, place]) => `${name} is at ${place}`).join('; ')}`;
-}
 
-/** Sorted by name: a record's iteration order is insertion order, which is not stable. */
-function renderConditions(conditions: Record<string, string> | undefined): string {
-  const entries = Object.entries(conditions ?? {})
-    .map(([name, condition]) => [name.trim(), condition.trim()] as const)
-    .filter(([name, condition]) => name.length > 0 && condition.length > 0)
-    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-
-  if (entries.length === 0) return '';
-  return `Conditions: ${entries.map(([name, condition]) => `${name} (${condition})`).join('; ')}`;
-}
-
-/** Sorted by name, for the same reason as `renderConditions`. */
-function renderOutfits(outfits: Record<string, string> | undefined): string {
-  const entries = Object.entries(outfits ?? {})
-    .map(([name, outfit]) => [name.trim(), outfit.trim()] as const)
-    .filter(([name, outfit]) => name.length > 0 && outfit.length > 0)
-    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-
-  if (entries.length === 0) return '';
-  return `Outfits: ${entries.map(([name, outfit]) => `${name}: ${outfit}`).join('; ')}`;
-}
 
 /**
  * Last resort when a single section alone exceeds the budget — a state so large that

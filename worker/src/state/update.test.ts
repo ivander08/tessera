@@ -109,14 +109,13 @@ describe('updateState: the pace rule', () => {
     expect(system).toContain('ALWAYS emit this key');
     // The vague-time-of-day case, which is what a free-text stored clock needs.
     expect(system).toContain('late evening');
-    // And the schema is unchanged by the pace rule: the same allowed keys are described.
-    expect(system).toContain('"outfits"');
-    expect(system).toContain('"conditions"');
     expect(system).not.toContain('"elapsed"');
-    // The two removed fields are gone from the schema the model is shown, so it is never
-    // asked to fill a field nothing reads and nothing can retire.
-    expect(system).not.toContain('"inventory"');
-    expect(system).not.toContain('"notes"');
+    // The removed fields are gone from the schema the model is shown, so it is never asked
+    // to fill a field nothing reads. Cast, condition and outfit tracking went the same way
+    // as inventory and notes: a second, staler record of what the transcript already says.
+    for (const gone of ['"inventory"', '"notes"', '"present"', '"away"', '"conditions"', '"outfits"']) {
+      expect(system).not.toContain(gone);
+    }
   });
 
   test('the manual prompt never tells the model to record or advance a clock', async () => {
@@ -176,13 +175,13 @@ describe('updateState: the pace rule', () => {
 
   test('stores a valid patch', async () => {
     const { env, db, sent } = makeEnv();
-    stubProvider(sent, '{"location":"the lantern room","outfits":{"Quill":"oilskin coat"}}');
+    stubProvider(sent, '{"location":"the lantern room","weather":"clear"}');
 
     const result = await updateState(env, 'chat-1', { user: 'u', assistant: 'a' }, setupWith('auto'));
     expect(result.applied).toBe(true);
     expect(await loadState(env, 'chat-1')).toEqual({
       location: 'the lantern room',
-      outfits: { Quill: 'oilskin coat' },
+      weather: 'clear',
     });
     expect(db).toBeDefined();
   });
@@ -466,7 +465,7 @@ describe('seedOpeningState', () => {
     stubProvider(
       sent,
       '{"time":"Friday, 27 February 2026, 05:35","location":"the lantern room",' +
-        '"weather":"warm, clear morning","outfits":{"Quill":"oilskin coat, salt-stained"}}',
+        '"weather":"warm, clear morning"}',
     );
 
     const result = await seedOpeningState(
@@ -485,7 +484,6 @@ describe('seedOpeningState', () => {
       time: 'Friday, 27 February 2026, 05:35',
       location: 'the lantern room',
       weather: 'warm, clear morning',
-      outfits: { Quill: 'oilskin coat, salt-stained' },
     });
   });
 

@@ -19,23 +19,10 @@ export function SceneBar({ state, onOpen }: { state: WorldState | undefined; onO
   const time = state?.time?.trim() ?? '';
   const location = state?.location?.trim() ?? '';
   const weather = state?.weather?.trim() ?? '';
-  const present = (state?.present ?? []).filter((name) => name.trim().length > 0);
-  const away = Object.entries(state?.away ?? {}).filter(([who]) => who.trim().length > 0);
 
-  // The reader's own name is not in `present` unless the model put it there, so the cast
-  // line is worth a count rather than a list — the names are in the panel.
-  const castCount = present.length + away.length;
-
-  // Only characters with something recorded count: an entry with an empty value is
-  // dropped at render time, so counting it here would claim a fact the prompt never sees.
-  const outfitCount = Object.values(state?.outfits ?? {}).filter(
-    (outfit) => outfit.trim().length > 0,
-  ).length;
-
-  // An outfit alone is still a recorded scene, so it keeps the strip rather than being
-  // hidden behind "no scene recorded yet" while the state holds a fact.
-  const empty =
-    !time && !location && !weather && present.length === 0 && away.length === 0 && outfitCount === 0;
+  // Where and when are the two facts that orient the reader; the cast and outfit counts
+  // lived here too until those fields were removed from the state document.
+  const empty = !time && !location && !weather;
 
   return (
     <button
@@ -71,17 +58,6 @@ export function SceneBar({ state, onOpen }: { state: WorldState | undefined; onO
 
           <span className="scene-bar-rest">
             {weather && <Rest label="Weather" value={weather} />}
-            {castCount > 0 && (
-              <Rest
-                label={away.length > 0 ? 'Away' : 'Present'}
-                value={
-                  away.length > 0
-                    ? away.map(([who]) => who).join(', ')
-                    : `${present.length} ${present.length === 1 ? 'person' : 'people'}`
-                }
-              />
-            )}
-            {outfitCount > 0 && <Rest label="Outfits" value={`${outfitCount}`} />}
           </span>
 
           <ChevronGlyph />

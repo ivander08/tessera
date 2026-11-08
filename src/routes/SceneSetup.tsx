@@ -204,7 +204,7 @@ export default function SceneSetup() {
                   />
                   <span>
                     <span style={{ color: 'var(--ink)' }}>
-                      Set the opening time, place and outfits from the greeting
+                      Set the opening time, place and weather from the greeting
                     </span>
                     <span className="form-hint" style={{ display: 'block' }}>
                       One call when the scene opens, so the first turn already knows where it is.

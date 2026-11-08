@@ -57,26 +57,6 @@ const GROUPS: Array<{ heading: string; fields: Field[] }> = [
     ],
   },
   {
-    heading: 'Who and what',
-    fields: [
-      { key: 'present', label: 'Present', hint: 'Characters in the scene, one per line.', list: true, placeholder: 'one name per line' },
-      {
-        key: 'outfits',
-        label: 'Outfits',
-        hint: 'Character: what they are wearing. One per line. Deleting a line removes that entry.',
-        map: true,
-        placeholder: 'Name: what they are wearing',
-      },
-      {
-        key: 'conditions',
-        label: 'Conditions',
-        hint: 'Character: short condition — "bleeding", "wet through". Deleting a line removes it.',
-        map: true,
-        placeholder: 'Name: short condition',
-      },
-    ],
-  },
-  {
     heading: 'Relationships and threads',
     fields: [
       {
@@ -151,11 +131,12 @@ export default function State({
   // `structured` live only in this component.
   useUnsavedGuard(Object.keys(edits).length > 0 || Object.keys(structured).length > 0);
 
-  function currentValue(key: keyof WorldState, list?: boolean, map?: boolean): string {
+  function currentValue(key: keyof WorldState, map?: boolean): string {
     if (edits[key] !== undefined) return edits[key];
     const value = state[key];
     if (value === undefined) return '';
-    if (list) return (value as string[]).join('\n');
+    // Only `bonds` and `threads` are maps now; the removed cast fields were the lists.
+    if (typeof value === 'string') return value;
     // Sorted by key, so the textarea is stable across reloads — a record's iteration
     // order is insertion order, which depends on the order patches happened to arrive.
     if (map) {
@@ -400,11 +381,11 @@ export default function State({
                         value={structured.threads ?? state.threads ?? []}
                         onChange={(next) => setStructured({ ...structured, threads: next })}
                       />
-                    ) : field.list || field.map ? (
+                    ) : field.map ? (
                       <textarea
                         className="field"
                         rows={3}
-                        value={currentValue(field.key, field.list, field.map)}
+                        value={currentValue(field.key, field.map)}
                         onChange={(event) =>
                           setEdits({ ...edits, [String(field.key)]: event.target.value })
                         }
@@ -431,24 +412,6 @@ export default function State({
                 ))}
               </section>
             ))}
-
-            {state.away && Object.keys(state.away).length > 0 && (
-              <section className="section">
-                <span className="eyebrow">Elsewhere</span>
-                <div className="panel panel-pad">
-                  {Object.entries(state.away).map(([who, where]) => (
-                    <div key={who} style={{ display: 'flex', gap: 10 }}>
-                      <span style={{ minWidth: 90, color: 'var(--ink)' }}>{who}</span>
-                      <span style={{ color: 'var(--ink-dim)' }}>{where}</span>
-                    </div>
-                  ))}
-                </div>
-                <p className="form-hint" style={{ marginTop: 8 }}>
-                  Characters who have left the scene and where they went. This is what stops the
-                  narrator writing someone into a room they walked out of.
-                </p>
-              </section>
-            )}
 
             <section className="section">
               <span className="eyebrow">As the narrator sees it</span>
@@ -510,7 +473,7 @@ export default function State({
               <ConfirmPrompt
                 title="Clear the world state"
                 message={
-                  "Clear the world state for this chat? Time, place, cast, outfits and threads are removed, and every turn's scene line with them. Nothing brings them back."
+                  "Clear the world state for this chat? Time, place, weather, relationships and threads are removed, and every turn's scene line with them. Nothing brings them back."
                 }
                 confirmLabel="Clear everything"
                 danger

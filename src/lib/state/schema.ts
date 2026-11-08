@@ -17,38 +17,6 @@ export interface WorldState {
   time?: string;
   location?: string;
   weather?: string;
-  /** Characters currently in the scene. */
-  present?: string[];
-  /**
-   * Characters who are NOT where the scene is, and where they are instead.
-   *
-   * `location` is single-valued because a scene has one point of view: the reader is
-   * somewhere, and `present` lists who is there with them. But a story routinely cuts
-   * away — "meanwhile, Ada is still in the courtyard" — and without this the narrator
-   * has no way to know that Ada is not standing in the room, so she keeps being written
-   * into a scene she left.
-   *
-   * Deliberately a map rather than a full location per character: only the characters
-   * who are AWAY need an entry, which keeps the common case (everyone together) at zero
-   * extra tokens. Per-character clocks and timezones are not modelled — a scene that
-   * spans timezones is rare enough that inventing a timezone table would cost every
-   * other scene for it.
-   */
-  away?: Record<string, string>;
-  /** Character name -> short condition, e.g. `{ Ada: 'bleeding' }`. */
-  conditions?: Record<string, string>;
-  /**
-   * Character name -> what they are wearing, e.g.
-   * `{ Sydney: 'school uniform, blazer open' }`.
-   *
-   * A map keyed by name rather than a list, because clothing belongs to a person: a flat
-   * list cannot say whose coat is whose, and "a coat" is not information.
-   *
-   * Like `conditions`, this replaces wholesale rather than merging — the cheap model is
-   * told to include a character only when their clothing is established or changes, and a
-   * merge would make it impossible to clear one.
-   */
-  outfits?: Record<string, string>;
   /**
    * Character-to-character relationship values.
    *
@@ -155,124 +123,21 @@ export function validatePatch(current: WorldState, patch: unknown): ValidationRe
         break;
       }
 
-      case 'present': {
-        if (value === null) {
-          delete next.present;
-          break;
-        }
-        const list = stringList(value);
-        if (!list) {
-          return {
-            ok: false,
-            reason: `"present" must be an array of strings or null, got ${describe(value)}`,
-          };
-        }
-        // Drop role-words rather than rejecting the whole patch: the rest of the
-        // document is usually fine, and a rejected patch means no state advances at all.
-        const names = list.filter((entry) => NOT_A_NAME[entry.trim().toLowerCase()] !== true);
-        if (names.length !== list.length) {
-          console.warn(`[state] dropped non-names from present: ${list.filter((e) => NOT_A_NAME[e.trim().toLowerCase()]).join(', ')}`);
-        }
-        // Someone cannot be both here and away. A model that writes both is confused
-        // about the scene, and the contradiction would render into the prompt as two
-        // facts — so whoever is listed as present wins and their `away` entry is dropped.
-        const away = next.away;
-        if (away && typeof away === 'object' && !Array.isArray(away)) {
-          const remaining: Record<string, string> = {};
-          for (const [who, where] of Object.entries(away)) {
-            if (!names.some((name) => name.toLowerCase() === who.toLowerCase())) {
-              remaining[who] = String(where);
-            }
-          }
-          if (Object.keys(remaining).length > 0) next.away = remaining;
-          else delete next.away;
-        }
-        next.present = names;
-        break;
-      }
-
-      case 'away': {
-        if (value === null) {
-          delete next.away;
-          break;
-        }
-        const map = stringMap(value);
-        if (!map) {
-          return {
-            ok: false,
-            reason: `"away" must be an object of name -> place, or null, got ${describe(value)}`,
-          };
-        }
-        // Same reasoning as `present`: a pronoun is not a character, and "me" is away
-        // from a scene the reader is standing in.
-        const cleaned: Record<string, string> = {};
-        for (const [who, where] of Object.entries(map)) {
-          if (NOT_A_NAME[who.trim().toLowerCase()] === true) continue;
-          if (where.trim().length === 0) continue;
-          cleaned[who] = where;
-        }
-        if (Object.keys(cleaned).length > 0) next.away = cleaned;
-        else delete next.away;
-        break;
-      }
-
       // Removed fields. Ignored so a stored document from before their removal still loads
-      // instead of collapsing to EMPTY_STATE.
+      // instead of collapsing to EMPTY_STATE — the same rule `inventory` and `notes` follow.
       //
-      // The default branch REJECTS an unknown key, and that is right for a model proposing
-      // one. It is wrong here: `loadState` and `loadStateAt` parse a stored document through
-      // this same function, so a legacy row carrying `inventory` or `notes` would fail
-      // validation and be replaced by `{ ...EMPTY_STATE }` — silently wiping the time, place
-      // and cast the reader is still in the middle of. Both keys are ignored rather than
-      // applied, which is the only place a deleted key must not reject.
-      //
-      // `inventory` and `notes` were removed because neither had an owner or a rule for
-      // retirement: an item picked up in one scene was still being injected a week later,
-      // and nothing could ever remove one entry. Measured on the live cheap model, a
-      // fifteen-turn scene accumulated ten inventory items and not one was ever dropped.
+      // `present`, `away`, `conditions` and `outfits` were removed because the cheap model
+      // could not keep them accurate: a cast list missing someone who walked in, an `away`
+      // entry surviving their return, outfits restated from memory rather than the exchange.
+      // The transcript already says who is in the room and what they wear; a second, staler
+      // record of it is worse than none.
+      case 'present':
+      case 'away':
+      case 'conditions':
+      case 'outfits':
       case 'inventory':
       case 'notes':
         continue;
-
-      case 'conditions': {
-        if (value === null) {
-          delete next.conditions;
-          break;
-        }
-        const map = nullableStringMap(value);
-        if (!map) {
-          return {
-            ok: false,
-            reason: `"conditions" must be an object with string values or null, got ${describe(value)}`,
-          };
-        }
-        const merged = mergeNameMap(next.conditions as Record<string, string> | undefined, map);
-        if (Object.keys(merged).length > 0) next.conditions = merged;
-        else delete next.conditions;
-        break;
-      }
-
-      case 'outfits': {
-        if (value === null) {
-          delete next.outfits;
-          break;
-        }
-        // Same shape as `conditions`: an object of names to strings, where an explicit
-        // `null` removes one entry. Empty-string values are KEPT here and dropped at render
-        // time by `renderOutfits`, exactly as `renderAway` and `renderConditions` do —
-        // making the reader drop them would change those two as well.
-        const map = nullableStringMap(value);
-        if (!map) {
-          return {
-            ok: false,
-            reason: `"outfits" must be an object with string values or null, got ${describe(value)}`,
-          };
-        }
-        const merged = mergeNameMap(next.outfits as Record<string, string> | undefined, map);
-        if (Object.keys(merged).length > 0) next.outfits = merged;
-        else delete next.outfits;
-        break;
-      }
 
       case 'bonds': {
         if (value === null) {
@@ -371,45 +236,6 @@ export function validatePatch(current: WorldState, patch: unknown): ValidationRe
     }
   }
 
-  // Last, once every key has been applied: a condition on someone who has LEFT is a
-  // contradiction the document must not carry.
-  //
-  // Measured on a real 157-turn chat: the final state had `present: []` and
-  // `away.Odile = "gone up the market lane"` while `conditions.Odile` still read
-  // "standing in the doorway, ledger under her arm, holding the door open". The narrator
-  // reads both lines in the tail and is told she is simultaneously gone and present.
-  //
-  // The cheap model updates `present`/`away` when someone leaves but has no reason to
-  // revisit their condition, so this cannot be left to the model — it is a structural
-  // inconsistency, and the same class of thing `present` vs `away` already resolves.
-  //
-  // A departure is what makes a condition stale, so the condition is DROPPED rather than
-  // rewritten: guessing what she is doing wherever she went is invention, and an absent
-  // condition is simply less information.
-  const present = new Set((next.present as string[] | undefined)?.map((name) => name.toLowerCase()) ?? []);
-  const awayNames = new Set(Object.keys((next.away as Record<string, string> | undefined) ?? {}).map((name) => name.toLowerCase()));
-  const conditions = next.conditions as Record<string, string> | undefined;
-  if (conditions) {
-    const kept: Record<string, string> = {};
-    let dropped = 0;
-    for (const [who, what] of Object.entries(conditions)) {
-      const key = who.toLowerCase();
-      // Only when the document has actually placed them elsewhere. Someone neither
-      // present nor away is unaccounted for, not gone, and their condition may still be
-      // current.
-      if (awayNames.has(key) && !present.has(key)) {
-        dropped += 1;
-        continue;
-      }
-      kept[who] = what;
-    }
-    if (dropped > 0) {
-      console.warn(`[state] dropped ${dropped} condition(s) for characters who have left`);
-    }
-    if (Object.keys(kept).length > 0) next.conditions = kept;
-    else delete next.conditions;
-  }
-
   return { ok: true, next: next as WorldState };
 }
 
@@ -424,74 +250,6 @@ function sortPair(pair: string): string {
   const parts = pair.split('|').map((part) => part.trim()).filter(Boolean);
   if (parts.length !== 2) return pair.trim();
   return [...parts].sort((a, b) => a.localeCompare(b)).join('|');
-}
-
-function stringList(value: unknown): string[] | null {
-  if (!Array.isArray(value)) return null;
-  for (const entry of value) {
-    if (typeof entry !== 'string') return null;
-  }
-  return value as string[];
-}
-
-function stringMap(value: unknown): Record<string, string> | null {
-  // `asRecord` rejects arrays, so `conditions: []` fails here rather than becoming an
-  // empty object.
-  const record = asRecord(value);
-  if (!record) return null;
-
-  const out: Record<string, string> = {};
-  for (const [key, entry] of Object.entries(record)) {
-    if (typeof entry !== 'string') return null;
-    out[key] = entry;
-  }
-  return out;
-}
-
-/**
- * A name -> string map where an explicit `null` means "this entry is gone".
- *
- * The deletion signal the merge needs. Without it, an entry could only be removed by
- * clearing the whole field, which is what made these maps impossible to maintain.
- */
-function nullableStringMap(value: unknown): Record<string, string | null> | null {
-  const record = asRecord(value);
-  if (!record) return null;
-
-  const out: Record<string, string | null> = {};
-  for (const [key, entry] of Object.entries(record)) {
-    if (entry === null) {
-      out[key] = null;
-      continue;
-    }
-    if (typeof entry !== 'string') return null;
-    out[key] = entry;
-  }
-  return out;
-}
-
-/**
- * Merge a name-keyed map over what is already stored.
- *
- * The prompt tells the model to include an entry only when it CHANGED. Replacing the map
- * wholesale contradicted that instruction: every entry the model correctly declined to
- * restate was deleted. Measured on the live cheap model, three seeded conditions lost two
- * of them inside a single turn, and an off-scene character's entry vanished with no way to
- * tell that it had ever been there.
- *
- * An explicit `null` is the one way to remove an entry, which is what the panel sends when
- * the reader deletes a line.
- */
-function mergeNameMap(
-  current: Record<string, string> | undefined,
-  incoming: Record<string, string | null>,
-): Record<string, string> {
-  const out: Record<string, string> = { ...(current ?? {}) };
-  for (const [key, value] of Object.entries(incoming)) {
-    if (value === null) delete out[key];
-    else out[key] = value;
-  }
-  return out;
 }
 
 /**

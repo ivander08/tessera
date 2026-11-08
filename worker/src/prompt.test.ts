@@ -801,11 +801,11 @@ describe('the world state is read as of the turn, not as of now', () => {
     const chat = seedChat(db, 0);
     const seqs = seedChain(db, 4);
 
-    // The state as of the turn BEFORE the reply being re-rolled: Sydney is in the gym.
-    snapshot(db, 'm0', JSON.stringify({ location: 'the gym', present: ['Sydney', 'Ivander'] }));
+    // The state as of the turn BEFORE the reply being re-rolled: the scene is in the gym.
+    snapshot(db, 'm0', JSON.stringify({ location: 'the gym' }));
     // The turn being re-rolled is what produced "she left". Its own snapshot carries that.
-    snapshot(db, 'm1', JSON.stringify({ location: 'the gym', away: { Sydney: 'down the hall' } }));
-    setState(db, JSON.stringify({ location: 'the hall', away: { Sydney: 'down the hall' } }));
+    snapshot(db, 'm1', JSON.stringify({ location: 'down the hall' }));
+    setState(db, JSON.stringify({ location: 'the hall' }));
 
     // Re-roll the reply at m1.
     const prompt = await buildPrompt(env, chat, settings(8000), {
@@ -817,8 +817,8 @@ describe('the world state is read as of the turn, not as of now', () => {
     });
 
     const text = stateOf(prompt);
-    // The state before that turn: she is present, and NOT recorded as having left.
-    expect(text).toContain('Sydney');
+    // The state before that turn: the gym, and NOT where that turn moved her.
+    expect(text).toContain('the gym');
     expect(text).not.toContain('down the hall');
   });
 
@@ -830,7 +830,7 @@ describe('the world state is read as of the turn, not as of now', () => {
     const chat = seedChat(db, 0);
     const seqs = seedChain(db, 4);
 
-    snapshot(db, 'm1', JSON.stringify({ away: { Sydney: 'down the hall' } }));
+    snapshot(db, 'm1', JSON.stringify({ location: 'down the hall' }));
 
     const prompt = await buildPrompt(env, chat, settings(8000), {
       mode: 'regenerate',
@@ -851,8 +851,8 @@ describe('the world state is read as of the turn, not as of now', () => {
     const chat = seedChat(db, 0);
     seedChain(db, 4);
 
-    snapshot(db, 'm0', JSON.stringify({ location: 'the gym', present: ['Sydney'] }));
-    setState(db, JSON.stringify({ location: 'the hall', away: { Sydney: 'the gym' } }));
+    snapshot(db, 'm0', JSON.stringify({ location: 'the gym' }));
+    setState(db, JSON.stringify({ location: 'the hall' }));
 
     const prompt = await buildPrompt(env, chat, settings(8000), {
       mode: 'send',
