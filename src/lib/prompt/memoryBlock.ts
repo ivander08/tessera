@@ -127,3 +127,31 @@ function compose(sections: Array<{ heading: string; lines: string[] }>): string 
   }
   return parts.join('\n\n');
 }
+
+/**
+ * The reader's own memory, as one tail block.
+ *
+ * No sections, no dates, no ranking: the box is prose the reader wrote for the narrator to
+ * read. It is headed ("Memory notes:") so the model can tell it from the scene and from
+ * the world state around it, and otherwise passed through unchanged.
+ *
+ * Over budget it sheds from the START — the oldest lines go first. The automatic block
+ * sheds its weakest results; a box has no ranking, so recency is the only honest order,
+ * and a reader appending "today she finally said it" must not have that line cut.
+ */
+export function renderMemoryBox(
+  text: string,
+  maxTokens: number,
+  count: (text: string) => number,
+): string {
+  const heading = 'Memory notes:';
+  let lines = text.trim().split('\n');
+  if (lines.length === 0 || (lines.length === 1 && lines[0].trim().length === 0)) return '';
+
+  let out = `${heading}\n${lines.join('\n')}`;
+  while (lines.length > 1 && count(out) > maxTokens) {
+    lines = lines.slice(1);
+    out = `${heading}\n${lines.join('\n')}`;
+  }
+  return out;
+}

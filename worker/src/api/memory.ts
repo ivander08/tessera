@@ -1,5 +1,5 @@
 import { notFound } from '../http';
-import { createFact, listMemory, listMemoryJobs, mutateMemory } from '../memory/api';
+import { assistMemoryRoute, createFact, listMemory, listMemoryJobs, mutateMemory } from '../memory/api';
 
 /** `GET /api/chats/:chatId/memory`. */
 export async function memoryRoute(req: Request, env: Env, chatId: string): Promise<Response> {
@@ -21,4 +21,14 @@ export async function factRoute(req: Request, env: Env): Promise<Response> {
 /** `PATCH`/`DELETE /api/memory/(facts|summaries)/:id`. */
 export async function memoryEntryRoute(req: Request, env: Env, kind: string, id: string): Promise<Response> {
   return mutateMemory(env, req, kind, id);
+}
+
+/** `POST /api/chats/:chatId/memory/assist` — the memory box's AI helper. */
+export async function memoryAssistRoute(
+  req: Request,
+  env: Env,
+  chatId: string,
+): Promise<Response> {
+  if (req.method !== 'POST') return notFound();
+  return assistMemoryRoute(env, req, chatId);
 }

@@ -23,6 +23,8 @@ describe('parseSceneSetup', () => {
       timePace: 'manual',
       startDate: '',
       stateMode: 'off',
+      memoryMode: 'box',
+      memoryBox: 'Sydney is dying.\nShe has not said it yet.',
       generateOpeningState: false,
       craft: DEFAULT_CRAFT,
     };
@@ -74,6 +76,8 @@ describe('parseSceneSetup', () => {
       timePace: 'manual',
       startDate: '',
       stateMode: 'manual',
+      memoryMode: 'box',
+      memoryBox: 'stored notes',
       generateOpeningState: false,
       craft: DEFAULT_CRAFT,
     };
@@ -118,6 +122,8 @@ describe('parseSceneSetup — craft', () => {
       timePace: 'manual',
       startDate: 'Wednesday, 14 April 2026',
       stateMode: 'manual',
+      memoryMode: 'box',
+      memoryBox: '- Sydney is dying\n- She has not said it yet',
       generateOpeningState: false,
       craft: {
         contentPolicy: false,

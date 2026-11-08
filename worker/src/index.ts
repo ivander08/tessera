@@ -33,7 +33,7 @@ import { chatsRoute } from './api/chats';
 import { evalJudgeRoute } from './api/eval';
 import { exportRoute } from './api/export';
 import { forgeRoute } from './api/forge';
-import { factRoute, memoryEntryRoute, memoryJobsRoute, memoryRoute } from './api/memory';
+import { factRoute, memoryAssistRoute, memoryEntryRoute, memoryJobsRoute, memoryRoute } from './api/memory';
 import { sceneRoute } from './api/scene';
 import { searchRoute } from './api/search';
 import {
@@ -196,6 +196,9 @@ async function route(req: Request, env: Env, url: URL, ctx: ExecutionContext): P
 
   const memoryJobsMatch = /^\/api\/chats\/([^/]+)\/memory\/jobs$/.exec(path);
   if (memoryJobsMatch) return memoryJobsRoute(req, env, decodeURIComponent(memoryJobsMatch[1]));
+
+  const memoryAssistMatch = /^\/api\/chats\/([^/]+)\/memory\/assist$/.exec(path);
+  if (memoryAssistMatch) return memoryAssistRoute(req, env, decodeURIComponent(memoryAssistMatch[1]));
 
   if (path === '/api/memory/facts' && method === 'POST') return factRoute(req, env);
 

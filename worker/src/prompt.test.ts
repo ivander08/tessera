@@ -928,3 +928,72 @@ describe('the world state is read as of the turn, not as of now', () => {
     expect(stateOf(prompt)).toContain('the hall');
   });
 });
+
+describe('buildPrompt — the memory box', () => {
+  // The box is the alternative to the whole memory engine: the reader's own text is what
+  // the narrator remembers. It must REPLACE the facts/summaries, not sit beside them, or
+  // the reader would be maintaining a second record that competes with the automatic one.
+  function setSetup(db: Database, setup: Record<string, unknown>): void {
+    exec(
+      db,
+      `INSERT INTO chat_scene_setup (chat_id, json, updated_at) VALUES (?, ?, 0)
+       ON CONFLICT(chat_id) DO UPDATE SET json = excluded.json`,
+      CHAT_ID,
+      JSON.stringify(setup),
+    );
+  }
+
+  test('a box chat reads the box and nothing from the engine', async () => {
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    seedChain(db, 4);
+    // A fact the automatic engine would have recalled for this query.
+    exec(
+      db,
+      `INSERT INTO facts (id, chat_id, text, status, pinned, created_at)
+       VALUES ('f1', ?, 'The lighthouse is red.', 'active', 1, 0)`,
+      CHAT_ID,
+    );
+    setSetup(db, { memoryMode: 'box', memoryBox: 'Sydney is dying. She has not said it yet.' });
+
+    const prompt = await buildPrompt(env, chat, settings(8000), {
+      mode: 'send',
+      historyCutoff: null,
+      statePoint: { seq: null, inclusive: true },
+      userContent: 'The lighthouse is red, you said?',
+      tailExtra: '',
+    });
+
+    const text = prompt.messages.map((message) => message.content).join('\n');
+    expect(text).toContain('Memory notes:');
+    expect(text).toContain('Sydney is dying.');
+    expect(text).not.toContain('Established facts');
+    expect(text).not.toContain('The lighthouse is red.');
+  });
+
+  test('an auto chat still reads the engine', async () => {
+    // The other side of the switch, so a regression that ignores the mode is visible.
+    const { db, env } = makeEnv();
+    const chat = seedChat(db, 0);
+    seedChain(db, 4);
+    exec(
+      db,
+      `INSERT INTO facts (id, chat_id, text, status, pinned, created_at)
+       VALUES ('f1', ?, 'The lighthouse is red.', 'active', 1, 0)`,
+      CHAT_ID,
+    );
+    setSetup(db, { memoryMode: 'auto' });
+
+    const prompt = await buildPrompt(env, chat, settings(8000), {
+      mode: 'send',
+      historyCutoff: null,
+      statePoint: { seq: null, inclusive: true },
+      userContent: 'The lighthouse is red, you said?',
+      tailExtra: '',
+    });
+
+    const text = prompt.messages.map((message) => message.content).join('\n');
+    expect(text).toContain('Established facts');
+    expect(text).not.toContain('Memory notes:');
+  });
+});

@@ -7,6 +7,7 @@ import { VISIBLE_PATH_SEQ_CTE } from '../branch';
 import { renderMemoryBlock } from '../../../src/lib/prompt/memoryBlock';
 import { estimateTokens } from '../../../src/lib/tokenEstimate';
 import type { RecallHit } from '../../../src/lib/memoryTypes';
+import { assistMemory } from './assist';
 
 /**
  * HTTP surface for the memory viewer (`src/routes/Memory.tsx`).
@@ -329,4 +330,34 @@ export async function mutateMemory(
     .bind(...values)
     .run();
   return json({ ok: true });
+}
+
+/**
+ * `POST /api/chats/:chatId/memory/assist` — rewrite the reader's memory box.
+ *
+ * Returns the proposed text and writes nothing. The reader sees it in the textarea and
+ * decides; see `assist.ts` for why the helper never edits on its own.
+ */
+export async function assistMemoryRoute(
+  env: Env,
+  req: Request,
+  chatId: string,
+): Promise<Response> {
+  const body = await readJson<{ text?: unknown; action?: unknown; instruction?: unknown }>(req);
+  const action = body?.action;
+  if (action !== 'tidy' && action !== 'compact' && action !== 'expand' && action !== 'custom') {
+    return badRequest('action must be tidy, compact, expand or custom');
+  }
+  if (typeof body?.text !== 'string') return badRequest('text required');
+
+  try {
+    const text = await assistMemory(env, chatId, {
+      text: body.text,
+      action,
+      instruction: typeof body.instruction === 'string' ? body.instruction : undefined,
+    });
+    return json({ ok: true, text });
+  } catch (cause) {
+    return json({ error: messageOf(cause) }, 502);
+  }
 }

@@ -7,6 +7,7 @@ import { ConfirmPrompt } from '../components/ConfirmPrompt';
 import { useToast } from '../components/Toast';
 import { summaryDateSpan } from '../lib/prompt/memoryBlock';
 import type { RecallHit } from '../lib/memoryTypes';
+import type { SceneSetup } from '../lib/scene/setup';
 
 /**
  * Memory viewer: read, edit, pin and delete what the chat remembers.
@@ -87,6 +88,14 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
         ? `Last extraction failed${job.attempts > 1 ? ` after ${job.attempts} attempts` : ''}: ${job.error ?? 'no reason recorded'}`
         : 'Extracting…';
 
+  // The mode lives in the chat's scene setup. Read here as well as in the section below,
+  // because this screen has to say plainly that the lists are paused when it is on.
+  const scene = useAsync(
+    () => apiJson<{ setup: SceneSetup }>(`/api/chats/${encodeURIComponent(id)}/scene`),
+    [id],
+  );
+  const memoryMode = scene.data?.setup.memoryMode ?? 'auto';
+
   const toast = useToast();
   // A delete here is permanent — the transcript is untouched, but the row and its recall
   // index entry are gone — so every one of the four kinds asks first.
@@ -140,8 +149,16 @@ export default function Memory({ embedded = false }: { embedded?: boolean } = {}
 
       {loading && <p className="sheet-sub">Loading…</p>}
         {error && <div className="note danger">{error}</div>}
+        <MemoryModeSection chatId={id} />
+
         {data && (
           <>
+            {memoryMode === 'box' && (
+              <p className="note" style={{ marginTop: 0 }}>
+                The memory engine is paused for this chat. What you see below is kept, but the
+                narrator is sent only your memory notes.
+              </p>
+            )}
             <section className="section">
               <span className="eyebrow">
                 Facts <span className="data">{facts.length}</span>
@@ -858,5 +875,172 @@ function NewFact({
         </p>
       )}
     </form>
+  );
+}
+
+/**
+ * The memory box: the alternative to the whole engine.
+ *
+ * A reader who does not want extracted facts, summaries and recall can switch this chat to
+ * a single block of their own text. It is sent verbatim in the prompt tail, so it is the
+ * whole memory — not a supplement to a machine record they cannot see.
+ *
+ * The switch applies immediately (it is a choice about how the chat works, not a form
+ * field), and the box saves explicitly: text typed into a memory is worth more than a
+ * keystroke-level autosave. The helper buttons propose a rewrite; they never apply one.
+ */
+function MemoryModeSection({ chatId }: { chatId: string }) {
+  const { data, error, loading, reload } = useAsync(
+    () => apiJson<{ setup: SceneSetup }>(`/api/chats/${encodeURIComponent(chatId)}/scene`),
+    [chatId],
+  );
+  const [mode, setMode] = useState<SceneSetup['memoryMode']>('auto');
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [assisting, setAssisting] = useState<'tidy' | 'compact' | 'expand' | null>(null);
+  const toast = useToast();
+
+  // Seed from the stored setup once it arrives. Keyed on the object, not on each keystroke:
+  // typing does not change `data`, so an edit in progress is never clobbered.
+  useEffect(() => {
+    if (!data) return;
+    setMode(data.setup.memoryMode);
+    setText(data.setup.memoryBox);
+  }, [data]);
+
+  async function patch(body: Record<string, unknown>, done: string): Promise<void> {
+    setBusy(true);
+    try {
+      await apiJson(`/api/chats/${encodeURIComponent(chatId)}/scene`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      });
+      toast.success(done);
+      reload();
+    } catch (cause) {
+      toast.failure(messageOf(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function assist(action: 'tidy' | 'compact' | 'expand'): Promise<void> {
+    setAssisting(action);
+    try {
+      const result = await apiJson<{ ok: boolean; text: string }>(
+        `/api/chats/${encodeURIComponent(chatId)}/memory/assist`,
+        { method: 'POST', body: JSON.stringify({ text, action }) },
+      );
+      // Into the box, not into the database: the reader reviews, then saves.
+      setText(result.text);
+      toast.success('Proposed — review it, then Save.');
+    } catch (cause) {
+      toast.failure(messageOf(cause));
+    } finally {
+      setAssisting(null);
+    }
+  }
+
+  if (loading) return null;
+  if (error) {
+    return (
+      <section className="section">
+        <span className="eyebrow">Memory mode</span>
+        <p className="note danger">{error}</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="section">
+      <span className="eyebrow">Memory mode</span>
+      <div className="field-list two items-end">
+        <label className="block" htmlFor="memory-mode">
+          <span className="form-label">
+            <span>How this chat remembers</span>
+          </span>
+          <select
+            id="memory-mode"
+            className="field"
+            value={mode}
+            disabled={busy}
+            onChange={(event) => {
+              const next = event.target.value as SceneSetup['memoryMode'];
+              setMode(next);
+              void patch(
+                { memoryMode: next },
+                next === 'box'
+                  ? 'Memory box on — the engine is paused for this chat.'
+                  : 'Automatic memory on.',
+              );
+            }}
+          >
+            <option value="auto">Automatic — scene summaries and extracted facts</option>
+            <option value="box">Memory box — my own notes, nothing else</option>
+          </select>
+        </label>
+      </div>
+
+      {mode === 'box' && (
+        <>
+          <label className="block" htmlFor="memory-box" style={{ marginTop: 14 }}>
+            <span className="form-label">
+              <span>Your notes</span>
+              <span className="form-hint">
+                Sent to the narrator word for word, in the prompt tail. Headings, bullets, a
+                paragraph — anything you would say to a co-writer. Oldest lines are the first
+                to be dropped if it outgrows the memory budget.
+              </span>
+            </span>
+            <textarea
+              id="memory-box"
+              className="field"
+              rows={10}
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+              placeholder={'Sydney is dying. She has not said it yet.\nHer mother does not know.'}
+            />
+          </label>
+
+          <div className="flex flex-wrap items-center gap-2" style={{ marginTop: 10 }}>
+            <button
+              type="button"
+              className="btn primary"
+              disabled={busy || assisting !== null}
+              onClick={() => void patch({ memoryBox: text }, 'Memory notes saved.')}
+            >
+              {busy ? 'Saving…' : 'Save notes'}
+            </button>
+            {(['tidy', 'compact', 'expand'] as const).map((action) => (
+              <button
+                key={action}
+                type="button"
+                className="btn"
+                disabled={busy || assisting !== null}
+                title={
+                  action === 'tidy'
+                    ? 'Reorganise the same facts so they read at a glance.'
+                    : action === 'compact'
+                      ? 'Shorten without losing what still matters.'
+                      : 'Add what the recent transcript establishes.'
+                }
+                onClick={() => void assist(action)}
+              >
+                {assisting === action
+                  ? 'Working…'
+                  : action === 'tidy'
+                    ? 'Tidy'
+                    : action === 'compact'
+                      ? 'Compact'
+                      : 'Add from the scene'}
+              </button>
+            ))}
+          </div>
+          <p className="form-hint" style={{ marginTop: 8 }}>
+            The helpers propose a rewrite in the box; nothing is saved until you press Save.
+          </p>
+        </>
+      )}
+    </section>
   );
 }

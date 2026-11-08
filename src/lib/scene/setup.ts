@@ -44,6 +44,27 @@ export interface SceneSetup {
   startDate: string;
   /** Who maintains the world state. */
   stateMode: 'automatic' | 'manual' | 'off';
+  /**
+   * Where the prompt's memory comes from.
+   *
+   * `auto` is the memory engine: scene summaries, extracted facts, recalled messages.
+   * `box` is a single block of text the reader writes and maintains, sent verbatim in the
+   * tail. The box exists because the engine is a lot of machinery to accept wholesale:
+   * a reader who wants "Sydney's mother is dying, she has not said it yet" in the prompt
+   * should not have to wait for an extractor to distil it, nor trust one that got it wrong.
+   *
+   * Under `box` nothing is extracted, summarised or recalled — the reader's text is the
+   * memory. The AI helper can rewrite it, but only at the reader's request.
+   */
+  memoryMode: 'auto' | 'box';
+  /**
+   * The reader's own memory text, sent verbatim when `memoryMode` is `box`.
+   *
+   * Free text on purpose: headings, bullets, a paragraph, a list of rules — the narrator
+   * reads it as one system message and needs no schema. Kept under the same tail budget as
+   * the automatic block, oldest lines shed first.
+   */
+  memoryBox: string;
   /** Generate time, place and weather from the greeting when the scene opens. */
   generateOpeningState: boolean;
   /** How the scene is written. */
@@ -211,6 +232,8 @@ export const DEFAULT_SCENE_SETUP: SceneSetup = {
   // fact in every existing chat to a day the story never mentioned.
   startDate: '',
   stateMode: 'automatic',
+  memoryMode: 'auto',
+  memoryBox: '',
   generateOpeningState: true,
   craft: DEFAULT_CRAFT,
 };
@@ -1226,6 +1249,8 @@ export function parseSceneSetup(
 
   const timePace = record.timePace;
   const stateMode = record.stateMode;
+  const memoryMode = record.memoryMode;
+  const memoryBox = record.memoryBox;
   const generateOpeningState = record.generateOpeningState;
   const startDate = record.startDate;
 
@@ -1241,6 +1266,10 @@ export function parseSceneSetup(
       typeof stateMode === 'string' && STATE_MODES.has(stateMode)
         ? (stateMode as SceneSetup['stateMode'])
         : fallback.stateMode,
+    memoryMode: memoryMode === 'box' || memoryMode === 'auto' ? memoryMode : fallback.memoryMode,
+    // Free text, kept exactly as written apart from surrounding whitespace: an empty
+    // string is a real value ("the reader cleared the box"), never a fallback.
+    memoryBox: typeof memoryBox === 'string' ? memoryBox : fallback.memoryBox,
     generateOpeningState:
       typeof generateOpeningState === 'boolean'
         ? generateOpeningState

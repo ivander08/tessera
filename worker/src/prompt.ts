@@ -8,7 +8,7 @@ import { computeWindowStart } from '../../src/lib/prompt/window';
 import { estimateChatTokens, estimateTokens, applyCalibration } from '../../src/lib/tokenEstimate';
 import { alwaysOnLore, matchLore, parseLorebook } from '../../src/lib/cards/lorebook';
 import type { CharacterCardJson } from '../../src/lib/cards/types';
-import { renderMemoryBlock } from '../../src/lib/prompt/memoryBlock';
+import { renderMemoryBlock, renderMemoryBox } from '../../src/lib/prompt/memoryBlock';
 import { dynamicMacrosIn, substituteHead, substituteTail } from '../../src/lib/prompt/macros';
 import { renderStateBlock } from '../../src/lib/prompt/stateBlock';
 import {
@@ -22,6 +22,7 @@ import { summaryDateSpan } from '../../src/lib/prompt/memoryBlock';
 import { loadStateForTurn } from './state/update';
 import type { StatePoint } from './turn';
 import { loadSceneSetup } from './scene';
+import type { SceneSetup } from '../../src/lib/scene/setup';
 import { loadPathTail, VISIBLE_PATH_SEQ_CTE, type BranchRow } from './branch';
 import { loadCast, type CastRow } from './cast';
 import { asNumber } from '../../src/lib/json';
@@ -291,6 +292,7 @@ export async function buildPrompt(
       calibration,
       settings.contextBudget,
       options.statePoint.seq,
+      setup,
     ),
     buildStateBlock(env, chat.id, calibration, options.statePoint, {
       bonds: setup.craft.bonds,
@@ -669,7 +671,18 @@ async function buildMemoryBlock(
   calibration: number,
   contextBudget: number,
   beforeSeq: number | null,
+  setup: SceneSetup,
 ): Promise<string> {
+  // The memory box replaces the engine outright: no summaries, no facts, no recall. The
+  // reader's own text is what the narrator remembers.
+  if (setup.memoryMode === 'box') {
+    return renderMemoryBox(
+      setup.memoryBox,
+      Math.round(memoryBlockTokens(contextBudget) * calibration),
+      estimateTokens,
+    );
+  }
+
   try {
     const [hits, summaries] = await Promise.all([
       recall(env, chatId, query, 8, beforeSeq),

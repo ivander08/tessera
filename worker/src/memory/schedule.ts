@@ -4,6 +4,7 @@ import { summarize } from './summarize';
 import { extractFacts } from './extract';
 import { consolidate, SCENES_PER_ARC } from './consolidate';
 import { loadCheapModel } from '../cheap';
+import { loadSceneSetup } from '../scene';
 
 /**
  * Memory maintenance: the wiring that makes summarization actually happen.
@@ -32,6 +33,10 @@ export const SUMMARY_EVERY = 20;
  */
 export async function scheduleMemory(env: Env, chatId: string): Promise<void> {
   try {
+    // A chat on the memory box writes nothing for the engine to work on. Checked before the
+    // cheap-model guard so a box-mode chat costs no provider read either.
+    if ((await loadSceneSetup(env, chatId)).memoryMode === 'box') return;
+
     // No cheap model means no summarization. Bailing here rather than inside the job
     // keeps a failing job out of the queue entirely.
     if (!(await loadCheapModel(env))) return;

@@ -102,6 +102,8 @@ describe('scene setup: writing', () => {
       timePace: 'manual',
       startDate: DEFAULT_SCENE_SETUP.startDate,
       stateMode: 'off',
+      memoryMode: DEFAULT_SCENE_SETUP.memoryMode,
+      memoryBox: DEFAULT_SCENE_SETUP.memoryBox,
       generateOpeningState: DEFAULT_SCENE_SETUP.generateOpeningState,
       craft: DEFAULT_SCENE_SETUP.craft,
     });

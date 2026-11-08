@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { renderMemoryBlock } from './memoryBlock';
+import { renderMemoryBlock, renderMemoryBox } from './memoryBlock';
 import type { RecallHit } from '../memoryTypes';
 
 const count = (text: string): number => text.length; // 1 char ≈ 1 token keeps budgets legible
@@ -192,5 +192,34 @@ describe('renderMemoryBlock', () => {
     );
     expect(block).not.toContain('A long summary line');
     expect(block).toContain('- A long earlier moment line.');
+  });
+});
+
+describe('renderMemoryBox', () => {
+  // The box is the reader's own text, so the contract is: pass it through, heading it so
+  // the narrator can tell it from the scene, and never invent or reorder anything.
+  test('heads the text and passes it through unchanged', () => {
+    const text = '- Sydney is dying.\n- She has not said it yet.';
+    expect(renderMemoryBox(text, 1000, count)).toBe(`Memory notes:\n${text}`);
+  });
+
+  test('an empty or whitespace-only box renders nothing', () => {
+    // Empty means "no memory block", not "a block with a bare heading" — the latter is
+    // noise the model has to read and discard on every turn.
+    expect(renderMemoryBox('', 1000, count)).toBe('');
+    expect(renderMemoryBox('   \n\n ', 1000, count)).toBe('');
+  });
+
+  test('over budget it sheds the OLDEST lines, keeping the newest', () => {
+    // The automatic block sheds its weakest results; a box has no ranking, so recency is
+    // the honest order. A reader appending "today she finally said it" must not lose it.
+    const text = 'old line one\nold line two\nnew line';
+    const budget = 'Memory notes:\nnew line'.length;
+    const rendered = renderMemoryBox(text, budget, count);
+    expect(rendered).toBe('Memory notes:\nnew line');
+  });
+
+  test('it never returns an empty block while a line remains', () => {
+    expect(renderMemoryBox('a\nb', 1, count)).toBe('Memory notes:\nb');
   });
 });
