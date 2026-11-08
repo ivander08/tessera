@@ -34,7 +34,7 @@ export interface CompactProposal {
 }
 
 /** How many facts one pass reads. A batch the cheap model can hold without losing the list. */
-export const COMPACT_BATCH = 120;
+export const COMPACT_BATCH = 80;
 
 const SYSTEM = [
   'You maintain a memory store for a long roleplay. Each entry is one fact the narrator',
@@ -89,31 +89,99 @@ export async function proposeCompaction(
     .all<{ id: string; text: string }>();
 
   const examined = results.slice(0, batch);
-  const remaining = Math.max(0, results.length - batch);
   if (examined.length === 0) return { ops: [], examined: 0, remaining: 0 };
 
-  const list = examined.map((row, index) => `${index + 1}. ${row.text}`).join('\n');
+  // Two attempts: the batch as asked for, then a short one. A long batch produces a long
+  // answer, and a cheap model asked for thirty merges can run past its output cap mid-JSON
+  // — measured on the live chat, which failed at 120 facts. The short retry is the same
+  // question over fewer rows, which is cheap and usually enough to get a usable pass.
+  const attempts = [examined, examined.slice(0, 40)];
+  let reason = 'the compaction reply was not JSON';
 
-  const reply = await complete(env, {
-    system: SYSTEM,
-    user: [
-      `The batch, ${examined.length} entries. The ids are the line numbers:`,
-      list,
-      '',
-      'Reply with the JSON object only.',
-    ].join('\n'),
-    maxTokens: 1500,
-    json: true,
-  });
+  for (const rows of attempts) {
+    const reply = await complete(env, {
+      system: SYSTEM,
+      user: [
+        `The batch, ${rows.length} entries. The ids are the line numbers:`,
+        rows.map((row, index) => `${index + 1}. ${row.text}`).join('\n'),
+        '',
+        'Reply with the JSON object only.',
+      ].join('\n'),
+      maxTokens: 2400,
+      json: true,
+    });
 
-  let parsed: unknown;
-  try {
-    parsed = parseJsonReply<unknown>(reply.text);
-  } catch {
-    throw new Error('the compaction reply was not JSON');
+    try {
+      const parsed = parseOpsReply(reply.text);
+      return {
+        ops: readOps(parsed, rows.map((row) => row.id)),
+        examined: rows.length,
+        remaining: Math.max(0, results.length - rows.length),
+      };
+    } catch {
+      reason =
+        reply.finishReason === 'length'
+          ? 'the reply ran out of output budget before it finished'
+          : 'the reply was not JSON';
+    }
   }
 
-  return { ops: readOps(parsed, examined.map((row) => row.id)), examined: examined.length, remaining };
+  throw new Error(reason);
+}
+
+/**
+ * The reply as a parsed value.
+ *
+ * Two tolerances the strict parse does not have, both measured habits of the cheap model:
+ * prose before or after the object, and a fence it was told not to add. A balanced `{…}`
+ * is tried at each opening brace, tracking strings and escapes so a brace inside a `text`
+ * field is not counted as structure.
+ */
+function parseOpsReply(text: string): unknown {
+  try {
+    return parseJsonReply<unknown>(text);
+  } catch {
+    // fall through to the scan
+  }
+
+  const trimmed = text.trim();
+  for (let start = trimmed.indexOf('{'); start >= 0; start = trimmed.indexOf('{', start + 1)) {
+    const end = balancedEnd(trimmed, start);
+    if (end === null) break;
+    try {
+      return JSON.parse(trimmed.slice(start, end));
+    } catch {
+      // try the next opening brace
+    }
+  }
+  throw new Error('not JSON');
+}
+
+/** The index just past the first balanced `{…}` starting at `start`, or null. */
+function balancedEnd(text: string, start: number): number | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let at = start; at < text.length; at++) {
+    const char = text[at];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === '{') depth++;
+    else if (char === '}') {
+      depth--;
+      if (depth === 0) return at + 1;
+    }
+  }
+  return null;
 }
 
 /**

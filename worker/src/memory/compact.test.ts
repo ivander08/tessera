@@ -131,6 +131,40 @@ describe('proposeCompaction', () => {
     expect(proposal.remaining).toBe(1);
   });
 
+  test('reads a reply wrapped in prose, and one cut off at the cap', async () => {
+    // Measured on the live chat: the cheap model prefixed the JSON with a sentence and,
+    // at 120 facts, ran past its output cap mid-object. Neither is a reason to lose the
+    // proposal — and the short retry is why the button works at all on a big store.
+    const { env, db } = makeEnv();
+    fact(db, 'f1', 'a', 1);
+    fact(db, 'f2', 'b', 2);
+
+    stubProvider(
+      'Here is the cleanup:\n{"ops":[{"op":"merge","ids":[1,2],"text":"a and b","reason":"dup"}]}\nDone.',
+    );
+    const wrapped = await proposeCompaction(env, 'chat-1');
+    expect(wrapped.ops).toHaveLength(1);
+    expect(wrapped.ops[0].ids).toEqual(['f1', 'f2']);
+
+    // First call: truncated JSON. Second: a clean answer over the short batch.
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      const content =
+        calls === 1 ? '{"ops":[{"op":"merge","ids":[1,2],"text":"a and' : '{"ops":[]}';
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content }, finish_reason: calls === 1 ? 'length' : 'stop' }],
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    }) as unknown as typeof fetch;
+
+    const retried = await proposeCompaction(env, 'chat-1');
+    expect(retried.ops).toEqual([]);
+    expect(calls).toBe(2);
+  });
+
   test('a clean batch proposes nothing', async () => {
     const { env, db } = makeEnv();
     fact(db, 'f1', 'One.', 1);
