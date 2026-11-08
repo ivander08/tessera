@@ -137,6 +137,9 @@ export default function State({
   // toast still reporting success, which is a silent loss of the reader's own text.
   const [skipped, setSkipped] = useState<Record<string, string[]>>({});
   const [busy, setBusy] = useState(false);
+  // The state engine's own call, re-run. Separate from `busy` so the two buttons do not
+  // relabel each other when either is in flight.
+  const [regenerating, setRegenerating] = useState(false);
   // Clearing is two server writes — the state row AND every turn's `messages.state_json` —
   // and neither is recoverable, so it is asked for rather than done.
   const [confirming, setConfirming] = useState(false);
@@ -288,6 +291,35 @@ export default function State({
       toast.failure(messageOf(cause));
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * Re-runs the world-state call for the newest exchange.
+   *
+   * The engine's calendar arithmetic is occasionally wrong — measured: a reader's "5
+   * minutes later" recorded as the next day, and a planned "next Sunday" taken as a skip.
+   * This is the one-tap fix for that. It re-derives from the state the exchange was WRITTEN
+   * from, so a wrong value already stored cannot survive, and it changes nothing in the
+   * transcript: re-rolling the whole reply to fix a clock throws away prose the reader wanted.
+   */
+  async function regenerate() {
+    setRegenerating(true);
+    setStatus(null);
+    try {
+      const next = await apiJson<{ ok: boolean; state: WorldState; reason?: string }>(
+        `/api/state/${encodeURIComponent(id)}/regenerate`,
+        { method: 'POST' },
+      );
+      setEdits({});
+      setStructured({});
+      toast.success('World state re-derived from the last exchange.');
+      onSaved?.(next.state);
+      reload();
+    } catch (cause) {
+      toast.failure(messageOf(cause));
+    } finally {
+      setRegenerating(false);
     }
   }
 
@@ -443,6 +475,23 @@ export default function State({
                   {status}
                 </p>
               )}
+              {/* The recovery action for a state the engine got wrong: it edits nothing the
+                  reader can see, so it is secondary to Save and separate from Clear. */}
+              <div style={{ marginTop: 14 }}>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => void regenerate()}
+                  disabled={busy || regenerating}
+                >
+                  {regenerating ? 'Re-deriving…' : 'Re-derive from last exchange'}
+                </button>
+                <p className="form-hint" style={{ marginTop: 8 }}>
+                  Runs the state engine again on the newest exchange, from the state it was
+                  written from. Use it when the clock or the scene jumped. The transcript does
+                  not change.
+                </p>
+              </div>
               {/* On its own row rather than beside Save: the destructive action should not
                   sit a thumb-width from the primary one. */}
               <div style={{ marginTop: 14 }}>

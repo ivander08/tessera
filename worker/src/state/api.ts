@@ -1,9 +1,11 @@
 import { badRequest, json, notFound, readJson } from '../http';
 import { validatePatch, type WorldState } from '../../../src/lib/state/schema';
-import { loadStateForViewer, stateAnchor } from './update';
+import { loadStateForViewer, stateAnchor, updateState } from './update';
 import { renderStateBlock } from '../../../src/lib/prompt/stateBlock';
 import { estimateTokens } from '../../../src/lib/tokenEstimate';
 import { loadSceneSetup } from '../scene';
+import { loadPathTail } from '../branch';
+import type { StatePoint } from '../turn';
 
 /**
  * The world-state viewer.
@@ -99,6 +101,60 @@ export async function patchState(env: Env, req: Request): Promise<Response> {
   await env.DB.batch(statements);
 
   return json({ ok: true, state: result.next });
+}
+
+/**
+ * `POST /api/state/:chatId/regenerate` — re-derive the world state from the newest exchange.
+ *
+ * The engine is one cheap-model call per turn, and its calendar arithmetic is sometimes
+ * wrong: measured, a reader's "5 minutes later" was recorded as the next day, and a reader
+ * PLANNING "let's meet next Sunday" had the clock jump there. Until now the only fixes were
+ * correcting fields by hand or re-rolling the whole reply — and the second throws away prose
+ * the reader wanted, to fix a clock.
+ *
+ * This re-runs that one call against the state the exchange was written FROM. Re-deriving
+ * from the anchor, rather than merging a new sample onto the live row, is what makes it a
+ * re-derivation: a wrong value already stored cannot survive into the new reading.
+ */
+export async function regenerateState(env: Env, chatId: string): Promise<Response> {
+  const chat = await env.DB.prepare('SELECT id FROM chats WHERE id = ?')
+    .bind(chatId)
+    .first<{ id: string }>();
+  if (!chat) return notFound('chat not found');
+
+  const setup = await loadSceneSetup(env, chatId);
+  if (setup.stateMode === 'off') return badRequest('world state is turned off for this chat');
+
+  // The newest visible row and the reader row it answers. `loadPathTail` returns the window
+  // in PATH order (oldest first), so the newest row is the last one.
+  const tail = await loadPathTail(env, chatId, 2);
+  const reply = tail[tail.length - 1];
+  if (!reply || reply.role !== 'assistant') {
+    return badRequest('the newest turn has no reply to re-derive from yet');
+  }
+  const before = tail[tail.length - 2];
+  const parent = before?.role === 'user' ? before : null;
+
+  // The anchor the exchange was written from. With a reader row that is that row inclusive;
+  // for an opening there is nothing before it but whatever snapshots precede the reply.
+  const point: StatePoint = parent
+    ? { seq: parent.seq, inclusive: true }
+    : { seq: reply.seq, inclusive: false };
+
+  const result = await updateState(
+    env,
+    chatId,
+    { user: parent?.content ?? '', assistant: reply.content },
+    setup,
+    reply.id,
+    point,
+  );
+
+  if (!result.applied) {
+    return json({ ok: false, state: await loadStateForViewer(env, chatId), reason: result.reason }, 502);
+  }
+
+  return json({ ok: true, state: await loadStateForViewer(env, chatId) });
 }
 
 /** Wipes the document, for when the engine has drifted too far to correct field by field. */

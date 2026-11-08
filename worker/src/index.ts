@@ -25,6 +25,7 @@ import {
   deleteMessage,
   editMessage,
   listMessages,
+  stateRegenerateRoute,
   stateRoute,
   swipeMessage,
 } from './api/chat';
@@ -129,6 +130,12 @@ async function route(req: Request, env: Env, url: URL, ctx: ExecutionContext): P
   if (messagesMatch) {
     if (method !== 'GET') return notFound();
     return listMessages(env, decodeURIComponent(messagesMatch[1]), url);
+  }
+
+  const stateRegenerateMatch = /^\/api\/state\/([^/]+)\/regenerate$/.exec(path);
+  if (stateRegenerateMatch) {
+    if (req.method !== 'POST') return notFound();
+    return stateRegenerateRoute(env, decodeURIComponent(stateRegenerateMatch[1]));
   }
 
   const stateMatch = /^\/api\/state\/([^/]+)$/.exec(path);

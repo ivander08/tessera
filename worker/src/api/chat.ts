@@ -1,7 +1,7 @@
 import { json, notFound } from '../http';
 import { getChat, getCharacter, getPersona as loadPersonaRow } from '../db';
 import { loadAlternatives, loadPathTail } from '../branch';
-import { getState, patchState, clearState } from '../state/api';
+import { getState, patchState, clearState, regenerateState } from '../state/api';
 import { chatAdvise } from '../chatAdvise';
 import type { WorldState } from '../../../src/lib/state/schema';
 
@@ -147,6 +147,11 @@ export async function stateRoute(req: Request, env: Env, chatId: string): Promis
   if (method === 'PATCH') return patchState(env, req);
   if (method === 'DELETE') return clearState(env, chatId);
   return notFound();
+}
+
+/** `POST /api/state/:chatId/regenerate` — re-derive the state from the newest exchange. */
+export function stateRegenerateRoute(env: Env, chatId: string): Promise<Response> {
+  return regenerateState(env, chatId);
 }
 
 /** `POST /api/chats/:id/advise` — the craft consultant's read on the scene so far. */

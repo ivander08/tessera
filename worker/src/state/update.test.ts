@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 
 import { exec, makeTestEnv } from '../test/harness';
 import { loadState, seedOpeningState, updateState } from './update';
+import { regenerateState } from './api';
 import { statePointFor } from '../turn';
 import { encryptKey } from '../../../src/lib/crypto';
 import { DEFAULT_SCENE_SETUP } from '../../../src/lib/scene/setup';
@@ -579,5 +580,67 @@ describe('seedOpeningState', () => {
     );
     expect(result.applied).toBe(false);
     expect(result.reason).toContain('provider down');
+  });
+});
+
+describe('regenerateState', () => {
+  /** One visible-path row, with the snapshot that turn produced (or none). */
+  function row(
+    db: Database,
+    id: string,
+    parentId: string | null,
+    role: string,
+    content: string,
+    state: unknown,
+  ): void {
+    exec(
+      db,
+      `INSERT INTO messages (id, chat_id, parent_id, role, content, active, deleted, state_json, created_at)
+       VALUES (?, 'chat-1', ?, ?, ?, 1, 0, ?, 0)`,
+      id,
+      parentId,
+      role,
+      content,
+      state === null ? null : JSON.stringify(state),
+    );
+  }
+
+  test('re-derives from the state the exchange was written from, not the live row', async () => {
+    // The reported failure: a turn recorded "5 minutes later" as the next day. Re-rolling
+    // the state must start from the clock the exchange was written FROM — merging a fresh
+    // sample onto the live row would keep the jumped value in play.
+    const { env, db, sent } = makeEnv();
+    row(db, 'm1', null, 'assistant', 'opening', { time: 'Friday, April 11, 2025, 22:38' });
+    row(db, 'm2', 'm1', 'user', 'Five minutes later, she looks up.', null);
+    row(db, 'm3', 'm2', 'assistant', 'She looks up.', { time: 'Saturday, April 12, 2025, 22:38' });
+    db.run(
+      `INSERT INTO state (chat_id, json, updated_at) VALUES ('chat-1', ?, 0)`,
+      [JSON.stringify({ time: 'Saturday, April 12, 2025, 22:38' })] as never[],
+    );
+
+    stubProvider(sent, '{"time":"Friday, April 11, 2025, 22:43"}');
+
+    const res = await regenerateState(env, 'chat-1');
+    expect(res.status).toBe(200);
+
+    // The engine read the PRE-exchange clock, and the reader's own line.
+    expect(sent[0].user).toContain('Friday, April 11, 2025, 22:38');
+    expect(sent[0].user).not.toContain('Saturday, April 12, 2025, 22:38');
+    expect(sent[0].user).toContain('Five minutes later');
+
+    expect((await loadState(env, 'chat-1')).time).toBe('Friday, April 11, 2025, 22:43');
+    const snapshot = db
+      .query("SELECT state_json FROM messages WHERE id = 'm3'")
+      .get() as { state_json: string } | null;
+    expect(JSON.parse(snapshot!.state_json).time).toBe('Friday, April 11, 2025, 22:43');
+  });
+
+  test('refuses when the newest turn has no reply yet', async () => {
+    const { env, db } = makeEnv();
+    row(db, 'm1', null, 'assistant', 'opening', { time: 'Friday, April 11, 2025, 22:38' });
+    row(db, 'm2', 'm1', 'user', 'She waits.', null);
+
+    const res = await regenerateState(env, 'chat-1');
+    expect(res.status).toBe(400);
   });
 });
