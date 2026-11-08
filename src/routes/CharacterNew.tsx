@@ -398,19 +398,14 @@ export default function CharacterNew() {
                 dragHandlers={dragHandlers}
                 onApply={(proposed) =>
                   // Same contract as the edit screen: the proposal lands in the form and Save
-                  // is still the only thing that writes.
+                  // is still the only thing that writes. It arrives as the WHOLE card — the
+                  // Worker merges a partial reply onto the card it was sent — so the spread
+                  // replaces fields rather than blanking the ones the model did not mention.
                   setCard((current) =>
                     current
                       ? {
                           ...current,
                           ...proposed,
-                          // A field the proposal omits is one the model did not touch, so the
-                          // form keeps what it has. `toParsedCard` omits rather than blanks for
-                          // exactly this reason.
-                          greetingStates:
-                            proposed.greetingStates !== undefined
-                              ? proposed.greetingStates
-                              : current.greetingStates,
                           // The card's own provenance and book are not the consultant's to
                           // change, so they survive the merge.
                           characterBook: current.characterBook,

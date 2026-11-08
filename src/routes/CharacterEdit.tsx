@@ -323,14 +323,14 @@ export default function CharacterEdit() {
    * Nothing is persisted here — this screen's contract is that Save is the only thing that
    * writes, so an applied revision is still one undo away.
    *
-   * A field the proposal OMITS keeps its current value. That distinction is load-bearing for
-   * the two list-valued fields: the consultant returns only what it changed, so treating an
-   * absent `greetingStates` as "no scenes" would wipe every opening's time and place on
-   * Apply — silently, and with no way back.
+   * A proposal is the WHOLE card: the Worker merges a partial reply onto the card it was
+   * sent (`mergeProposal`), so every field here is this revision's answer. That contract is
+   * what makes the diff honest — a field the model never touched arrives unchanged, not
+   * blanked.
    */
   function applyCard(proposed: CharacterCardJson) {
-    // Only fields the proposal actually carries are written: `toParsedCard` omits a field the
-    // model did not mention, so an absent key here means "unchanged", not "blank".
+    // Only string fields are written. A list (`tags`, the openings) is assigned below, where
+    // the editor's own state for it lives.
     const next: Record<string, string> = {};
     for (const field of FIELDS) {
       const value = proposed[field.key];
@@ -339,7 +339,7 @@ export default function CharacterEdit() {
     setEdits((current) => ({ ...current, ...next }));
     setTagsText(proposed.tags.join(', '));
     setGreetings(proposed.alternateGreetings);
-    if (proposed.greetingStates !== undefined) setGreetingStates(proposed.greetingStates);
+    setGreetingStates(proposed.greetingStates ?? []);
   }
 
   async function fork(name: string) {

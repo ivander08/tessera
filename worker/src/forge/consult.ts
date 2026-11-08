@@ -332,7 +332,14 @@ export async function consult(
     );
 
     try {
-      return parseConsultTurn(text);
+      const turn = parseConsultTurn(text);
+      // A revision is returned as the WHOLE card, merged onto the one the user is looking at.
+      // A model that proposes only the fields it changed is answering correctly, and the
+      // client's diff and Apply both read the card as complete.
+      if (card && turn.card) {
+        return { ...turn, card: mergeProposal(card, turn.card) };
+      }
+      return turn;
     } catch (error) {
       // Retrying after the user has already read half a reply would visibly restart it, so
       // the retry only happens when nothing was streamed.
@@ -548,12 +555,98 @@ function parseQuestion(value: unknown): ConsultTurn['question'] {
   return { text, options, recommended };
 }
 
+/** The stored names of the prose fields a reply can revise. */
+type ProseField =
+  | 'description'
+  | 'personality'
+  | 'scenario'
+  | 'firstMes'
+  | 'mesExample'
+  | 'systemPrompt'
+  | 'postHistoryInstructions'
+  | 'creatorNotes';
+
+/**
+ * The prose fields as the wire names them, paired with the stored names.
+ *
+ * `name` is not here: a reply without it is an error, so it is never "unchanged".
+ */
+const PROSE_FIELDS: ReadonlyArray<readonly [wire: string, field: ProseField]> = [
+  ['description', 'description'],
+  ['personality', 'personality'],
+  ['scenario', 'scenario'],
+  ['first_mes', 'firstMes'],
+  ['mes_example', 'mesExample'],
+  ['system_prompt', 'systemPrompt'],
+  ['post_history_instructions', 'postHistoryInstructions'],
+  ['creator_notes', 'creatorNotes'],
+];
+
+/**
+ * A proposed revision, applied to the card it revises.
+ *
+ * `toParsedCard` defaults every prose field, so by the time a card is a `ParsedCard` the
+ * difference between "the model did not touch this" and "the model sent an empty string" is
+ * gone — and both apply paths (`CharacterEdit`, `CharacterNew`) read the parsed card as if an
+ * absent field meant unchanged. It never did: a model that proposes only a description would
+ * have blanked personality, scenario, the prompt fields, tags and every opening on Apply.
+ *
+ * So the merge happens here, where the reply's own keys are still visible (`parsed.raw`), and
+ * a revision that reaches the client is always the WHOLE card. Three states stay meaningful:
+ * a key that is absent keeps the current value, `""` clears the field, and text replaces it.
+ * `nickname` already worked this way; the rest now matches it.
+ *
+ * `greeting_states` is index-aligned with the openings, so when the model changes the openings
+ * and not the scenes, the current scenes are refitted to the new count rather than left
+ * pointing at the wrong greetings.
+ */
+export function mergeProposal(current: ParsedCard, parsed: ParsedCard): ParsedCard {
+  const raw = asRecord(parsed.raw) ?? {};
+  const sent = (wire: string) => wire in raw;
+
+  const merged: ParsedCard = {
+    ...current,
+    // A revision is a card too: provenance and the book are never the model's to change.
+    sourceFormat: current.sourceFormat,
+    avatarHint: current.avatarHint,
+    characterBook: current.characterBook,
+    raw: parsed.raw,
+    // Required by the contract, so it is always this reply's answer.
+    name: parsed.name,
+  };
+
+  // `nickname` is written even when it is empty — that is how a rename is undone.
+  if (sent('nickname')) merged.nickname = parsed.nickname;
+
+  for (const [wire, field] of PROSE_FIELDS) {
+    if (sent(wire)) merged[field] = parsed[field] as string;
+  }
+
+  if (sent('alternate_greetings')) merged.alternateGreetings = parsed.alternateGreetings;
+  if (sent('tags')) merged.tags = parsed.tags;
+
+  if (sent('greeting_states')) merged.greetingStates = parsed.greetingStates;
+  else if (merged.greetingStates) {
+    // One scene per opening: pad a short list with "no scene", drop entries past the last
+    // opening. Leaving the count alone would point later scenes at the wrong greeting.
+    const existing = merged.greetingStates;
+    const count = merged.alternateGreetings.length + 1;
+    merged.greetingStates = Array.from({ length: count }, (_, index) => existing[index] ?? {});
+  }
+
+  return merged;
+}
+
 /**
  * Validates and maps a model reply onto the stored card shape.
  *
  * A missing name is an error rather than a default, for the same reason it is at
  * import time: a card with no name cannot be filed. Every other field defaults,
  * because a card missing its scenario still chats.
+ *
+ * A defaulted field is NOT the same as an unchanged one. A reply used as a revision has to go
+ * through `mergeProposal`, which reads `raw` to tell the two apart. (Draft mode wants the
+ * defaults: a new card is not revising anything.)
  */
 export function toParsedCard(value: unknown): ParsedCard {
   const record = asRecord(value);

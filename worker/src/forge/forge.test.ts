@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { analyzeTokenCost } from '../../../src/lib/forge/tokenCost';
 import { cardForPrompt, findSmuggledInstructions } from './smuggle';
-import { parseConsultTurn, systemPrompt } from './consult';
+import { mergeProposal, parseConsultTurn, systemPrompt } from './consult';
 import type { ParsedCard } from '../../../src/lib/cards/types';
 
 /**
@@ -664,5 +664,90 @@ describe('systemPrompt', () => {
     const without = systemPrompt('draft', null);
     expect(without).not.toContain('# What this card costs');
     expect(systemPrompt('consult', card())).toContain('# What this card costs');
+  });
+});
+
+describe('mergeProposal', () => {
+  // The reply's own keys decide what changed. A model that proposes only a description is
+  // answering correctly, and the fields it did not mention must survive: `toParsedCard`
+  // defaults them, which read as "clear it" and wiped a card on Apply.
+  const current = card({
+    description: 'Long description.',
+    personality: 'Dry.',
+    tags: ['noir', 'detective'],
+    alternateGreetings: ['Second.', 'Third.'],
+    greetingStates: [{ time: 'Night' }, { time: 'Dawn' }, { time: 'Noon' }],
+  });
+
+  test('a partial proposal keeps every field it did not send', () => {
+    const reply = parseConsultTurn(
+      JSON.stringify({
+        say: 'Added it.',
+        question: null,
+        card: { name: 'Ada', description: 'Long description, plus a line.' },
+      }),
+    );
+
+    const merged = mergeProposal(current, reply.card!);
+
+    expect(merged.description).toBe('Long description, plus a line.');
+    expect(merged.personality).toBe('Dry.');
+    expect(merged.scenario).toBe(current.scenario);
+    expect(merged.mesExample).toBe(current.mesExample);
+    expect(merged.tags).toEqual(['noir', 'detective']);
+    expect(merged.alternateGreetings).toEqual(['Second.', 'Third.']);
+    expect(merged.greetingStates).toEqual(current.greetingStates);
+  });
+
+  test('a field sent as empty is cleared, not kept', () => {
+    // The other half of the contract: `""` is a decision, so it must not be read as "absent".
+    const reply = parseConsultTurn(
+      JSON.stringify({ say: 'Cleared it.', question: null, card: { name: 'Ada', personality: '' } }),
+    );
+
+    expect(mergeProposal(current, reply.card!).personality).toBe('');
+  });
+
+  test('an untouched nickname survives, and an empty one clears it', () => {
+    const named = card({ nickname: 'Syd' });
+    const untouched = parseConsultTurn(
+      JSON.stringify({ say: 'Changed the description.', question: null, card: { name: 'Ada', description: 'x' } }),
+    );
+    expect(mergeProposal(named, untouched.card!).nickname).toBe('Syd');
+
+    const cleared = parseConsultTurn(
+      JSON.stringify({ say: 'Back to Ada.', question: null, card: { name: 'Ada', nickname: '' } }),
+    );
+    expect(mergeProposal(named, cleared.card!).nickname).toBe('');
+  });
+
+  test('new openings refit the scenes to one per opening', () => {
+    // Changing the openings but not the scenes must not leave scene 2 attached to greeting 3.
+    const reply = parseConsultTurn(
+      JSON.stringify({
+        say: 'Added an opening.',
+        question: null,
+        card: {
+          name: 'Ada',
+          first_mes: 'Hello there.',
+          alternate_greetings: ['Second.', 'Third.', 'Fourth.'],
+        },
+      }),
+    );
+
+    const merged = mergeProposal(current, reply.card!);
+    expect(merged.greetingStates).toEqual([{ time: 'Night' }, { time: 'Dawn' }, { time: 'Noon' }, {}]);
+  });
+
+  test('the book and provenance stay the cards own', () => {
+    const owned = card({ characterBook: { entries: [] }, avatarHint: 'data:x', sourceFormat: 'ccv3' });
+    const reply = parseConsultTurn(
+      JSON.stringify({ say: 'Done.', question: null, card: { name: 'Ada', description: 'New.' } }),
+    );
+
+    const merged = mergeProposal(owned, reply.card!);
+    expect(merged.characterBook).toEqual({ entries: [] });
+    expect(merged.avatarHint).toBe('data:x');
+    expect(merged.sourceFormat).toBe('ccv3');
   });
 });
