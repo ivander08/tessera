@@ -2733,6 +2733,63 @@ input[type="checkbox"] {
   }
 }
 
+/* ------------------------------------------------------------ section rail */
+
+/* A jump list for a long form. Sticky so it is reachable from anywhere in a ten-field
+   editor, and horizontally scrollable rather than wrapping: a wrapped rail takes three rows
+   of a phone screen and becomes a second form. */
+.section-rail {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  gap: 6px;
+  margin: 0 -14px 4px;
+  padding: 8px 14px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: color-mix(in srgb, var(--ground) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+}
+
+.section-rail::-webkit-scrollbar {
+  display: none;
+}
+
+.section-rail-item {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-dim);
+  font-family: var(--font-data);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.section-rail-item:hover {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+}
+
+@media (pointer: coarse) {
+  .section-rail-item {
+    min-height: 44px;
+  }
+}
+
+/* The sticky rail would sit under the app bar otherwise. */
+.section-rail + .section {
+  scroll-margin-top: 56px;
+}
+
+.section {
+  scroll-margin-top: 56px;
+}
+
 /* ---------------------------------------------------------------- consult */
 
 /* The consultant floats over the page rather than taking a column in it. On a desktop it is

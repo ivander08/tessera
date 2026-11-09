@@ -529,8 +529,30 @@ export default function CharacterEdit() {
               </div>
             </section>
 
+            {/* The form is ten textareas, four openings, their scenes, a lorebook and the
+                card's paperwork in one scroll — several screens on a phone, with no way to
+                see what is left below. The rail is a jump list, not navigation: every
+                section is still on the page, so nothing is hidden behind a tab. */}
+            <nav className="section-rail" aria-label="Jump to a section">
+              {GROUPS.map((group) => (
+                <button
+                  key={group.title}
+                  type="button"
+                  className="section-rail-item"
+                  onClick={() => {
+                    document
+                      .getElementById(`section-${group.title.toLowerCase()}`)
+                      ?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+                  }}
+                >
+                  {group.title}
+                  {group.title === 'Meta' && !ready && <span className="form-hint"> …</span>}
+                </button>
+              ))}
+            </nav>
+
             {GROUPS.map((group) => (
-              <section key={group.title} className="section">
+              <section key={group.title} id={`section-${group.title.toLowerCase()}`} className="section">
                 <span className="eyebrow">{group.title}</span>
 
                 {group.fields.map((key) => {
