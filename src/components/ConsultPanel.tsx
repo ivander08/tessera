@@ -315,6 +315,27 @@ export function ConsultPanel({
   }
 
   const proposed = turn?.card ?? null;
+  const changes = currentChanges(card ?? null, proposed);
+
+  /**
+   * Applies the proposal.
+   *
+   * Extracted because TWO controls now do it: the card's own button and the sticky bar, which
+   * exists so the decision is reachable without scrolling past a long diff. One handler means
+   * the two cannot disagree about what applying does.
+   */
+  function applyProposal(): void {
+    if (!proposed) return;
+    if (mode === 'draft') {
+      void save(proposed);
+      return;
+    }
+    onApply?.(proposed);
+    // The proposed card is spent once applied; the transcript stays, so the user can keep
+    // asking about the card they just changed.
+    patch({ turn: null });
+    toast.success('Applied to the form — nothing is saved until you press Save.');
+  }
   // Deliberately NOT gated on `busy`: the row holds the Stop button, and hiding it the
   // instant a stream starts is exactly when the reader wants it.
   const canType = messages.length > 0 || mode === 'consult';
@@ -489,23 +510,36 @@ export function ConsultPanel({
             mode={mode}
             edits={turn?.changes}
             dropped={turn?.dropped}
-            busy={saving}
-            onApply={() => {
-              if (mode === 'draft') {
-                void save(proposed);
-                return;
-              }
-              onApply?.(proposed);
-              // The proposed card is spent once applied; the transcript stays, so the user
-              // can keep asking about the card they just changed.
-              patch({ turn: null });
-              toast.success('Applied to the form — nothing is saved until you press Save.');
-            }}
           />
         )}
 
         <div ref={bottomRef} />
       </div>
+
+      {/* The decision, pinned.
+          The card's own Apply sits at the foot of a transcript that can be several screens
+          long, so on a phone the button a reader came here to press is the one they have to
+          hunt for. This bar is outside the scroll area: the count says what it would do, and
+          the button is always one thumb away. */}
+      {proposed && !busy && (
+        <div className="consult-commit">
+          <span className="consult-commit-count">
+            {mode === 'draft'
+              ? 'Draft ready'
+              : changes.length > 0
+                ? `${changes.length} field${changes.length === 1 ? '' : 's'} change`
+                : 'No field differs'}
+          </span>
+          <button
+            type="button"
+            className="btn primary"
+            disabled={saving || (mode === 'consult' && changes.length === 0)}
+            onClick={applyProposal}
+          >
+            {mode === 'draft' ? (saving ? 'Saving…' : 'Save and edit') : saving ? 'Applying…' : 'Apply'}
+          </button>
+        </div>
+      )}
 
       {/* Every question is answerable in the user's own words. The options are a shortcut,
           so the box is present whenever there is anything to answer — and in consult mode it
@@ -557,6 +591,20 @@ export function ConsultPanel({
       )}
     </section>
   );
+}
+
+/**
+ * The changes a proposal makes, or an empty list when there is nothing to compare against.
+ *
+ * The sticky bar counts these, so the number it shows is the number of fields the diff below
+ * actually displays — computed once, from the same function, rather than the bar inventing a
+ * count from the edits the model claimed.
+ */
+function currentChanges(
+  current: CharacterCardJson | null,
+  proposed: ParsedCard | null,
+): FieldChange[] {
+  return current && proposed ? collectChanges(current, proposed) : [];
 }
 
 /**
@@ -695,19 +743,15 @@ function ProposedCard({
   card,
   current,
   mode,
-  busy,
   edits,
   dropped,
-  onApply,
 }: {
   card: ParsedCard;
   current: CharacterCardJson | null;
   mode: 'draft' | 'consult';
-  busy: boolean;
   /** What the reply actually asked for. Shown above the diff so the change has a name. */
   edits?: CardEdit[];
   dropped?: number;
-  onApply: () => void;
 }) {
   const permanent = PERMANENT.reduce((sum, field) => sum + estimateTokens(String(card[field] ?? '')), 0);
   const changes = current ? collectChanges(current, card) : [];
@@ -765,15 +809,8 @@ function ProposedCard({
         </>
       )}
 
-      <button
-        type="button"
-        className="btn primary min-h-10"
-        style={{ marginTop: 12 }}
-        onClick={onApply}
-        disabled={busy}
-      >
-        {mode === 'draft' ? (busy ? 'Saving…' : 'Save and edit') : 'Apply'}
-      </button>
+      {/* The button lives in the sticky bar now — see `consult-commit`. A second one here
+          would be the same action twice, with the scrolling one the harder to reach. */}
     </div>
   );
 }

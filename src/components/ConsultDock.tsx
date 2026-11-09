@@ -46,6 +46,38 @@ function resisted(value: number, min: number, max: number, dimension: number): n
 const DETENTS = [0.35, 0.65, 1];
 
 /**
+ * Where the sheet last settled, per device.
+ *
+ * A reader who opens the dock to a height that hides half the form has to resize it every
+ * time; the height they chose is a preference, not a per-open decision. Stored as the
+ * DETENT FRACTION rather than pixels, so the same choice survives a rotated phone or a
+ * different window.
+ *
+ * Guarded because storage throws in a private window and in some embedded webviews, and a
+ * dock that cannot remember a height must still open.
+ */
+const HEIGHT_KEY = 'tessera.consult.height';
+
+function readStoredFraction(): number | null {
+  try {
+    const raw = window.localStorage.getItem(HEIGHT_KEY);
+    if (raw === null) return null;
+    const value = Number(raw);
+    return DETENTS.includes(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeFraction(value: number): void {
+  try {
+    window.localStorage.setItem(HEIGHT_KEY, String(value));
+  } catch {
+    // A preference that cannot be saved is not a reason to break the dock.
+  }
+}
+
+/**
  * The floating frame the consultant lives in.
  *
  * Desktop: a panel you drag by its header, because the field you are asking about is
@@ -86,11 +118,17 @@ export function ConsultDock({
   const reduced = useReducedMotion();
   // Distance from the right and bottom edges, in px.
   const [offset, setOffset] = useState({ right: 24, bottom: 88 });
-  const [height, setHeight] = useState(() =>
+  const [height, setHeight] = useState(() => {
     // A 520px sheet plus a ~58px commit row does not fit a 568px-tall phone, which put the
     // close button off-screen. The ceiling is the viewport, not a constant.
-    typeof window === 'undefined' ? 520 : Math.min(520, window.innerHeight - 140),
-  );
+    if (typeof window === 'undefined') return 520;
+    const max = window.innerHeight - 140;
+    // The stored detent wins when the reader has chosen one: the default is only a guess
+    // about what they want, and on a phone it is a guess that hides the form.
+    const stored = readStoredFraction();
+    if (stored !== null) return Math.round(max * stored);
+    return Math.min(520, max);
+  });
   /**
    * Live drag state. Everything the move handler needs is captured at `pointerdown`,
    * including the element's own box — measuring inside the move handler forces a synchronous
@@ -337,6 +375,12 @@ export function ConsultDock({
       Math.abs(candidate - projected) < Math.abs(best - projected) ? candidate : best,
     );
     const clamped = Math.max(160, Math.min(target, max));
+    // Which detent we snapped TO, not the pixel height: the sheet is anchored to the
+    // viewport, so the fraction is the part that is worth remembering.
+    const reached = DETENTS.reduce((best, fraction) =>
+      Math.abs(max * fraction - clamped) < Math.abs(max * best - clamped) ? fraction : best,
+    );
+    storeFraction(reached);
 
     if (reduced) {
       writeHeight(clamped);
