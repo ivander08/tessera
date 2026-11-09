@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { analyzeTokenCost } from '../../../src/lib/forge/tokenCost';
 import { cardForPrompt, findSmuggledInstructions } from './smuggle';
-import { mergeProposal, parseConsultTurn, systemPrompt } from './consult';
+import { applyEdits, mergeProposal, parseConsultTurn, systemPrompt } from './consult';
 import type { ParsedCard } from '../../../src/lib/cards/types';
 
 /**
@@ -645,11 +645,14 @@ describe('systemPrompt', () => {
     expect(prompt).toContain('keep asking while the answers are');
   });
 
-  test('forbids announcing a change without shipping the card', () => {
-    // The reported bug: the prose said "here it is" and the card was null, so no diff and no
-    // Apply button appeared while the model insisted it had made the change.
-    expect(prompt).toContain('you MUST set "card"');
+  test('forbids announcing a change without shipping the edits', () => {
+    // The reported bug: the prose said "here it is" and nothing shipped, so no diff and no
+    // Apply button appeared while the model insisted it had made the change. Consult mode
+    // now names the edit list rather than the card.
+    expect(prompt).toContain('you MUST return the edits');
     expect(prompt).toContain('ships nothing');
+    // And a no-change critique is explicitly legal, so the model does not invent one.
+    expect(prompt).toContain('"changes": []');
   });
 
   test('carries the card craft and this app\'s format in both modes', () => {
@@ -749,5 +752,135 @@ describe('mergeProposal', () => {
     expect(merged.characterBook).toEqual({ entries: [] });
     expect(merged.avatarHint).toBe('data:x');
     expect(merged.sourceFormat).toBe('ccv3');
+  });
+});
+
+describe('applyEdits', () => {
+  // The protocol's whole point: a model asked to add a line returns TWENTY tokens, not the
+  // nine thousand characters of the whole card. Everything below is about the cases where
+  // that goes wrong without being catastrophic.
+  const base = card({
+    description: 'Line one.\nLine two.',
+    personality: 'Dry.',
+    tags: ['noir'],
+    alternateGreetings: ['Second.', 'Third.'],
+    greetingStates: [{ time: 'Night' }, { time: 'Dawn' }, { time: 'Noon' }],
+  });
+
+  test('append adds a line and leaves the rest of the field alone', () => {
+    const { card: next, applied } = applyEdits(base, [
+      { field: 'description', op: 'append', value: '- Keeps a crate of vinyl.' },
+    ]);
+    expect(applied).toBe(1);
+    expect(next.description).toBe('Line one.\nLine two.\n- Keeps a crate of vinyl.');
+    expect(next.personality).toBe('Dry.');
+  });
+
+  test('append to an empty field does not start with a blank line', () => {
+    const { card: next } = applyEdits(card({ description: '' }), [
+      { field: 'description', op: 'append', value: 'First line.' },
+    ]);
+    expect(next.description).toBe('First line.');
+  });
+
+  test('replace sets the whole field, and only that field', () => {
+    const { card: next } = applyEdits(base, [
+      { field: 'personality', op: 'replace', value: 'Warmer than she admits.' },
+    ]);
+    expect(next.personality).toBe('Warmer than she admits.');
+    expect(next.description).toBe(base.description);
+  });
+
+  test('replace with an index touches one opening and keeps the others', () => {
+    const { card: next } = applyEdits(base, [
+      { field: 'alternate_greetings', op: 'replace', index: 1, value: 'A different third.' },
+    ]);
+    expect(next.alternateGreetings).toEqual(['Second.', 'A different third.']);
+  });
+
+  test('an index past the end appends rather than dropping the edit', () => {
+    const { card: next, applied } = applyEdits(base, [
+      { field: 'alternate_greetings', op: 'replace', index: 2, value: 'Fourth.' },
+    ]);
+    expect(applied).toBe(1);
+    expect(next.alternateGreetings).toEqual(['Second.', 'Third.', 'Fourth.']);
+  });
+
+  test('a greeting scene replaces one entry and keeps the indexes aligned', () => {
+    const { card: next } = applyEdits(base, [
+      { field: 'greeting_states', op: 'replace', index: 1, value: { time: 'Friday, 22:40' } },
+    ]);
+    expect(next.greetingStates).toEqual([{ time: 'Night' }, { time: 'Friday, 22:40' }, { time: 'Noon' }]);
+  });
+
+  test('a scene at an index past the end pads the holes', () => {
+    // The two lists are index-aligned everywhere they are read, so a hole would shift every
+    // later scene onto the wrong opening.
+    const { card: next } = applyEdits(base, [
+      { field: 'greeting_states', op: 'replace', index: 3, value: { time: 'Midnight' } },
+    ]);
+    expect(next.greetingStates).toEqual([
+      { time: 'Night' },
+      { time: 'Dawn' },
+      { time: 'Noon' },
+      { time: 'Midnight' },
+    ]);
+  });
+
+  test('tags add and remove by value, case-insensitively', () => {
+    const added = applyEdits(base, [{ field: 'tags', op: 'add', value: 'Slow-Burn' }]);
+    expect(added.card.tags).toEqual(['noir', 'Slow-Burn']);
+
+    const removed = applyEdits(base, [{ field: 'tags', op: 'remove', value: 'NOIR' }]);
+    expect(removed.card.tags).toEqual([]);
+  });
+
+  test('a duplicate tag add and a missing tag remove are dropped, not duplicated', () => {
+    const dup = applyEdits(base, [{ field: 'tags', op: 'add', value: 'noir' }]);
+    expect(dup).toMatchObject({ applied: 0, dropped: 1 });
+    const missing = applyEdits(base, [{ field: 'tags', op: 'remove', value: 'nonexistent' }]);
+    expect(missing).toMatchObject({ applied: 0, dropped: 1 });
+  });
+
+  test('a bad edit is dropped and the good ones still apply', () => {
+    // A rejection at the first bad line would ship nothing at all, which is the failure mode
+    // the whole edit contract exists to remove.
+    const result = applyEdits(base, [
+      { field: 'nonsense', op: 'replace', value: 'x' },
+      { field: 'description', op: 'append', value: 'Added.' },
+      { field: 'alternate_greetings', op: 'replace', index: 99, value: 'x' },
+    ]);
+    expect(result.applied).toBe(1);
+    expect(result.dropped).toBe(2);
+    expect(result.card.description).toContain('Added.');
+  });
+
+  test('append is refused on a list field, and replace is refused on tags', () => {
+    // The operations are per-field on purpose: "append to alternate_greetings" has no
+    // meaning, and a "replace tags" would silently drop every tag the model did not restate.
+    const appended = applyEdits(base, [
+      { field: 'alternate_greetings', op: 'append', value: 'x' },
+    ]);
+    expect(appended.applied).toBe(0);
+
+    const replaced = applyEdits(base, [{ field: 'tags', op: 'replace', value: 'x' }]);
+    expect(replaced.applied).toBe(0);
+    expect(replaced.card.tags).toEqual(['noir']);
+  });
+
+  test('an empty name is refused, and a rename goes through', () => {
+    expect(applyEdits(base, [{ field: 'name', op: 'replace', value: '  ' }]).applied).toBe(0);
+    const renamed = applyEdits(base, [{ field: 'name', op: 'replace', value: 'Syd' }]);
+    expect(renamed.card.name).toBe('Syd');
+  });
+
+  test('never mutates the card it was handed', () => {
+    const snapshot = structuredClone(base);
+    applyEdits(base, [
+      { field: 'tags', op: 'add', value: 'new' },
+      { field: 'alternate_greetings', op: 'replace', index: 0, value: 'x' },
+      { field: 'description', op: 'append', value: 'y' },
+    ]);
+    expect(base).toEqual(snapshot);
   });
 });

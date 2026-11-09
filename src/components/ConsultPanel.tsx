@@ -14,6 +14,14 @@ export interface ConsultMessage {
   content: string;
 }
 
+/** One edit the reply carried. Mirrors `CardEdit` in `worker/src/forge/consult.ts`. */
+export interface CardEdit {
+  field: string;
+  op: 'replace' | 'append' | 'add' | 'remove';
+  index?: number;
+  value?: unknown;
+}
+
 /** The parsed reply. Mirrors `ConsultTurn` in `worker/src/forge/consult.ts`. */
 export interface ConsultTurn {
   say: string;
@@ -23,6 +31,10 @@ export interface ConsultTurn {
     recommended: number;
   } | null;
   card: ParsedCard | null;
+  /** The edits the reply carried, before they were applied. */
+  changes?: CardEdit[];
+  /** How many edits could not be applied. */
+  dropped?: number;
 }
 
 /**
@@ -443,11 +455,40 @@ export function ConsultPanel({
 
         {failure && <div className="note danger">{failure}</div>}
 
+        {/* A turn that shipped neither a question nor a change is the failure the prompt
+            forbids and a cheap model does anyway: the prose says "added" and there is no
+            diff, no Apply. Rather than leaving the reader to notice, offer the one action
+            that resolves it. */}
+        {!busy && mode === 'consult' && turn && !turn.question && !proposed && (
+          <div className="panel panel-pad">
+            <span className="eyebrow">No change proposed</span>
+            <p style={{ margin: '6px 0 10px', fontSize: 'var(--text-sm)' }}>
+              {turn.changes && turn.changes.length > 0 && (turn.dropped ?? 0) > 0
+                ? 'The proposed edit could not be applied to this card. Ask again, or say which field you mean.'
+                : 'The consultant described the card but did not change it. Ask it to apply the change.'}
+            </p>
+            <button
+              type="button"
+              className="btn primary"
+              onClick={() =>
+                void send(
+                  'Apply it now. Return the edits that make this change; do not ask anything else. ' +
+                    'If it cannot be done as a single small edit, say why in one sentence.',
+                )
+              }
+            >
+              Do it
+            </button>
+          </div>
+        )}
+
         {proposed && (
           <ProposedCard
             card={proposed}
             current={card ?? null}
             mode={mode}
+            edits={turn?.changes}
+            dropped={turn?.dropped}
             busy={saving}
             onApply={() => {
               if (mode === 'draft') {
@@ -655,12 +696,17 @@ function ProposedCard({
   current,
   mode,
   busy,
+  edits,
+  dropped,
   onApply,
 }: {
   card: ParsedCard;
   current: CharacterCardJson | null;
   mode: 'draft' | 'consult';
   busy: boolean;
+  /** What the reply actually asked for. Shown above the diff so the change has a name. */
+  edits?: CardEdit[];
+  dropped?: number;
   onApply: () => void;
 }) {
   const permanent = PERMANENT.reduce((sum, field) => sum + estimateTokens(String(card[field] ?? '')), 0);
@@ -677,6 +723,15 @@ function ProposedCard({
         </span>{' '}
         permanent tokens — paid on every turn, forever.
       </p>
+
+      {/* The edits, in the model's own terms. The diff below is the evidence; this is the
+          claim, and giving the reader both means a rewrite cannot hide behind a hunk. */}
+      {edits && edits.length > 0 && (
+        <p className="form-hint" style={{ marginTop: -4, marginBottom: 10 }}>
+          {edits.map(describeEdit).join(' · ')}
+          {dropped !== undefined && dropped > 0 && ` · ${dropped} edit(s) could not be applied`}
+        </p>
+      )}
 
       {current && changes.length === 0 && (
         <p className="form-hint" style={{ margin: 0 }}>
@@ -721,4 +776,17 @@ function ProposedCard({
       </button>
     </div>
   );
+}
+
+/** One edit as a short phrase: "description · appended". */
+function describeEdit(edit: CardEdit): string {
+  const where =
+    edit.index === undefined ? edit.field : `${edit.field}[${edit.index}]`;
+  return edit.op === 'replace'
+    ? `${where} · replaced`
+    : edit.op === 'append'
+      ? `${where} · appended`
+      : edit.op === 'add'
+        ? `${where} · added “${String(edit.value ?? '')}”`
+        : `${where} · removed “${String(edit.value ?? '')}”`;
 }

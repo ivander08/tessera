@@ -28,8 +28,22 @@ export interface ConsultTurn {
     /** Index into `options` of the answer it recommends. */
     recommended: number;
   } | null;
-  /** Set when it has a card to propose — a draft, or a revision. */
+  /**
+   * Set when a CONSULT turn proposes a revision.
+   *
+   * The revision is already applied: this is the whole card, so the client's diff and Apply
+   * stay unchanged. What is new is that the model wrote it as edits, which is why an add-one-
+   * line request costs twenty output tokens instead of re-typing nine thousand characters.
+   */
   card: ParsedCard | null;
+  /**
+   * The edits the reply carried, before they were applied. Kept so the client can say WHAT
+   * happened ("description · appended") rather than only showing the resulting diff, and so a
+   * reply whose edits were all dropped is distinguishable from a reply that proposed none.
+   */
+  changes?: CardEdit[];
+  /** Edits that could not be applied, so the caller can report a partial result honestly. */
+  dropped?: number;
 }
 
 /**
@@ -180,17 +194,23 @@ only when you are actually changing something.
 
 You can change ANY field of the card, not just the prose ones. That includes "nickname" (what
 the transcript calls them), each entry of "alternate_greetings", and each entry of
-"greeting_states" — the time, location and weather an opening begins in. When the user names a
-specific opening ("the second alternate", "the morning one"), change that entry and leave the
-others as they are. When they ask for a scene change, change "greeting_states" rather than
-folding the time into the greeting's prose: the prose is what the model reads, and the scene is
-what the narrator reads.
+"greeting_states" — the time, location and weather an opening begins in.
 
-When you change one opening, return the WHOLE "alternate_greetings" and the WHOLE
-"greeting_states" arrays, index-aligned, with the unchanged entries carried through exactly as
-they were. A returned array that drops an entry deletes that opening.`,
+You do it by listing EDITS, not by re-typing the card. An edit names one field and one
+operation, and the app applies it to the card the user is looking at. That is why you never
+need to repeat text you are not changing: an untouched field stays exactly as it was.
 
-    `# Output
+Openings are numbered from 0: index 0 is "first_mes", index 1 is the first alternate, and so
+on — the same "Opening 1"/"Opening 2" the user sees, shifted by one. Leave every other index
+alone; an index you do not mention is not touched, and there is no way to delete an opening by
+omitting it.
+
+When the user asks for a scene change, edit "greeting_states" rather than folding the time into
+the greeting's prose: the prose is what the model reads, and the scene is what the narrator
+reads.`,
+
+    mode === 'draft'
+      ? `# Output
 
 Return ONLY a JSON object, with "say" as the FIRST key:
 {
@@ -201,22 +221,62 @@ Return ONLY a JSON object, with "say" as the FIRST key:
 
 - "say" comes first, always. It is streamed to the user as you write it.
 - Set "question" while you still need an answer. Set it to null once you do not.
-- Set "card" only when you are proposing a card: the finished draft in draft mode, or a revised
-  card in consult mode. When you set "card", "question" is null.
+- Set "card" only when you are proposing the finished draft. When you set "card", "question"
+  is null.
 - Never set both "question" and "card".
-- In consult mode, propose a card only when you are actually changing something. A critique
-  that finds nothing to change returns "card": null.
-- In consult mode, when you do propose a card, return the WHOLE card, not a fragment.
-- In draft mode, one of "question" or "card" is ALWAYS set. A draft turn that sets neither is
-  not a valid reply: the user has nothing to answer and nothing to accept. If the interview has
-  run its course, set "card".
-- **If your "say" says you are making a change — "adding", "I've added", "here it is", "updated",
-  "appended" — you MUST set "card".** A turn whose prose announces a revision and whose "card"
-  is null ships nothing: the user sees the announcement and no diff, and has to ask again. If
-  you are not ready to return the whole card, do not say you changed it — ask the next question
+- One of them is ALWAYS set. A draft turn that sets neither is not a valid reply: the user
+  has nothing to answer and nothing to accept. If the interview has run its course, set "card".
+- **If your "say" says you are making a card — "here it is", "drafted" — you MUST set
+  "card".** A turn whose prose announces a draft and ships nothing makes the user ask again.
+No prose outside the JSON. No code fences.`
+
+      : `# Output
+
+Return ONLY a JSON object, with "say" as the FIRST key:
+{
+  "say": string,
+  "question": { "text": string, "options": string[], "recommended": number } | null,
+  "changes": [
+    { "field": string, "op": "replace" | "append" | "add" | "remove", "index"?: number, "value"?: any }
+  ]
+}
+
+"field" is a wire name from the card above: "name", "nickname", "description", "personality",
+"scenario", "first_mes", "alternate_greetings", "greeting_states", "mes_example",
+"system_prompt", "post_history_instructions", "creator_notes", "tags".
+
+The operations:
+
+- "replace" — PROSE AND SCALARS ("description", "personality", "scenario", "first_mes",
+  "mes_example", "system_prompt", "post_history_instructions", "creator_notes", "name",
+  "nickname"). "value" is the new text for the WHOLE field, so include everything you want to
+  keep. A field you are not changing gets no edit at all.
+- "replace" with "index" — ONE ENTRY of "alternate_greetings" (a string) or of
+  "greeting_states" (an object with "time"/"location"/"weather"). Every other entry is left
+  alone.
+- "append" — PROSE ONLY. "value" is added to the end of the field, on a new line. This is the
+  cheap way to add a line, a rule or a paragraph without restating the field.
+- "add" / "remove" — "tags" only. "value" is one tag, exactly as it should appear.
+
+Examples:
+  {"field":"description","op":"append","value":"- Keeps a crate of vinyl under the bed."}
+  {"field":"post_history_instructions","op":"replace","value":"..."}
+  {"field":"alternate_greetings","op":"replace","index":2,"value":"..."}
+  {"field":"greeting_states","op":"replace","index":2,"value":{"time":"Friday, 22:40"}}
+  {"field":"tags","op":"add","value":"slow-burn"}
+
+Rules:
+- Set "question" while you still need an answer; set "changes" when you are making the change.
+  Never both.
+- Making NO change is a legal, common answer: return "question": null and "changes": [].
+  A critique that finds nothing to change is exactly this.
+- **If your "say" says you are making a change — "adding", "I've added", "here it is",
+  "updated", "appended" — you MUST return the edits.** A turn whose prose announces a revision
+  and whose "changes" is empty ships nothing: the user sees the announcement and no diff, and
+  has to ask again. If you are not ready, do not say you changed it — ask the next question
   instead, or say plainly that you need one more thing first.
-- The same applies in reverse: never set "card" and describe it as a suggestion you have not
-  made. Setting "card" IS making it.
+- Put the smallest change that does the job. One appended line beats a rewritten field.
+- Never return "card" in this conversation. Edits are the contract here.
 No prose outside the JSON. No code fences.`,
   );
 
@@ -333,9 +393,15 @@ export async function consult(
 
     try {
       const turn = parseConsultTurn(text);
-      // A revision is returned as the WHOLE card, merged onto the one the user is looking at.
-      // A model that proposes only the fields it changed is answering correctly, and the
-      // client's diff and Apply both read the card as complete.
+
+      // Edits are the consult-mode contract: apply them to the card the user is looking at,
+      // and hand the client a WHOLE card so its diff and Apply are untouched. A reply that
+      // still returns a whole `card` (a model ignoring the new contract) goes through the
+      // field-merge instead, so both shapes work.
+      if (card && turn.changes && turn.changes.length > 0) {
+        const result = applyEdits(card, turn.changes);
+        return { ...turn, card: result.card, dropped: result.dropped };
+      }
       if (card && turn.card) {
         return { ...turn, card: mergeProposal(card, turn.card) };
       }
@@ -430,8 +496,9 @@ export function parseConsultTurn(text: string): ConsultTurn {
 
   const question = parseQuestion(record.question);
   const card = record.card === null || record.card === undefined ? null : toParsedCard(record.card);
+  const changes = readEdits(record.changes);
 
-  return { say, question, card };
+  return { say, question, card, ...(changes.length > 0 ? { changes } : {}) };
 }
 
 /** The parsed reply, or a flag saying the text is not JSON at all. */
@@ -532,6 +599,35 @@ export function unwrapFencedProse(text: string): string {
   return (fenced ? fenced[1] : text).trim();
 }
 
+/**
+ * The edits a reply carried, validated as untrusted input but not applied here.
+ *
+ * Shape only: whether a field name is real and an index is in range is decided at apply time,
+ * against the card — that is the only place the current lengths are known. Anything with the
+ * wrong shape is dropped rather than failing the turn, because a malformed line must not
+ * throw away the edits that were fine.
+ */
+function readEdits(value: unknown): CardEdit[] {
+  if (!Array.isArray(value)) return [];
+  const edits: CardEdit[] = [];
+  for (const entry of value) {
+    const record = asRecord(entry);
+    if (!record) continue;
+    const field = asString(record.field).trim();
+    const op = record.op;
+    if (field.length === 0) continue;
+    if (op !== 'replace' && op !== 'append' && op !== 'add' && op !== 'remove') continue;
+
+    const index = typeof record.index === 'number' ? record.index : undefined;
+    edits.push(
+      index === undefined
+        ? { field, op, value: record.value }
+        : { field, op, index, value: record.value },
+    );
+  }
+  return edits;
+}
+
 function parseQuestion(value: unknown): ConsultTurn['question'] {
   if (value === null || value === undefined) return null;
   const record = asRecord(value);
@@ -581,6 +677,150 @@ const PROSE_FIELDS: ReadonlyArray<readonly [wire: string, field: ProseField]> = 
   ['post_history_instructions', 'postHistoryInstructions'],
   ['creator_notes', 'creatorNotes'],
 ];
+
+/**
+ * One edit a reply proposes, as it came off the wire.
+ *
+ * `index` is only meaningful for the two list-valued fields; `value` is typing-free because
+ * the wire is untrusted JSON and every operation narrows it before use.
+ */
+export interface CardEdit {
+  field: string;
+  op: 'replace' | 'append' | 'add' | 'remove';
+  index?: number;
+  value?: unknown;
+}
+
+/** Fields an edit may touch, and how each one is applied. */
+const EDITABLE_PROSE = new Set(PROSE_FIELDS.map(([wire]) => wire));
+const APPENDABLE = new Set([
+  'description',
+  'personality',
+  'scenario',
+  'first_mes',
+  'mes_example',
+  'system_prompt',
+  'post_history_instructions',
+  'creator_notes',
+]);
+
+/**
+ * Applies a list of edits to a card.
+ *
+ * This is the whole point of the protocol: a model asked to add one line used to return the
+ * entire card — 9k characters for this app's own card, 35-70 seconds of streaming, and any
+ * paraphrase in an untouched field read as a change the user never asked for. Edits name only
+ * what changes, so the untouched text cannot drift.
+ *
+ * An edit that cannot be applied — an unknown field, a missing index, a wrong value type — is
+ * dropped, not fatal. The rest of the list is what the user asked for, and a rejection at the
+ * first bad line would ship nothing. The count of dropped edits is returned so a caller can
+ * say so rather than silently under-delivering.
+ */
+export function applyEdits(
+  current: ParsedCard,
+  edits: CardEdit[],
+): { card: ParsedCard; applied: number; dropped: number } {
+  const next: ParsedCard = { ...current };
+  let applied = 0;
+  let dropped = 0;
+
+  // A shallow copy of the two lists, so an entry replacement does not mutate the caller's
+  // card through the shared array reference.
+  let greetings = [...current.alternateGreetings];
+  let states = [...(current.greetingStates ?? [])];
+  let tags = [...current.tags];
+  let listsTouched = false;
+
+  for (const edit of edits) {
+    const field = typeof edit.field === 'string' ? edit.field.trim() : '';
+    const ok = (() => {
+      if (edit.op === 'append') {
+        if (!APPENDABLE.has(field) || typeof edit.value !== 'string') return false;
+        const existing = String(next[PROSE_BY_WIRE(field)] ?? '');
+        const addition = edit.value.trim();
+        if (addition.length === 0) return false;
+        const merged = existing.trim().length === 0 ? addition : `${existing.replace(/\s+$/, '')}\n${addition}`;
+        next[PROSE_BY_WIRE(field)] = merged;
+        return true;
+      }
+
+      if (edit.op === 'add' || edit.op === 'remove') {
+        if (field !== 'tags' || typeof edit.value !== 'string') return false;
+        const tag = edit.value.trim();
+        if (tag.length === 0) return false;
+        const at = tags.findIndex((entry) => entry.toLowerCase() === tag.toLowerCase());
+        if (edit.op === 'add') {
+          if (at >= 0) return false;
+          tags = [...tags, tag];
+        } else {
+          if (at < 0) return false;
+          tags = tags.filter((_, index) => index !== at);
+        }
+        listsTouched = true;
+        return true;
+      }
+
+      if (edit.op !== 'replace') return false;
+
+      if (field === 'alternate_greetings') {
+        const index = edit.index;
+        if (typeof index !== 'number' || !Number.isInteger(index) || typeof edit.value !== 'string') {
+          return false;
+        }
+        if (index < 0 || index > greetings.length) return false;
+        if (index === greetings.length) greetings = [...greetings, edit.value];
+        else greetings = greetings.map((entry, at) => (at === index ? (edit.value as string) : entry));
+        listsTouched = true;
+        return true;
+      }
+
+      if (field === 'greeting_states') {
+        const index = edit.index;
+        if (typeof index !== 'number' || !Number.isInteger(index) || index < 0) return false;
+        const state = asRecord(edit.value);
+        if (!state) return false;
+        const cleaned: GreetingState = {};
+        for (const key of ['time', 'location', 'weather'] as const) {
+          const text = asString(state[key]).trim();
+          if (text.length > 0) cleaned[key] = text;
+        }
+        // Pad with "no scene" up to the index, exactly as `toGreetingStates` does: the two
+        // lists are index-aligned everywhere they are read, so a hole would shift every later
+        // scene onto the wrong opening.
+        while (states.length <= index) states.push({});
+        states = states.map((entry, at) => (at === index ? cleaned : entry));
+        listsTouched = true;
+        return true;
+      }
+
+      if (!EDITABLE_PROSE.has(field) && field !== 'name' && field !== 'nickname') return false;
+      if (typeof edit.value !== 'string') return false;
+      const field2 = PROSE_BY_WIRE(field);
+      if (field2 === 'name' && edit.value.trim().length === 0) return false;
+      next[field2] = edit.value;
+      return true;
+    })();
+
+    if (ok) applied += 1;
+    else dropped += 1;
+  }
+
+  if (listsTouched) {
+    next.alternateGreetings = greetings;
+    next.tags = tags;
+    next.greetingStates = states;
+  }
+
+  return { card: next, applied, dropped };
+}
+
+/** The stored field name for a wire name. */
+function PROSE_BY_WIRE(wire: string): ProseField | 'name' | 'nickname' {
+  const found = PROSE_FIELDS.find(([wireName]) => wireName === wire);
+  if (found) return found[1];
+  return wire === 'name' ? 'name' : 'nickname';
+}
 
 /**
  * A proposed revision, applied to the card it revises.
