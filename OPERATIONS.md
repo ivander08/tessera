@@ -53,10 +53,21 @@ ssh-keygen -lf ~/.ssh/tessera_deploy
 systemctl is-active tessera          # active / inactive
 systemctl status tessera --no-pager  # last lines + start time
 systemctl show tessera -p ActiveEnterTimestamp
-journalctl -u tessera -n 100 --no-pager      # recent logs
-journalctl -u tessera -f                     # follow
+```
+
+`journalctl` **does not work as `tessera-deploy`**: the account is not in `systemd-journal`
+or `adm`, so every query answers `-- No entries --` — which reads as "the service logged
+nothing" when it means "you cannot see the log". Reading logs needs root:
+
+```bash
+# as root
+journalctl -u tessera -n 100 --no-pager
+journalctl -u tessera -f
 journalctl -u tessera --since "30 min ago" --no-pager | grep -i state   # state engine warnings
 ```
+
+Without root the usable alternative is the app's own surface: `/api/health`, the state
+panel, and the memory/compact panels, which report their own failures inline.
 
 Restarting needs sudo, which `tessera-deploy` does not have. Deploys do it through CI;
 anything else needs the root account.
