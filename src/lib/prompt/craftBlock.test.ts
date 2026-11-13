@@ -352,3 +352,50 @@ describe('renderCraftBlock — internal thoughts', () => {
     expect(block).toContain('Never a second');
   });
 });
+
+describe('renderCraftBlock — reply length counts every paragraph', () => {
+  // The rule that produced three-line replies while being obeyed: "under four paragraphs;
+  // paragraphs that are dialogue do not count". A reply of three dialogue paragraphs plus
+  // one narration paragraph was compliant, and read as clipped.
+  test('no length option exempts dialogue', () => {
+    for (const value of [
+      'reallyShort',
+      'short',
+      'medium',
+      'long',
+      'noLimit',
+      'adaptiveShort',
+      'adaptiveMedium',
+      'adaptiveLong',
+    ] as const) {
+      const block = renderCraftBlock({ ...DEFAULT_CRAFT, responseLength: value });
+      expect(block).not.toContain('do not count');
+      expect(block).not.toContain('dialogue paragraphs do not');
+    }
+  });
+
+  test('the fixed lengths are a band, in total paragraphs', () => {
+    expect(renderCraftBlock({ ...DEFAULT_CRAFT, responseLength: 'short' })).toContain(
+      'Three to five paragraphs in total, dialogue included',
+    );
+    expect(renderCraftBlock({ ...DEFAULT_CRAFT, responseLength: 'medium' })).toContain(
+      'Six to nine paragraphs in total',
+    );
+  });
+
+  test('the adaptive lengths name a range per beat', () => {
+    const block = renderCraftBlock({ ...DEFAULT_CRAFT, responseLength: 'adaptiveMedium' });
+    expect(block).toContain('reactive three to four');
+    expect(block).toContain('developmental six to nine');
+  });
+
+  test('a length is accompanied by the rule that keeps it from becoming a metronome', () => {
+    const block = renderCraftBlock({ ...DEFAULT_CRAFT, responseLength: 'medium' });
+    expect(block).toContain("Do not repeat the previous reply's paragraph count");
+  });
+
+  test('an off length adds neither the range nor the variation rule', () => {
+    const block = renderCraftBlock({ ...DEFAULT_CRAFT, responseLength: 'off' });
+    expect(block).not.toContain('paragraph count');
+  });
+});

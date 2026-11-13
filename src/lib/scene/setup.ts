@@ -514,19 +514,19 @@ export const LENGTH_OPTIONS: Array<{
     value: 'short',
     label: 'Short',
     description:
-      'The reply runs under four paragraphs; paragraphs that are dialogue do not count toward the limit.',
+      'Three to five paragraphs in total, dialogue included.',
   },
   {
     value: 'medium',
     label: 'Medium',
     description:
-      'The reply runs under eight paragraphs; paragraphs that are dialogue do not count toward the limit.',
+      'Six to nine paragraphs in total, dialogue included.',
   },
   {
     value: 'long',
     label: 'Long',
     description:
-      'The reply runs four to twelve or more paragraphs; paragraphs that are dialogue do not count toward the limit.',
+      'Ten to fifteen paragraphs in total, dialogue included.',
   },
   {
     value: 'noLimit',
@@ -538,19 +538,19 @@ export const LENGTH_OPTIONS: Array<{
     value: 'adaptiveShort',
     label: 'Adaptive short',
     description:
-      'Length follows the beat: developmental under four paragraphs, transitional under three, reactive under two, climax under six. Dialogue paragraphs do not count.',
+      'The beat sets it, dialogue included: reactive two to three paragraphs, transitional three to four, developmental four to six, climax five to eight.',
   },
   {
     value: 'adaptiveMedium',
     label: 'Adaptive medium',
     description:
-      'Length follows the beat: developmental under eight, transitional under four, reactive under three, climax under ten. Dialogue paragraphs do not count.',
+      'The beat sets it, dialogue included: reactive three to four, transitional four to six, developmental six to nine, climax eight to twelve.',
   },
   {
     value: 'adaptiveLong',
     label: 'Adaptive long',
     description:
-      'Length follows the beat: developmental under nine, transitional under five, reactive under four, climax twelve or more. Dialogue paragraphs do not count.',
+      'The beat sets it, dialogue included: reactive four to six, transitional six to nine, developmental nine to thirteen, climax twelve to eighteen.',
   },
 ];
 

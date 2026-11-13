@@ -512,18 +512,18 @@ const LENGTH_LINE: Record<Craft['responseLength'], string> = {
   reallyShort:
     'The reply is at most two short paragraphs, and one is usually better. No preamble, no recap, no scene-setting: react to what was just said or done and stop. A line of dialogue on its own is a complete reply.',
   short:
-    'The reply runs under four paragraphs; paragraphs that are dialogue do not count toward the limit.',
+    'Three to five paragraphs in total, dialogue included.',
   medium:
-    'The reply runs under eight paragraphs; paragraphs that are dialogue do not count toward the limit.',
-  long: 'The reply runs four to twelve or more paragraphs; paragraphs that are dialogue do not count toward the limit.',
+    'Six to nine paragraphs in total, dialogue included.',
+  long: 'Ten to fifteen paragraphs in total, dialogue included.',
   noLimit:
     'The reply is as long as the scene demands: do not pad, and end early rather than filling space.',
   adaptiveShort:
-    'Length follows the beat: developmental under four paragraphs, transitional under three, reactive under two, climax under six. Dialogue paragraphs do not count.',
+    'The beat sets it, dialogue included: reactive two to three paragraphs, transitional three to four, developmental four to six, climax five to eight.',
   adaptiveMedium:
-    'Length follows the beat: developmental under eight, transitional under four, reactive under three, climax under ten. Dialogue paragraphs do not count.',
+    'The beat sets it, dialogue included: reactive three to four, transitional four to six, developmental six to nine, climax eight to twelve.',
   adaptiveLong:
-    'Length follows the beat: developmental under nine, transitional under five, reactive under four, climax twelve or more. Dialogue paragraphs do not count.',
+    'The beat sets it, dialogue included: reactive four to six, transitional six to nine, developmental nine to thirteen, climax twelve to eighteen.',
 };
 
 const DENSITY_LINE: Record<Craft['density'], string> = {
@@ -674,7 +674,17 @@ export function renderCraftBlock(craft: Craft): string {
   parts.push(TENSE_LINE[craft.tense]);
   parts.push(wrapped('craft_show_tell', SHOW_TELL_LINE[craft.showTell]));
   parts.push(wrapped('craft_distance', DISTANCE_LINE[craft.narrativeDistance]));
-  parts.push(wrapped('craft_length', LENGTH_LINE[craft.responseLength]));
+  // The variation rule rides with the length line: a band is only a band if the model does
+  // not settle on one number inside it. Measured complaint: the reply count was correct and
+  // identical every turn, which reads as a template even when it is compliant.
+  parts.push(
+    wrapped(
+      'craft_length',
+      LENGTH_LINE[craft.responseLength] === ''
+        ? ''
+        : `${LENGTH_LINE[craft.responseLength]}\nDo not repeat the previous reply's paragraph count two turns running: move within the range.`,
+    ),
+  );
   parts.push(wrapped('craft_density', DENSITY_LINE[craft.density]));
   parts.push(wrapped('craft_rhythm', RHYTHM_LINE[craft.rhythm]));
   parts.push(wrapped('craft_figurative', FIGURATIVE_LINE[craft.figurative]));
