@@ -41,6 +41,7 @@ const SIDE: Record<keyof Craft, CostSide> = {
   // Everything else is in `renderCraftBlock`, which is the cached prefix.
   antiSlop: 'prefix',
   interiority: 'prefix',
+  povInteriority: 'prefix',
   earnedKnowledge: 'prefix',
   independentNpcs: 'prefix',
   impulseFirst: 'prefix',

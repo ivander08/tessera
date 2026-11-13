@@ -2,8 +2,7 @@ import { useState } from 'react';
 import { apiJson } from '../lib/api';
 import type { ModelInfo } from '../lib/apiTypes';
 import { messageOf, useAsync, useUnsavedGuard } from '../lib/hooks';
-import type { PresetConfig, ResponseLength } from '../lib/presets/presetConfig';
-import { RESPONSE_LENGTHS } from '../lib/presets/presetConfig';
+import type { PresetConfig } from '../lib/presets/presetConfig';
 import { KnobEditor } from './KnobEditor';
 import { useToast } from './Toast';
 
@@ -331,40 +330,12 @@ export function PresetEditor({
           />
         </div>
 
-        {/* Reply length. Its own block rather than a number in the grid above, because it
-            is not a token count: the choice is about shape, and the description under the
-            control is what tells the reader what they are picking. */}
-        <div className="space-y-1">
-          <span className="text-[var(--text-xs)] text-[var(--ink-dim)]">Reply length</span>
-          <select
-            className="field"
-            value={config.responseLength ?? 'auto'}
-            onChange={(event) =>
-              setConfig({ ...config, responseLength: event.target.value as ResponseLength })
-            }
-          >
-            {RESPONSE_LENGTHS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <span className="block text-[var(--text-xs)] text-[var(--ink-faint)]">
-            {RESPONSE_LENGTHS.find((option) => option.value === (config.responseLength ?? 'auto'))
-              ?.description}
-          </span>
-        </div>
-
-        {config.responseLength === 'custom' && (
-          <ConfigText
-            label="Your length instruction"
-            hint="Sent to the model as written. A sentence or two works better than a word count."
-            value={config.responseLengthCustom ?? ''}
-            onChange={(value) => setConfig({ ...config, responseLengthCustom: value })}
-            rows={2}
-          />
-        )}
-
+        {/* Reply length is deliberately NOT here.
+            It has a second home — the per-chat craft panel — and the two rules competed:
+            a preset shipping "short" silently overrode whatever the chat asked for, in a
+            slot the reader never looked at. The craft setting is the one that knows the
+            scene, so it owns this. `parsePresetConfig` still reads the field, so an
+            imported preset keeps its value and nothing fails to load. */}
         <div className="space-y-2">
           <ConfigFlag
             label="Prefix history lines with speaker names"

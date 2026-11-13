@@ -139,6 +139,33 @@ reader did and react to that. An NPC may voice a guess, in a form the reader can
 contradict next turn; a flat verdict is never a guess.
 </craft_interiority>`;
 
+/**
+ * The POV character's own thought, as its own italic paragraph.
+ *
+ * Distinct from `INTERIORITY`, which is an NPC deciding what to do next. This is the voice
+ * the scene is written from thinking in first person — the thing a reader means by
+ * "internal thoughts" — and it is frequency-gated because a thought on every reply stops
+ * being a thought and becomes a format.
+ */
+const THOUGHTS_FREQUENCY: Record<Exclude<Craft['povInteriority'], 'off'>, string> = {
+  rare: 'At most one reply in four. Most replies have none, and that is correct.',
+  sometimes: 'When the moment is charged — a decision, a lie, a wound, a thing not said. Not every reply.',
+  often: 'Most replies, but never two in a row without a reason.',
+};
+
+function thoughtsBlock(frequency: Exclude<Craft['povInteriority'], 'off'>): string {
+  return `<craft_thoughts>
+The POV character's inner voice may appear as its own italic paragraph: first person, present
+tense, one to three sentences. It is a thought, not a summary — it must change what they do
+next or colour what they say, and a thought that only restates the scene is cut.
+
+Frequency: ${THOUGHTS_FREQUENCY[frequency]}
+
+Never the reader's thoughts, feelings, or what they notice about themselves. Never a second
+thought paragraph in the same reply.
+</craft_thoughts>`;
+}
+
 const EARNED_KNOWLEDGE = `<craft_earned_knowledge>
 An NPC knows only what they witnessed or were explicitly told. No knowledge bridges
 between scenes: an NPC in one room does not know what happened in another, and does
@@ -670,6 +697,7 @@ export function renderCraftBlock(craft: Craft): string {
   parts.push(wrapped('craft_consequence', CONSEQUENCE_LINE[craft.consequence]));
   if (craft.antiSlop) parts.push(ANTISLOP);
   if (craft.interiority) parts.push(INTERIORITY);
+  if (craft.povInteriority !== 'off') parts.push(thoughtsBlock(craft.povInteriority));
   if (craft.earnedKnowledge) parts.push(EARNED_KNOWLEDGE);
   if (craft.independentNpcs) parts.push(INDEPENDENT_NPCS);
   // Anti-parrot and stagnation are NOT here. They are emitted separately into the tail —

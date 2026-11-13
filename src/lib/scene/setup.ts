@@ -100,6 +100,15 @@ export interface Craft {
   antiSlop: boolean;
   /** Give NPCs brief, tactical interiority; never the reader's. */
   interiority: boolean;
+  /**
+   * How often the POV character's own thought appears as an italic paragraph.
+   *
+   * Separate from `interiority`, which is about an NPC deciding what to do next. This is
+   * the character the scene is written from thinking in their own voice — the thing a
+   * reader means by "internal thoughts". Frequency rather than a switch, because a thought
+   * on every reply stops being a thought and becomes a format.
+   */
+  povInteriority: 'off' | 'rare' | 'sometimes' | 'often';
   /** NPC knowledge is earned, never ambient. */
   earnedKnowledge: boolean;
   /** NPCs have their own wants and may refuse, lose interest, or disagree. */
@@ -193,6 +202,9 @@ export const DEFAULT_CRAFT: Craft = {
   register: 'cinematic',
   antiSlop: true,
   interiority: true,
+  // Off by default: this changes how every reply is written, and a new behaviour must not
+  // silently rewrite chats that were working.
+  povInteriority: 'off',
   earnedKnowledge: true,
   independentNpcs: true,
   vocalisation: true,
@@ -1118,6 +1130,33 @@ interface CraftEnumRow {
  * entries; rendering them through the same map as the rest is what keeps one row pattern
  * in the panel instead of two.
  */
+export const POV_INTERIORITY_OPTIONS: Array<{
+  value: Craft['povInteriority'];
+  label: string;
+  description: string;
+}> = [
+  {
+    value: 'off',
+    label: 'Off',
+    description: 'No inner voice. The scene is observed from outside.',
+  },
+  {
+    value: 'rare',
+    label: 'Rare',
+    description: 'At most one reply in four. Most replies have none.',
+  },
+  {
+    value: 'sometimes',
+    label: 'Sometimes',
+    description: 'When the moment is charged — a decision, a lie, a wound. Not every reply.',
+  },
+  {
+    value: 'often',
+    label: 'Often',
+    description: 'Most replies, but never two in a row without a reason.',
+  },
+];
+
 export const CRAFT_ENUMS: CraftEnumRow[] = [
   {
     key: 'pov',
@@ -1149,6 +1188,12 @@ export const CRAFT_ENUMS: CraftEnumRow[] = [
     label: 'Narrative distance',
     description: 'How close narration sits to the POV character.',
     options: DISTANCE_OPTIONS,
+  },
+  {
+    key: 'povInteriority',
+    label: 'Internal thoughts',
+    description: 'How often the POV character thinks in their own voice.',
+    options: POV_INTERIORITY_OPTIONS,
   },
   {
     key: 'responseLength',
@@ -1304,6 +1349,9 @@ function parseCraft(value: unknown, fallback: Craft): Craft {
     register: oneOf('register', REGISTER_MODES),
     antiSlop: flag('antiSlop'),
     interiority: flag('interiority'),
+    povInteriority: POV_INTERIORITY_OPTIONS.some((option) => option.value === record.povInteriority)
+      ? (record.povInteriority as Craft['povInteriority'])
+      : fallback.povInteriority,
     earnedKnowledge: flag('earnedKnowledge'),
     independentNpcs: flag('independentNpcs'),
     vocalisation: flag('vocalisation'),

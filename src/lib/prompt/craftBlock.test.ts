@@ -66,6 +66,7 @@ describe('renderCraftBlock', () => {
       tense: 'off',
       showTell: 'off',
       narrativeDistance: 'off',
+      povInteriority: 'off',
       responseLength: 'off',
       density: 'off',
       rhythm: 'off',
@@ -315,5 +316,38 @@ describe('renderContentPolicy', () => {
     const base = renderContentPolicy(DEFAULT_CRAFT);
     expect(renderContentPolicy({ ...DEFAULT_CRAFT, pov: 'off', register: 'off' })).toBe(base);
     expect(renderContentPolicy({ ...DEFAULT_CRAFT, antiSlop: false })).toBe(base);
+  });
+});
+
+describe('renderCraftBlock — internal thoughts', () => {
+  // The POV character thinking in their own voice, as its own italic paragraph. Distinct
+  // from `craft_interiority`, which is an NPC deciding what to do next.
+  test('off emits nothing at all', () => {
+    expect(renderCraftBlock({ ...DEFAULT_CRAFT, povInteriority: 'off' })).not.toContain(
+      'craft_thoughts',
+    );
+  });
+
+  test('each frequency carries its own rule', () => {
+    const rare = renderCraftBlock({ ...DEFAULT_CRAFT, povInteriority: 'rare' });
+    expect(rare).toContain('<craft_thoughts>');
+    expect(rare).toContain('At most one reply in four');
+
+    const sometimes = renderCraftBlock({ ...DEFAULT_CRAFT, povInteriority: 'sometimes' });
+    expect(sometimes).toContain('When the moment is charged');
+
+    const often = renderCraftBlock({ ...DEFAULT_CRAFT, povInteriority: 'often' });
+    expect(often).toContain('Most replies');
+  });
+
+  test('states the shape and the two hard limits', () => {
+    const block = renderCraftBlock({ ...DEFAULT_CRAFT, povInteriority: 'sometimes' });
+    // The shape: its own italic paragraph, first person, present tense, 1-3 sentences.
+    expect(block).toContain('italic paragraph');
+    expect(block).toContain('first person');
+    expect(block).toContain('one to three sentences');
+    // The limits: never the reader's thoughts, never two in one reply.
+    expect(block).toContain("Never the reader's thoughts");
+    expect(block).toContain('Never a second');
   });
 });

@@ -130,6 +130,7 @@ describe('parseSceneSetup — craft', () => {
         pov: 'third',
         register: 'literary',
         antiSlop: false,
+        povInteriority: 'sometimes',
         interiority: true,
         earnedKnowledge: false,
         independentNpcs: true,
