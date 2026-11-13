@@ -93,6 +93,7 @@ describe('renderCraftBlock', () => {
       register: 'plain',
       antiSlop: false,
       interiority: true,
+      povInteriority: 'sometimes',
       earnedKnowledge: false,
       independentNpcs: true,
       vocalisation: true,
