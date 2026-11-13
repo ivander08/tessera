@@ -1,3 +1,4 @@
+import { settingsForChat } from './settings';
 import { complete } from '../cheap';
 import { estimateTokens } from '../../../src/lib/tokenEstimate';
 import { visiblePathCte } from '../branch';
@@ -105,7 +106,15 @@ export async function summarize(
 
   // Throws a clear "no cheap model configured" / "no API key" error before any write,
   // so a failed summarization never leaves a half-written row behind.
-  const first = await complete(env, { system: SYSTEM, user: transcript, maxTokens: 1400 });
+  // The CHAT's settings, not the default preset's: this work belongs to one conversation,
+  // and a preset attached to that chat names the model the reader chose for it.
+  const settings = await settingsForChat(env, chatId);
+  const first = await complete(env, {
+    system: SYSTEM,
+    user: transcript,
+    maxTokens: 1400,
+    settings,
+  });
   let content = first.text.trim();
 
   // One retry, and only when the reply is clearly a scene rather than a summary. The

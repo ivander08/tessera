@@ -1,3 +1,4 @@
+import { settingsForChat } from './settings';
 import { complete, parseJsonReply } from '../cheap';
 import { asRecord, asString } from '../../../src/lib/json';
 import type { DbStatement } from '../db/driver';
@@ -88,6 +89,7 @@ export async function proposeCompaction(
     .bind(chatId, batch + 1)
     .all<{ id: string; text: string }>();
 
+  const settings = await settingsForChat(env, chatId);
   const examined = results.slice(0, batch);
   if (examined.length === 0) return { ops: [], examined: 0, remaining: 0 };
 
@@ -100,6 +102,7 @@ export async function proposeCompaction(
 
   for (const rows of attempts) {
     const reply = await complete(env, {
+      settings,
       system: SYSTEM,
       user: [
         `The batch, ${rows.length} entries. The ids are the line numbers:`,

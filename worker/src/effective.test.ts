@@ -4,6 +4,7 @@ import { describe, expect, test } from 'bun:test';
 import { exec, makeTestEnv } from './test/harness';
 import { loadEffectiveSettings } from './effective';
 import { DEFAULT_SYSTEM_PROMPT, loadChatSettings } from './db';
+import { settingsForChat } from './memory/settings';
 
 /**
  * Where a generation setting comes from.
@@ -200,5 +201,49 @@ describe('loadEffectiveSettings', () => {
     expect(legacy.provider).toBe('kenari');
     expect(legacy.cheapProvider).toBe('openrouter');
     expect(legacy.cheapModel).toBe('small/model');
+  });
+});
+
+describe('a chat-scoped side-channel model', () => {
+  test("the chat's preset decides the cheap pair, not the default preset", async () => {
+    // The reported bug: a chat attached to a preset naming deepseek-v4-pro kept answering
+    // its consultant and its summaries with the DEFAULT preset's glm-5-3-flash, so changing
+    // the model looked like it did nothing.
+    const { env, db } = makeEnv();
+    setting(db, 'default_preset_id', 'default-1');
+    preset(db, 'default-1', { provider: 'kenari', model: 'glm-5-3-flash' });
+    preset(db, 'chat-preset', {
+      provider: 'kenari',
+      model: 'deepseek-v4-pro',
+      cheapProvider: 'kenari',
+      cheapModel: 'deepseek-v4-pro',
+    });
+    exec(
+      db,
+      `INSERT INTO chats (id, character_id, persona_id, title, preset_id, window_start_seq,
+                          session_id, created_at, updated_at)
+       VALUES ('chat-1', NULL, NULL, 't', 'chat-preset', 0, 's', 0, 0)`,
+    );
+
+    const chatScoped = await settingsForChat(env, 'chat-1');
+    expect(chatScoped.cheapModel).toBe('deepseek-v4-pro');
+
+    // The default preset is still the right answer for work that belongs to no chat.
+    const background = await loadEffectiveSettings(env, null);
+    expect(background.cheapModel).toBe('glm-5-3-flash');
+  });
+
+  test('a chat with no preset falls back to the default preset', async () => {
+    const { env, db } = makeEnv();
+    setting(db, 'default_preset_id', 'default-1');
+    preset(db, 'default-1', { provider: 'kenari', model: 'glm-5-3-flash' });
+    exec(
+      db,
+      `INSERT INTO chats (id, character_id, persona_id, title, preset_id, window_start_seq,
+                          session_id, created_at, updated_at)
+       VALUES ('chat-1', NULL, NULL, 't', NULL, 0, 's', 0, 0)`,
+    );
+
+    expect((await settingsForChat(env, 'chat-1')).cheapModel).toBe('glm-5-3-flash');
   });
 });

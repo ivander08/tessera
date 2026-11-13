@@ -1,3 +1,4 @@
+import { settingsForChat } from './settings';
 import { complete } from '../cheap';
 import { loadPathTail } from '../branch';
 
@@ -87,6 +88,7 @@ export async function assistMemory(
   }
 
   const reply = await complete(env, {
+    settings: await settingsForChat(env, chatId),
     system: SYSTEM,
     user: parts.join('\n'),
     maxTokens: 1400,

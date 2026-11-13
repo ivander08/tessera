@@ -1,3 +1,4 @@
+import { settingsForChat } from './settings';
 import { complete, parseJsonReply } from '../cheap';
 import { asRecord } from '../../../src/lib/json';
 import { visiblePathCte } from '../branch';
@@ -252,6 +253,7 @@ export async function extractFacts(
   // extract on a real chat (see `scheduleMemory` for what that cost). The floor leaves
   // headroom for a model that still thinks past the flag.
   const reply = await complete(env, {
+    settings: await settingsForChat(env, chatId),
     system: SYSTEM,
     user: [
       'Existing facts:',

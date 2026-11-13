@@ -1,3 +1,4 @@
+import { settingsForChat } from './settings';
 import { complete } from '../cheap';
 import { estimateTokens } from '../../../src/lib/tokenEstimate';
 
@@ -95,7 +96,12 @@ export async function consolidate(env: Env, chatId: string): Promise<Consolidate
     })
     .join('\n\n');
 
-  const reply = await complete(env, { system: SYSTEM, user: transcript, maxTokens: 900 });
+  const reply = await complete(env, {
+    settings: await settingsForChat(env, chatId),
+    system: SYSTEM,
+    user: transcript,
+    maxTokens: 900,
+  });
   const content = reply.text.trim();
   if (content.length === 0) throw new Error('arc consolidation returned no content');
 

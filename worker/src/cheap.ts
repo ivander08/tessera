@@ -132,11 +132,20 @@ async function prepare(
     user?: string;
     messages?: WireMessage[];
     maxTokens?: number;
+    /**
+     * The generation settings to resolve the side-channel pair from.
+     *
+     * The DEFAULT preset is the right answer for background work — memory, state — which
+     * runs outside any chat. It is the WRONG answer when the work belongs to a chat: a
+     * chat can attach its own preset, and that preset's cheap pair is the one the reader
+     * chose for that scene. Measured: a chat on a preset naming deepseek-v4-pro kept
+     * summarising with the default preset's glm-5-3-flash, so a model change appeared to
+     * be ignored.
+     */
+    settings?: ChatSettings;
   },
 ): Promise<Prepared> {
-  // One read for the pair and the ceilings it is subject to; both come from the same
-  // default preset now.
-  const settings = await loadEffectiveSettings(env, null);
+  const settings = opts.settings ?? (await loadEffectiveSettings(env, null));
   const cheap = cheapFrom(settings);
   if (!cheap) {
     throw new Error(
@@ -218,7 +227,14 @@ function sideChannelBody(
  */
 export async function complete(
   env: Env,
-  opts: { system?: string; user: string; maxTokens?: number; json?: boolean },
+  opts: {
+    system?: string;
+    user: string;
+    maxTokens?: number;
+    json?: boolean;
+    /** See `prepare`: a chat's own settings beat the default preset. */
+    settings?: ChatSettings;
+  },
 ): Promise<CompletionResult> {
   const { provider, model, url, init } = await prepare(env, opts);
   const body = sideChannelBody(init, { stream: false, json: opts.json });
@@ -244,7 +260,14 @@ export async function complete(
  */
 export async function streamCheap(
   env: Env,
-  opts: { system?: string; messages: WireMessage[]; maxTokens?: number; json?: boolean },
+  opts: {
+    system?: string;
+    messages: WireMessage[];
+    maxTokens?: number;
+    json?: boolean;
+    /** See `prepare`: a chat's own settings beat the default preset. */
+    settings?: ChatSettings;
+  },
   onDelta?: (text: string) => void,
 ): Promise<CompletionResult> {
   const { provider, model, url, init } = await prepare(env, opts);

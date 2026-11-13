@@ -227,7 +227,26 @@ export async function getChatPreset(env: Env, chatId: string): Promise<Response>
   return json(row ? presetPayload(row) : null);
 }
 
+/**
+ * Deletes a preset, and clears every pointer at it.
+ *
+ * A bare DELETE leaves dangling references, and they fail silently in two different ways:
+ * a chat whose `preset_id` still names the deleted row falls back to the DEFAULT preset —
+ * not to the chat's previous behaviour — and `default_preset_id` pointing at nothing reads
+ * as "no default", so an install that had one quietly loses it. Measured on prod: the
+ * default preset id answered 404 and nothing said so.
+ *
+ * Clearing the chat pointers is the honest state: `preset_id` NULL means "use the default",
+ * which is what the chat actually does once its preset is gone. Inventing a replacement
+ * would claim the chat still has a preset chosen.
+ */
 export async function deletePreset(env: Env, id: string): Promise<Response> {
-  await env.DB.prepare('DELETE FROM presets WHERE id = ?').bind(id).run();
-  return json({ ok: true });
+  const cleared = await env.DB.batch([
+    env.DB.prepare('UPDATE chats SET preset_id = NULL WHERE preset_id = ?').bind(id),
+    env.DB.prepare(
+      `UPDATE settings SET value = '' WHERE key = 'default_preset_id' AND value = ?`,
+    ).bind(id),
+    env.DB.prepare('DELETE FROM presets WHERE id = ?').bind(id),
+  ]);
+  return json({ ok: true, chats: cleared[0]?.meta?.changes ?? 0 });
 }

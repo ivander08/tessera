@@ -56,6 +56,10 @@ export default function Settings() {
   const [keyDraft, setKeyDraft] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [migrating, setMigrating] = useState(false);
+  // The default-preset picker saves on change, so it reports its own state rather than
+  // sharing `busy` with the Save button it no longer depends on.
+  const [savingDefault, setSavingDefault] = useState(false);
+  const [defaultStatus, setDefaultStatus] = useState<string | null>(null);
   const toast = useToast();
 
   const form: SettingsShape = { ...data, ...edits };
@@ -168,6 +172,30 @@ export default function Settings() {
     }
   }
 
+  /**
+   * Writes `default_preset_id` by itself.
+   *
+   * Separate from `save()` because it is a different kind of change: picking the default
+   * preset is a choice about which chat template applies, not a form field waiting for a
+   * commit. It writes the pointer ALONE, so a typo in another field cannot block it and a
+   * failure here cannot half-save the rest.
+   */
+  async function saveDefaultPreset(value: string): Promise<void> {
+    setSavingDefault(true);
+    try {
+      await apiJson('/api/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ settings: { default_preset_id: value } }),
+      });
+      setDefaultStatus(value ? 'Saved.' : 'Cleared.');
+      reload();
+    } catch (cause) {
+      setDefaultStatus(messageOf(cause));
+    } finally {
+      setSavingDefault(false);
+    }
+  }
+
   async function saveKey(providerId: string) {
     const value = (keyDraft[providerId] ?? '').trim();
     if (!value) return;
@@ -209,8 +237,16 @@ export default function Settings() {
           <select
             id="settings-default-preset"
             className="field"
+            disabled={savingDefault}
             value={form.default_preset_id ?? ''}
-            onChange={(event) => setEdits({ ...form, default_preset_id: event.target.value })}
+            onChange={(event) => {
+              // The pointer is its own save: this control looks like it takes effect
+              // immediately — every other select in the app does — and leaving it pending
+              // on a Save button three sections down is why it appeared not to stick.
+              const value = event.target.value;
+              setEdits({ ...form, default_preset_id: value });
+              void saveDefaultPreset(value);
+            }}
           >
             <option value="">— none —</option>
             {presetList.map((preset) => (
@@ -221,6 +257,11 @@ export default function Settings() {
           </select>
         </label>
 
+        {(defaultStatus || savingDefault) && (
+          <p className="form-hint" style={{ marginTop: 6 }}>
+            {savingDefault ? 'Saving…' : defaultStatus}
+          </p>
+        )}
         {presets.error && <p className="note warn">{presets.error}</p>}
 
         {legacy && (
