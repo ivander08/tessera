@@ -48,6 +48,14 @@ export interface JobRow {
 const MAX_ATTEMPTS = 3;
 
 /**
+ * How long a job that used every attempt waits before it is tried again.
+ *
+ * Long enough that a deterministic failure costs almost nothing, short enough that a
+ * configuration fix takes effect the same day without anyone clearing a row by hand.
+ */
+const REVIVE_AFTER_MS = 30 * 60 * 1000;
+
+/**
  * Enqueue a job, or return the existing job's id if `idempotencyKey` was already used.
  *
  * `ON CONFLICT DO NOTHING RETURNING` yields no row on a duplicate, so the id is
@@ -97,6 +105,31 @@ export async function enqueue(
     .bind(now, idempotencyKey, MAX_ATTEMPTS)
     .first<{ id: string }>();
   if (requeued) return requeued.id;
+
+  /**
+   * A job that used up its attempts is NOT retried immediately — but it must not be dead
+   * forever either.
+   *
+   * The attempts floor bounds a loop that fails for a reason that will never change. It
+   * does not bound a failure that was environmental: the cheap model ran out of output
+   * budget, the provider dropped the socket, the key was rotated back. Measured on prod:
+   * one such failure at the end of October left the same idempotency key failing every
+   * turn, `ON CONFLICT DO NOTHING` matching the dead row, and that chat's facts stopped
+   * growing for sixteen days with nothing said.
+   *
+   * So it retries after a cooldown, with the attempt counter reset. A genuinely broken job
+   * costs one cheap call per cooldown instead of vanishing; a fixed configuration heals by
+   * itself.
+   */
+  const revived = await env.DB.prepare(
+    `UPDATE jobs
+        SET status = 'queued', lease_until = NULL, attempts = 0, updated_at = ?
+      WHERE idempotency_key = ? AND status = 'failed' AND updated_at < ?
+      RETURNING id`,
+  )
+    .bind(now, idempotencyKey, now - REVIVE_AFTER_MS)
+    .first<{ id: string }>();
+  if (revived) return revived.id;
 
   const existing = await env.DB.prepare('SELECT id FROM jobs WHERE idempotency_key = ?')
     .bind(idempotencyKey)

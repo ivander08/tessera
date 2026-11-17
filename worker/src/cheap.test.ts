@@ -109,17 +109,61 @@ describe('complete', () => {
     ]);
   });
 
-  test('reports a budget-starved reply instead of leaving JSON.parse to blame the JSON', async () => {
+  test('retries once with a doubled budget before giving up on a starved reply', async () => {
+    // Measured on prod: deepseek-v4-pro ignores `enable_thinking: false`, spends all 1400
+    // tokens on reasoning, and returns nothing. One retry with more room is the difference
+    // between a failed memory job and a working one.
     const env = await configuredEnv();
-    await withFetch(
-      () => bufferedReply('', 'length'),
-      async () => {
-        // This is exactly the production shape: empty content, finish_reason `length`.
-        await expect(complete(env, { user: 'u', maxTokens: 2048 })).rejects.toThrow(
-          /used all 2048 tokens without producing an answer/,
-        );
-      },
+    const budgets: number[] = [];
+    globalThis.fetch = (async (_url: unknown, init: RequestInit) => {
+      budgets.push((JSON.parse(String(init.body)) as { max_tokens: number }).max_tokens);
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: '' }, finish_reason: 'length' }] }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    }) as unknown as typeof fetch;
+
+    await expect(complete(env, { user: 'u', maxTokens: 2048 })).rejects.toThrow(
+      /used all 4096 tokens without producing an answer/,
     );
+    expect(budgets).toEqual([2048, 4096]);
+  });
+
+  test('a starved first attempt that then answers is a success, not an error', async () => {
+    const env = await configuredEnv();
+    let call = 0;
+    globalThis.fetch = (async () => {
+      call += 1;
+      const content = call === 1 ? '' : '{"ok":true}';
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content }, finish_reason: call === 1 ? 'length' : 'stop' }],
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    }) as unknown as typeof fetch;
+
+    const result = await complete(env, { user: 'u', maxTokens: 1024, json: true });
+    expect(result.text).toBe('{"ok":true}');
+    expect(call).toBe(2);
+  });
+
+  test('an empty reply that stopped for another reason is not retried', async () => {
+    // Only the length-capped shape is a reasoning model eating the budget. An empty reply
+    // that stopped normally is a real failure, and retrying it just spends twice.
+    const env = await configuredEnv();
+    let call = 0;
+    globalThis.fetch = (async () => {
+      call += 1;
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: '' }, finish_reason: 'stop' }] }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    }) as unknown as typeof fetch;
+
+    const result = await complete(env, { user: 'u', maxTokens: 1024 });
+    expect(result.text).toBe('');
+    expect(call).toBe(1);
   });
 
   test('names the model in that message, so the fix is obvious', async () => {
@@ -221,14 +265,14 @@ describe('streamCheap', () => {
     expect(result.finishReason).toBe('length');
   });
 
-  test('a budget-starved stream throws the same message the buffered path does', async () => {
+  test('a budget-starved stream escalates and names the final budget', async () => {
     const env = await configuredEnv();
     await withFetch(
       () => streamedReply([], 'length'),
       async () => {
         await expect(
           streamCheap(env, { messages: [{ role: 'user', content: 'u' }], maxTokens: 512 }),
-        ).rejects.toThrow(/used all 512 tokens without producing an answer/);
+        ).rejects.toThrow(/used all 1024 tokens without producing an answer/);
       },
     );
   });

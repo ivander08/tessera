@@ -236,18 +236,29 @@ export async function complete(
     settings?: ChatSettings;
   },
 ): Promise<CompletionResult> {
-  const { provider, model, url, init } = await prepare(env, opts);
-  const body = sideChannelBody(init, { stream: false, json: opts.json });
+  let budget = opts.maxTokens ?? 1024;
 
-  const res = await fetch(url, { ...init, body: JSON.stringify(body) });
-  if (!res.ok) {
-    // Kenari's 401 is plain text, so the error reader — never `res.json()` — decides.
-    throw new Error(provider.readError(res.status, await res.text().catch(() => '')));
+  for (let attempt = 0; ; attempt += 1) {
+    const { provider, model, url, init } = await prepare(env, { ...opts, maxTokens: budget });
+    const body = sideChannelBody(init, { stream: false, json: opts.json });
+
+    const res = await fetch(url, { ...init, body: JSON.stringify(body) });
+    if (!res.ok) {
+      // Kenari's 401 is plain text, so the error reader — never `res.json()` — decides.
+      throw new Error(provider.readError(res.status, await res.text().catch(() => '')));
+    }
+
+    const result = await readResponse(provider, res);
+    if (attempt === 0 && spentTheBudget(result) && budget < SIDE_CHANNEL_MAX_TOKENS) {
+      // Same question, more room. One retry: a model that empties 4096 tokens too is not
+      // going to be talked into answering by a third attempt.
+      budget = Math.min(budget * 2, SIDE_CHANNEL_MAX_TOKENS);
+      continue;
+    }
+
+    assertAnswered(result, model, budget);
+    return result;
   }
-
-  const result = await readResponse(provider, res);
-  assertAnswered(result, model, opts.maxTokens ?? 1024);
-  return result;
 }
 
 /**
@@ -270,17 +281,28 @@ export async function streamCheap(
   },
   onDelta?: (text: string) => void,
 ): Promise<CompletionResult> {
-  const { provider, model, url, init } = await prepare(env, opts);
-  const body = sideChannelBody(init, { stream: true, json: opts.json });
+  let budget = opts.maxTokens ?? 1024;
 
-  const res = await fetch(url, { ...init, body: JSON.stringify(body) });
-  if (!res.ok) {
-    throw new Error(provider.readError(res.status, await res.text().catch(() => '')));
+  for (let attempt = 0; ; attempt += 1) {
+    const { provider, model, url, init } = await prepare(env, { ...opts, maxTokens: budget });
+    const body = sideChannelBody(init, { stream: true, json: opts.json });
+
+    const res = await fetch(url, { ...init, body: JSON.stringify(body) });
+    if (!res.ok) {
+      throw new Error(provider.readError(res.status, await res.text().catch(() => '')));
+    }
+
+    const result = await readResponse(provider, res, onDelta);
+    if (attempt === 0 && spentTheBudget(result) && budget < SIDE_CHANNEL_MAX_TOKENS) {
+      // Nothing was streamed in this case — an empty reply has no deltas — so retrying
+      // cannot make the reader watch the same answer arrive twice.
+      budget = Math.min(budget * 2, SIDE_CHANNEL_MAX_TOKENS);
+      continue;
+    }
+
+    assertAnswered(result, model, budget);
+    return result;
   }
-
-  const result = await readResponse(provider, res, onDelta);
-  assertAnswered(result, model, opts.maxTokens ?? 1024);
-  return result;
 }
 
 /**
@@ -320,6 +342,31 @@ async function readResponse(
 
   onDelta?.(result.text);
   return result;
+}
+
+/**
+ * The most a side-channel call will escalate to.
+ *
+ * A reasoning model that ignores `enable_thinking: false` spends the answer's budget on
+ * `reasoning_content` and returns empty. Measured on prod: `deepseek-v4-pro` at 1400
+ * tokens returned nothing, three attempts in a row, and the memory pipeline stopped for
+ * the whole chat.
+ *
+ * 4096 is not a guess about how much thinking is enough — it is the point past which a
+ * side channel is no longer cheap. A model that still finishes empty there is one the
+ * reader should replace, and the error says so.
+ */
+const SIDE_CHANNEL_MAX_TOKENS = 4096;
+
+/**
+ * Whether a reply is a reasoning model eating the allowance rather than an answer.
+ *
+ * Only the shape counts: empty content AND the provider reporting the length cap. An
+ * empty reply that stopped for any other reason is a real failure and must not be retried
+ * with more money.
+ */
+function spentTheBudget(result: CompletionResult): boolean {
+  return result.text.trim().length === 0 && result.finishReason === 'length';
 }
 
 /**

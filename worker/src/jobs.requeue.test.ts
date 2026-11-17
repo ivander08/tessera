@@ -116,3 +116,51 @@ describe('a failed memory job', () => {
     expect(row.status).toBe('claimed');
   });
 });
+
+describe('a job that used every attempt', () => {
+  // The prod failure: one budget-starved call at the end of October left the same key
+  // failing, `ON CONFLICT DO NOTHING` matching the dead row, and that chat's facts stopped
+  // growing for sixteen days with nothing said. The attempts floor must bound a loop
+  // without making a transient failure permanent.
+  test('is revived after the cooldown, with its counter reset', async () => {
+    const { env, db } = makeEnv();
+    seedChat(db, 'chat-a');
+    await enqueue(env, 'chat-a', 'extract', KEY, { fromSeq: 10, toSeq: 30 });
+
+    for (let cycle = 0; cycle < 3; cycle++) {
+      const queued = await enqueue(env, 'chat-a', 'extract', KEY, { fromSeq: 10, toSeq: 30 });
+      const claimed = await claim(env, queued, 60_000);
+      await start(env, claimed as JobRow, 60_000);
+      await finish(env, (claimed as JobRow).id, 'failed', undefined, 'budget starved');
+    }
+    expect((await jobByKey(env, KEY)).status).toBe('failed');
+
+    // Age the row past the cooldown, which is what a stuck chat looks like after half an
+    // hour of no progress.
+    db.run("UPDATE jobs SET updated_at = ? WHERE idempotency_key = ?", [Date.now() - 31 * 60 * 1000, KEY]);
+
+    const again = await enqueue(env, 'chat-a', 'extract', KEY, { fromSeq: 10, toSeq: 30 });
+    const row = await jobByKey(env, KEY);
+    expect(again).toBe(row.id);
+    expect(row.status).toBe('queued');
+    // Reset, so the revived job gets a full set of attempts rather than dying on the first.
+    expect(row.attempts).toBe(0);
+  });
+
+  test('is not revived before the cooldown', async () => {
+    const { env, db } = makeEnv();
+    seedChat(db, 'chat-a');
+    await enqueue(env, 'chat-a', 'extract', KEY, { fromSeq: 10, toSeq: 30 });
+
+    for (let cycle = 0; cycle < 3; cycle++) {
+      const queued = await enqueue(env, 'chat-a', 'extract', KEY, { fromSeq: 10, toSeq: 30 });
+      const claimed = await claim(env, queued, 60_000);
+      await start(env, claimed as JobRow, 60_000);
+      await finish(env, (claimed as JobRow).id, 'failed', undefined, 'budget starved');
+    }
+
+    db.run("UPDATE jobs SET updated_at = ? WHERE idempotency_key = ?", [Date.now() - 5 * 60 * 1000, KEY]);
+    await enqueue(env, 'chat-a', 'extract', KEY, { fromSeq: 10, toSeq: 30 });
+    expect((await jobByKey(env, KEY)).status).toBe('failed');
+  });
+});
