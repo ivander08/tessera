@@ -1,5 +1,6 @@
+import { useEffect } from 'react';
 import { apiJson } from '../lib/api';
-import { encodeConsultChoice } from '../lib/consultChoice';
+import { encodeConsultChoice, resolveStoredChoice } from '../lib/consultChoice';
 import type { ModelInfo } from '../lib/apiTypes';
 import { useAsync } from '../lib/hooks';
 
@@ -128,6 +129,25 @@ export function ConsultModelPicker({
   }, [providerKey]);
 
   const groups = catalogue.data ?? [];
+
+  // A value saved before the picker named providers is a bare model id. Resolve it against
+  // the catalogues that actually exist: upgrade it to a qualified choice when some gateway
+  // carries it, and drop it when none does — a stale id otherwise overrides the preset with
+  // a model the preset's provider has never heard of.
+  const chatGroups = groups.map((group) => ({
+    provider: group.provider,
+    ids: group.models.filter(canChat).map((entry) => entry.id),
+  }));
+  useEffect(() => {
+    // Nothing to validate against yet, or every catalogue failed: leave the value alone
+    // rather than clearing a choice that may be perfectly good.
+    if (catalogue.loading || chatGroups.length === 0) return;
+    const next = resolveStoredChoice(value, chatGroups, provider);
+    if (next !== value) onChange(next);
+    // `chatGroups` is derived from `catalogue.data`, which changes with `providerKey`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value, catalogue.loading, providerKey, provider]);
+
   const known = new Set(
     groups.flatMap((group) =>
       group.models.filter(canChat).map((entry) => encodeConsultChoice({ provider: group.provider, model: entry.id })),
@@ -149,8 +169,9 @@ export function ConsultModelPicker({
     >
       <option value="">Preset default{fallback ? ` — ${fallback}` : ''}</option>
       {value && !known.has(value) ? (
-        // A choice saved before values named their provider. Showing it beats silently
-        // resetting the reader's pick to the preset default.
+        // A value the catalogue has not validated yet (it is still loading, or every
+        // gateway failed). Once a catalogue arrives, the effect above either upgrades or
+        // drops it; until then, showing it beats a blank select.
         <option value={value}>{value}</option>
       ) : null}
       {groups.map((group) => (
