@@ -21,7 +21,8 @@ const SETTINGS = [
 ];
 
 /** The smallest env that can resolve a key and a side-channel pair. */
-async function configuredEnv(): Promise<Env> {
+async function configuredEnv(extra: Array<{ key: string; value: string }> = []): Promise<Env> {
+  const settings = [...SETTINGS, ...extra];
   const { enc, iv } = await encryptKey('sk-test', TOKEN);
   const keyRow = { key_enc: new Uint8Array(enc), iv: new Uint8Array(iv) };
 
@@ -30,7 +31,7 @@ async function configuredEnv(): Promise<Env> {
       prepare: (sql: string) => {
         const statement = {
           bind: () => statement,
-          all: async () => ({ results: sql.includes('FROM settings') ? SETTINGS : [] }),
+          all: async () => ({ results: sql.includes('FROM settings') ? settings : [] }),
           first: async () => keyRow,
           run: async () => ({}),
         };
@@ -209,9 +210,9 @@ describe('a turn that claims a change it did not send', () => {
           onDelta: () => {},
         });
 
-        // The reply, then BOTH repair shapes (edits, then whole card). No second turn of the
-        // conversation, and no endless loop.
-        expect(sent.length).toBe(3);
+        // The reply, then ONE repair call. It used to be two sequential shapes and measured
+        // 569s on prod for a single question; one call offering both is the fix.
+        expect(sent.length).toBe(2);
         // No card is what makes `ConsultPanel` draw its "No change proposed" panel with the
         // "Do it" button. An error here would leave the reader with nothing to press.
         expect(turn.card).toBeNull();
@@ -349,13 +350,14 @@ describe('a rebuild with no legal edit shape', () => {
   // card, so asked for edits the model wrote "Applied. Sydney is rebuilt" and shipped nothing.
   // The repair now escalates to the whole-card shape, which `mergeProposal` already handles.
   test('repairs through the whole-card shape when edits come back empty', async () => {
-    const env = await configuredEnv();
+    // A raised ceiling, because that is what makes the whole-card shape possible at all: with
+    // the transport's 4096 default the repair is clamped and a 2,000-token card cannot fit.
+    const env = await configuredEnv([{ key: 'cheapMaxTokens', value: '32768' }]);
     const claim = JSON.stringify({
       say: 'Applied. Sydney is rebuilt: inseparable from Ivander at eight, gone at ten.',
       question: null,
       changes: [],
     });
-    const noEdits = JSON.stringify({ say: 'Rewriting.', question: null, changes: [] });
     const wholeCard = JSON.stringify({
       say: 'Rebuilt.',
       question: null,
@@ -377,7 +379,9 @@ describe('a rebuild with no legal edit shape', () => {
     });
 
     let call = 0;
-    const replies = [claim, noEdits, wholeCard];
+    // The repair answer already uses the whole-card shape: the earlier two-step version sent
+    // `noEdits` first, which is exactly the extra generation this change removes.
+    const replies = [claim, wholeCard];
     await withFetch(
       () => jsonReply(replies[Math.min(call++, replies.length - 1)]),
       async (sent) => {
@@ -388,14 +392,14 @@ describe('a rebuild with no legal edit shape', () => {
           onDelta: () => {},
         });
 
-        // Claim, edits attempt, whole-card attempt.
-        expect(sent.length).toBe(3);
+        // Claim, then one repair call that returns the card.
+        expect(sent.length).toBe(2);
         // The second repair asks for the whole card. Its budget is the CONFIGURED ceiling
         // (`cheapMaxTokens`), not a hardcoded number: a 2,000-token card does not fit in the
         // 4,096 transport floor, and clipping it is what the reader saw as "ran out of output
         // budget". The default here is that floor, because this stub configures nothing.
-        expect(sent[2].max_tokens).toBe(4096);
-        expect(String(JSON.stringify(sent[2].messages))).toContain('COMPLETE updated card');
+        // The repair's own budget must fit a whole card.
+        expect(sent[1].max_tokens).toBe(16384);
 
         expect(turn.card?.description).toContain('Loud first, cold second');
         expect(turn.card?.name).toBe('Sydney Sijun Chen');

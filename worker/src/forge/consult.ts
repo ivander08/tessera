@@ -394,47 +394,46 @@ async function repairMissingEdits(
   ];
 
   /**
-   * Two shapes, in this order, because a rebuild and a one-line tweak are different jobs.
+   * ONE repair call, offering both shapes at once.
    *
-   * Edits first: they are cheap, they cannot drift an untouched field, and measured on prod
-   * they repair a single-field change reliably. But the prompt for this mode FORBIDS returning
-   * a whole card, so a request that rewrote four fields had no legal way to answer — and the
-   * model, asked for edits, instead wrote "Applied. Sydney is rebuilt" and shipped nothing.
-   * The whole-card shape already exists on the read side (`mergeProposal`), so the repair asks
-   * for it explicitly when edits come back empty.
+   * It used to be two sequential calls — edits, then whole card — and measured on prod that
+   * stacked into 569 seconds for a single reader question: the first reply, its budget
+   * escalation, then two more full generations. A repair that costs four generations is not a
+   * repair.
+   *
+   * The model can already choose between shapes (the main contract offers both), so the
+   * repair states both and lets it pick. `parseConsultTurn` reads whichever comes back.
+   *
+   * The budget is the configured ceiling, not a fixed number: a whole 2,000-token card plus the
+   * JSON envelope is several thousand tokens, and clipping it mid-card is what "ran out of
+   * output budget" was.
    */
-  const attempts = [
+  const instruction =
     'You said you made that change but sent no edits, so nothing was applied. ' +
-      'Return ONLY the JSON object with the "changes" array that makes the change you ' +
-      'described. "say" must be one short sentence. No question.',
-    // `maxTokens` is raised on this one: a whole 2,000-token card plus the JSON envelope does
-    // not fit in 4,096, and a reply clipped mid-card is what "ran out of output budget" was.
-    'You said you made that change but sent no edits, so nothing was applied. ' +
-      'This change touches several fields. Return the COMPLETE updated card instead: ' +
-      '{"say": "<8 words or fewer>", "question": null, "card": { ...every field... }}. ' +
-      'Copy any field you did not change verbatim. No prose outside the JSON.',
-  ];
+    'Return ONE JSON object with the change itself, in whichever shape fits: ' +
+    '\'{"say":"<8 words>","question":null,"changes":[...]}\' for a small change, or ' +
+    '\'{"say":"<8 words>","question":null,"card":{...the complete card, every field...}}\' ' +
+    'for a rebuild. Copy any field you did not change verbatim. No prose outside the JSON.';
 
-  for (let attempt = 0; attempt < attempts.length; attempt += 1) {
-    try {
-      const { text } = await streamCheap(env, {
-        system: opts.system,
-        messages: [...history, { role: 'user', content: attempts[attempt] }],
-        maxTokens: attempt === 0 ? 4096 : 16384,
-        json: true,
-        model: opts.model,
-        settings: opts.settings,
-      });
+  try {
+    const { text } = await streamCheap(env, {
+      system: opts.system,
+      messages: [...history, { role: 'user', content: instruction }],
+      // 16384: the repair is where the whole-card shape lands, and the card is ~2,000 tokens.
+      maxTokens: 16384,
+      json: true,
+      model: opts.model,
+      settings: opts.settings,
+    });
 
-      const turn = parseConsultTurn(text);
-      if (turn.changes && turn.changes.length > 0) return { changes: turn.changes };
-      if (turn.card) return { card: turn.card };
-    } catch {
-      // This shape failed; the next one may still work. A failure here is the repair failing,
-      // not the reader's turn failing — the caller reports it as "it claimed a change it did
-      // not send".
-    }
+    const turn = parseConsultTurn(text);
+    if (turn.changes && turn.changes.length > 0) return { changes: turn.changes };
+    if (turn.card) return { card: turn.card };
+  } catch {
+    // The repair failed. The caller reports it as "it claimed a change it did not send"; the
+    // reader's own turn is not retried, because its prose has already been streamed.
   }
+
   return null;
 }
 
