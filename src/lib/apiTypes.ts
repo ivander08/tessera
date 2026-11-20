@@ -120,8 +120,18 @@ export interface ModelInfo {
   id: string;
   name?: string;
   context_length?: number;
+  max_output_tokens?: number;
   supported_parameters?: string[];
   pricing?: Record<string, string | number | null>;
+  /**
+   * What the model can do, as the provider reports it.
+   *
+   * The list is 112 models wide and most of them cannot answer a consult: `gpt-image-2`,
+   * `whisper-1`, `veo-3-1-lite` and `muse-video` are in there. Scrolling past them to find a
+   * chat model is the picker's whole cost, so the ones that cannot chat are filtered out.
+   */
+  modalities?: { input?: string[]; output?: string[] };
+  endpoints?: string[];
 }
 
 export interface ProviderKeyRow {

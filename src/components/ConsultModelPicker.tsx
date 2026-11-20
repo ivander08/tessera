@@ -110,7 +110,14 @@ export function ConsultModelPicker({
       }}
     >
       <option value="">Preset default{fallback ? ` — ${fallback}` : ''}</option>
-      {(models.data ?? []).map((entry) => (
+      {/* Chat models only. Measured on this install: 112 models, of which 9 are image, video,
+          speech or transcription models that cannot answer a consult at all. */}
+      {(models.data ?? [])
+        .filter(
+          (entry) =>
+            !entry.endpoints || entry.endpoints.includes('chat') || entry.endpoints.length === 0,
+        )
+        .map((entry) => (
         // Choosing the preset's own model explicitly clears the override rather than pinning
         // it: a pinned copy would stop following the preset, which is the opposite of what
         // choosing that entry says. It compares by `value`, so the option is still listed.
