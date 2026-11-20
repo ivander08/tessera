@@ -6,9 +6,9 @@ import { AppBar } from '../components/AppBar';
 import { ThemeEditor, useLiveTheme } from '../components/ThemeEditor';
 import { useToast } from '../components/Toast';
 import type { PresetSummary } from '../components/PresetEditor';
+import { PROVIDERS } from '../lib/providers';
 import { parseTheme, type Theme } from '../lib/theme';
 
-const PROVIDERS = ['openrouter', 'kenari', 'opencode-go'] as const;
 
 /**
  * What is left of the settings row.

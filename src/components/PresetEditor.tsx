@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { apiJson } from '../lib/api';
 import type { ModelInfo } from '../lib/apiTypes';
 import { messageOf, useAsync, useUnsavedGuard } from '../lib/hooks';
+import { PROVIDERS } from '../lib/providers';
 import type { PresetConfig } from '../lib/presets/presetConfig';
 import { KnobEditor } from './KnobEditor';
 import { useToast } from './Toast';
@@ -165,8 +166,11 @@ export function PresetEditor({
               onChange={(event) => setConfig({ ...config, provider: event.target.value, model: '' })}
             >
               <option value="">— use the chat's —</option>
-              <option value="openrouter">openrouter</option>
-              <option value="kenari">kenari</option>
+              {PROVIDERS.map((id) => (
+                <option key={id} value={id}>
+                  {id}
+                </option>
+              ))}
             </select>
           </label>
           <label className="block space-y-1">
@@ -208,8 +212,11 @@ export function PresetEditor({
               }
             >
               <option value="">— same as above —</option>
-              <option value="openrouter">openrouter</option>
-              <option value="kenari">kenari</option>
+              {PROVIDERS.map((id) => (
+                <option key={id} value={id}>
+                  {id}
+                </option>
+              ))}
             </select>
           </label>
           <label className="block space-y-1">
