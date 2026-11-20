@@ -410,3 +410,66 @@ describe('a rebuild with no legal edit shape', () => {
     );
   });
 });
+
+describe('a revision that omits the name', () => {
+  // Measured on prod: asked for the whole card, glm-5-3 returned every field except `name`, and
+  // the turn died with "reply had no name" after a complete rewrite of a 7,000-character
+  // description. A revision already knows the name; a draft does not.
+  test('is accepted and keeps the current name', async () => {
+    const env = await configuredEnv([{ key: 'cheapMaxTokens', value: '32768' }]);
+    await withFetch(
+      () =>
+        jsonReply(
+          JSON.stringify({
+            say: 'Rebuilt.',
+            question: null,
+            card: {
+              // no `name` at all — the shape that failed
+              description: 'Loud first, cold second.',
+              personality: 'Performing.',
+              scenario: 'A wet campus.',
+              first_mes: 'You again.',
+            },
+          }),
+        ),
+      async () => {
+        const turn = await consult(env, {
+          mode: 'consult',
+          messages: [{ role: 'user', content: 'Rebuild her.' }],
+          card: fullCard(),
+          onDelta: () => {},
+        });
+
+        expect(turn.card?.name).toBe('Ada');
+        expect(turn.card?.description).toBe('Loud first, cold second.');
+        // Untouched fields keep their text, which is the whole point of merging.
+        expect(turn.card?.mesExample).toBe('');
+        expect(turn.card?.sourceFormat).toBe('ccv2');
+      },
+    );
+  });
+
+  test('a DRAFT with no name is still an error', async () => {
+    // A new card cannot be filed without one, and nothing here may relax that.
+    const env = await configuredEnv();
+    await withFetch(
+      () =>
+        jsonReply(
+          JSON.stringify({
+            say: 'Here it is.',
+            question: null,
+            card: { description: 'No name on this one.' },
+          }),
+        ),
+      async () => {
+        await expect(
+          consult(env, {
+            mode: 'draft',
+            messages: [{ role: 'user', content: 'Make me someone.' }],
+            onDelta: () => {},
+          }),
+        ).rejects.toThrow(/no name/);
+      },
+    );
+  });
+});

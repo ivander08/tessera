@@ -382,6 +382,8 @@ async function repairMissingEdits(
     messages: WireMessage[];
     model?: string;
     said: string;
+    /** The card being revised, so a reply that omits `name` is not an error. */
+    card?: ParsedCard | null;
     /** The generation settings, so `cheapMaxTokens` sizes the repair's output too. */
     settings?: ChatSettings;
   },
@@ -429,7 +431,7 @@ async function repairMissingEdits(
       settings: opts.settings,
     });
 
-    const turn = parseConsultTurn(text);
+    const turn = parseConsultTurn(text, opts.card ?? null);
     if (turn.changes && turn.changes.length > 0) return { changes: turn.changes };
     if (turn.card) return { card: turn.card };
   } catch {
@@ -558,7 +560,9 @@ export async function consult(
     );
 
     try {
-      const turn = parseConsultTurn(text);
+      // The card being revised supplies the name for a reply that omits it. A draft passes
+      // null, where a missing name is still an error — a new card cannot be filed without one.
+      const turn = parseConsultTurn(text, card);
 
       // Edits are the consult-mode contract: apply them to the card the user is looking at,
       // and hand the client a WHOLE card so its diff and Apply are untouched. A reply that
@@ -589,6 +593,7 @@ export async function consult(
           messages,
           model: opts.model,
           said: turn.say,
+          card,
           settings: settings ?? undefined,
         });
         if (repaired?.changes) {
@@ -645,7 +650,7 @@ export async function consult(
  * with no question and no card. The user gets the consultant's actual words and can keep
  * talking. The only remaining error is an empty reply, which is a real failure.
  */
-export function parseConsultTurn(text: string): ConsultTurn {
+export function parseConsultTurn(text: string, revising?: ParsedCard | null): ConsultTurn {
   const trimmed = text.trim();
   // The whole reply first, which is what a well-behaved turn is. Failing that, the first
   // complete JSON object inside it: a sentence before the object or a sign-off after it is a
@@ -698,7 +703,11 @@ export function parseConsultTurn(text: string): ConsultTurn {
   if (say.trim().length === 0) throw new Error('the model returned no reply.');
 
   const question = parseQuestion(record.question);
-  const card = record.card === null || record.card === undefined ? null : toParsedCard(record.card);
+  // `revising` supplies the name for a card the model returned without one; a draft has none.
+  const card =
+    record.card === null || record.card === undefined
+      ? null
+      : toParsedCard(record.card, revising?.name);
   const changes = readEdits(record.changes);
 
   return { say, question, card, ...(changes.length > 0 ? { changes } : {}) };
@@ -1091,11 +1100,21 @@ export function mergeProposal(current: ParsedCard, parsed: ParsedCard): ParsedCa
  * through `mergeProposal`, which reads `raw` to tell the two apart. (Draft mode wants the
  * defaults: a new card is not revising anything.)
  */
-export function toParsedCard(value: unknown): ParsedCard {
+export function toParsedCard(value: unknown, fallbackName?: string): ParsedCard {
   const record = asRecord(value);
   if (!record) throw new Error('reply was not a JSON object');
 
-  const name = asString(record.name).trim();
+  /**
+   * A REVISION already knows the card's name, so omitting it is not an error there.
+   *
+   * Measured on prod: asked for the whole card, `glm-5-3` returned every field except `name`,
+   * and the turn died with "reply had no name" — after a complete, correct rewrite of a
+   * 7,000-character description. The name is not something the reader asked to change and not
+   * something the model has to repeat; `mergeProposal` keeps the current one when the reply
+   * does not carry it, which is exactly the semantics wanted. A DRAFT still requires it: a new
+   * card with no name cannot be filed.
+   */
+  const name = asString(record.name).trim() || (fallbackName ?? '').trim();
   if (name.length === 0) throw new Error('reply had no name');
 
   const alternateGreetings = asStringArray(record.alternate_greetings);
