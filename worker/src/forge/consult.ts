@@ -504,11 +504,12 @@ export async function consult(
           const result = applyEdits(card, repaired);
           return { ...turn, changes: repaired, card: result.card, dropped: result.dropped };
         }
-        // The repair did not produce a usable edit either. Say so rather than shipping prose
-        // that claims a change the card does not have.
-        throw new Error(
-          'the consultant said it changed the card but sent no edit — ask it to apply the change',
-        );
+        // The repair did not produce a usable edit either. Return the turn with no card,
+        // rather than an error: `ConsultPanel` already renders a "No change proposed" panel
+        // with a one-click "Do it" for exactly this shape, and an error box would leave the
+        // reader with the announcement and nothing to press. The panel contradicts the prose
+        // explicitly, which is the part that makes the failure visible.
+        return turn;
       }
 
       return turn;

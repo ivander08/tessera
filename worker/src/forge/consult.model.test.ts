@@ -150,3 +150,97 @@ describe('the consultant model picker', () => {
     await res.body?.cancel();
   });
 });
+
+describe('a turn that claims a change it did not send', () => {
+  // The prod defect, isolated. Measured before the fix: 2 of 6 change requests read "Done -
+  // appended a profanity block" and carried `changes: []`, so the reader pressed Apply on
+  // nothing. The repair is one silent call, and these assert both outcomes of it.
+  const claimed = JSON.stringify({
+    say: 'Done — appended a profanity block to the description.',
+    question: null,
+    changes: [],
+  });
+  const repaired = JSON.stringify({
+    say: 'Profanity added.',
+    question: null,
+    changes: [{ field: 'description', op: 'append', value: 'She swears like a sailor.' }],
+  });
+
+  test('is repaired without the reader seeing an apology instead of the answer', async () => {
+    const env = await configuredEnv();
+    let call = 0;
+    const replies = [claimed, repaired];
+    await withFetch(
+      () => jsonReply(replies[Math.min(call++, replies.length - 1)]),
+      async (sent) => {
+        const turn = await consult(env, {
+          mode: 'consult',
+          messages: [{ role: 'user', content: 'Make her swear more.' }],
+          card: fullCard(),
+          onDelta: () => {},
+        });
+
+        // Two calls: the claim, then the silent repair.
+        expect(sent.length).toBe(2);
+        // The applied card is what the reader gets, so Apply has something to do.
+        expect(turn.card?.description).toContain('She swears like a sailor.');
+        expect(turn.changes?.length).toBe(1);
+        expect(turn.dropped).toBe(0);
+        // The words already streamed are kept: swapping in the repair's prose would rewrite
+        // text the reader had read, and the claim is true once the edit is applied.
+        expect(turn.say).toBe('Done — appended a profanity block to the description.');
+      },
+    );
+  });
+
+  test('surfaces the no-change panel when the repair produces no edits either', async () => {
+    const env = await configuredEnv();
+    await withFetch(
+      () => jsonReply(claimed),
+      async (sent) => {
+        // `onDelta` is what the route passes, and it matters here: the claim has already
+        // reached the reader, so the outer retry must NOT restart the whole turn. Without it
+        // the engine would try the entire consult again, re-streaming text the reader has
+        // already read.
+        const turn = await consult(env, {
+          mode: 'consult',
+          messages: [{ role: 'user', content: 'Make her swear more.' }],
+          card: fullCard(),
+          onDelta: () => {},
+        });
+
+        // The reply, then one silent repair. No second turn.
+        expect(sent.length).toBe(2);
+        // No card is what makes `ConsultPanel` draw its "No change proposed" panel with the
+        // "Do it" button. An error here would leave the reader with nothing to press.
+        expect(turn.card).toBeNull();
+        expect(turn.changes ?? []).toEqual([]);
+        expect(turn.question).toBeNull();
+      },
+    );
+  });
+
+  test('a question that mentions a change is not repaired', async () => {
+    const env = await configuredEnv();
+    await withFetch(
+      () =>
+        jsonReply(
+          JSON.stringify({
+            say: 'Before I cut, one thing worth deciding: which paragraph should go?',
+            question: { text: 'Which?', options: ['The first', 'The last'], recommended: 0 },
+            changes: [],
+          }),
+        ),
+      async (sent) => {
+        const turn = await consult(env, {
+          mode: 'consult',
+          messages: [{ role: 'user', content: 'Shorten it.' }],
+          card: fullCard(),
+        });
+        expect(sent.length).toBe(1);
+        expect(turn.question?.options.length).toBe(2);
+        expect(turn.card).toBeNull();
+      },
+    );
+  });
+});
