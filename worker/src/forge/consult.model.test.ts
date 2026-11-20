@@ -549,3 +549,65 @@ describe('a card identical to the one being revised', () => {
     );
   });
 });
+
+describe('refusing an identical card', () => {
+  // The reader's screenshot: the prose claimed "Several fields changed ... Nickname locked as
+  // 'Ipung'" above a panel saying only "did not change it". Unactionable. The refusal now says
+  // what actually happened.
+  test('names the reason in the turn', async () => {
+    const env = await configuredEnv([{ key: 'cheapMaxTokens', value: '32768' }]);
+    const current = fullCard();
+    await withFetch(
+      () =>
+        jsonReply(
+          JSON.stringify({
+            say: 'Applied. Several fields changed.',
+            question: null,
+            card: {
+              name: current.name,
+              description: current.description,
+              personality: current.personality,
+              scenario: current.scenario,
+              first_mes: current.firstMes,
+            },
+          }),
+        ),
+      async () => {
+        const turn = await consult(env, {
+          mode: 'consult',
+          messages: [{ role: 'user', content: 'Change several fields.' }],
+          card: current,
+          onDelta: () => {},
+        });
+
+        expect(turn.card).toBeNull();
+        expect(turn.refused).toContain('identical');
+      },
+    );
+  });
+
+  test('a real revision carries no refusal', async () => {
+    const env = await configuredEnv([{ key: 'cheapMaxTokens', value: '32768' }]);
+    const current = fullCard();
+    await withFetch(
+      () =>
+        jsonReply(
+          JSON.stringify({
+            say: 'Applied.',
+            question: null,
+            card: { name: current.name, description: 'Different.', first_mes: current.firstMes },
+          }),
+        ),
+      async () => {
+        const turn = await consult(env, {
+          mode: 'consult',
+          messages: [{ role: 'user', content: 'Change it.' }],
+          card: current,
+          onDelta: () => {},
+        });
+        expect(turn.refused).toBeUndefined();
+        expect(turn.card?.description).toBe('Different.');
+      },
+    );
+  });
+});

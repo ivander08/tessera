@@ -36,6 +36,8 @@ export interface ConsultTurn {
   changes?: CardEdit[];
   /** How many edits could not be applied. */
   dropped?: number;
+  /** Why a returned card was refused, when one was. */
+  refused?: string;
 }
 
 /**
@@ -507,24 +509,24 @@ export function ConsultPanel({
           <div className="panel panel-pad">
             <span className="eyebrow">No change proposed</span>
             <p style={{ margin: '6px 0 10px', fontSize: 'var(--text-sm)' }}>
-              {turn.changes && turn.changes.length > 0 && (turn.dropped ?? 0) > 0
-                ? 'The proposed edit could not be applied to this card. Ask again, or say which field you mean.'
-                : 'The consultant described the card but did not change it. Ask it to apply the change.'}
+              {turn.refused
+                ? `The reply was not applied: ${turn.refused}. Ask again, or pick a different model.`
+                : turn.changes && turn.changes.length > 0 && (turn.dropped ?? 0) > 0
+                  ? 'The proposed edit could not be applied to this card. Ask again, or say which field you mean.'
+                  : 'The consultant described the card but did not change it. Ask it to apply the change.'}
             </p>
             <button
               type="button"
               className="btn primary"
               onClick={() =>
-                // Both shapes are offered on purpose. This button is pressed exactly when the
-                // previous turn announced a change and shipped none, and measured on prod the
-                // "edits only" wording dead-ends a multi-field rebuild: the model answers the
-                // edits request with more prose, because the consult prompt forbids returning a
-                // whole card. Naming the whole-card shape as the fallback gives it a legal way
-                // out, and `mergeProposal` already accepts it.
+                // Edits only, one per field. Measured on prod: offering the whole-card shape
+                // here made the model choose it, and the card shape is what fails — `hy4`
+                // returned nothing usable, `glm-5-3` returned a card with no name. Given the
+                // edits-only wording, `hy4` returned exactly the three edits that were wanted.
                 void send(
-                  'Apply it now. Return the edits that make this change; do not ask anything else. ' +
-                    'If the change touches several fields, return the complete updated card ' +
-                    'instead. If it cannot be done, say why in one sentence.',
+                  'Apply it now. Return the edits that make this change — one "replace" edit per ' +
+                    'field, each with that field\'s complete new text. Do not return a card. ' +
+                    'Do not ask anything else. If it cannot be done, say why in one sentence.',
                 )
               }
             >

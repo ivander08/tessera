@@ -46,6 +46,13 @@ export interface ConsultTurn {
   changes?: CardEdit[];
   /** Edits that could not be applied, so the caller can report a partial result honestly. */
   dropped?: number;
+  /**
+   * Why a returned card was refused, when it was.
+   *
+   * The pane used to say only "the consultant described the card but did not change it", which
+   * is unactionable when the prose claimed seven specific fields. This names the mismatch.
+   */
+  refused?: string;
 }
 
 /**
@@ -410,12 +417,20 @@ async function repairMissingEdits(
    * JSON envelope is several thousand tokens, and clipping it mid-card is what "ran out of
    * output budget" was.
    */
+  /**
+   * EDITS ONLY, and a change that touches several fields becomes several edits.
+   *
+   * Measured on prod on the reader's own card: offered both shapes, `hy4` chose the whole card
+   * and returned nothing usable (681 s); given the edits-only instruction it returned exactly
+   * the three edits that were wanted (681 s, nickname + first_mes + alternate_greetings), and
+   * `glm-5-3` failed the card shape outright with "reply had no name". One "replace" per field
+   * is the shape that works, and it is also the cheapest to stream.
+   */
   const instruction =
     'You said you made that change but sent no edits, so nothing was applied. ' +
-    'Return ONE JSON object with the change itself, in whichever shape fits: ' +
-    '\'{"say":"<8 words>","question":null,"changes":[...]}\' for a small change, or ' +
-    '\'{"say":"<8 words>","question":null,"card":{...the complete card, every field...}}\' ' +
-    'for a rebuild. Copy any field you did not change verbatim. No prose outside the JSON.';
+    'Return ONE JSON object: {"say":"<8 words>","question":null,"changes":[...]}. ' +
+    'Use one "replace" edit per field you are changing — several fields means several edits, ' +
+    'each with the field\'s complete new text. Never return a "card". No prose outside the JSON.';
 
   try {
     const { text } = await streamCheap(env, {
@@ -586,7 +601,26 @@ export async function consult(
          * Treat it as no change and let the "No change proposed" panel say so, rather than
          * handing back a diff of nothing.
          */
-        if (sameCard(card, merged)) return { ...turn, card: null };
+        if (sameCard(card, merged)) {
+          /**
+           * Say WHY, because the pane's generic message is not enough.
+           *
+           * The screenshot that produced this read "Applied. Several fields changed, so
+           * returning the complete updated card. Nickname locked as 'Ipung'." above a panel
+           * saying only "The consultant described the card but did not change it". The reader
+           * cannot act on that: the model claimed seven fields, so either the claim is false
+           * or the reply was not what the parser expected. Naming the mismatch is the
+           * difference between a bug report and a next step.
+           */
+          const diff = differingFields(card, merged);
+          return {
+            ...turn,
+            card: null,
+            refused: diff.length === 0
+              ? 'the reply was identical to the card in the form'
+              : `the reply changed ${diff.join(', ')} but those did not survive the merge`,
+          };
+        }
         return { ...turn, card: merged };
       }
 
@@ -1073,6 +1107,25 @@ function PROSE_BY_WIRE(wire: string): ProseField | 'name' | 'nickname' {
  * model's own echo of what it sent and differs whenever it omits a field. Provenance is
  * compared too, because a changed source format is a real change.
  */
+/** Which fields differ between two cards, by the name the reader knows them by. */
+function differingFields(a: ParsedCard, b: ParsedCard): string[] {
+  const labels = PROSE_FIELDS.map(([wire, stored]) => [wire, stored] as const);
+  const out: string[] = [];
+  for (const [wire, stored] of labels) {
+    if (String(a[stored] ?? '') !== String(b[stored] ?? '')) out.push(wire);
+  }
+  if (a.name !== b.name) out.push('name');
+  if ((a.nickname ?? '') !== (b.nickname ?? '')) out.push('nickname');
+  if (JSON.stringify(a.tags) !== JSON.stringify(b.tags)) out.push('tags');
+  if (JSON.stringify(a.alternateGreetings) !== JSON.stringify(b.alternateGreetings)) {
+    out.push('alternate_greetings');
+  }
+  if (JSON.stringify(a.greetingStates ?? []) !== JSON.stringify(b.greetingStates ?? [])) {
+    out.push('greeting_states');
+  }
+  return out;
+}
+
 function sameCard(a: ParsedCard, b: ParsedCard): boolean {
   for (const key of PROSE_FIELDS.map(([, stored]) => stored) as Array<keyof ParsedCard>) {
     if (String(a[key] ?? '') !== String(b[key] ?? '')) return false;
