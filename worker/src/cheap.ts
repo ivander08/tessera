@@ -314,6 +314,15 @@ export async function streamCheap(
   const ceiling = settings.cheapMaxTokens > 0 ? settings.cheapMaxTokens : DEFAULT_SIDE_CHANNEL_MAX_TOKENS;
   let budget = Math.min(opts.maxTokens ?? 1024, ceiling);
 
+  // Whether anything reached the caller. An escalation is only safe when nothing has, or the
+  // retry would make the reader watch the same answer begin again.
+  let streamed = false;
+  const track = (text: string) => {
+    if (text.length === 0) return;
+    streamed = true;
+    onDelta?.(text);
+  };
+
   for (let attempt = 0; ; attempt += 1) {
     const { provider, model, url, init } = await prepare(env, { ...opts, settings, maxTokens: budget });
     const body = sideChannelBody(init, { stream: true, json: opts.json });
@@ -323,10 +332,25 @@ export async function streamCheap(
       throw new Error(provider.readError(res.status, await res.text().catch(() => '')));
     }
 
-    const result = await readResponse(provider, res, onDelta);
-    if (attempt === 0 && spentTheBudget(result) && budget < ceiling) {
-      // Nothing was streamed in this case — an empty reply has no deltas — so retrying
-      // cannot make the reader watch the same answer arrive twice.
+    const result = await readResponse(provider, res, onDelta ? track : undefined);
+    if (attempt === 0 && budget < ceiling && spentTheBudget(result)) {
+      // Nothing was streamed: an empty reply has no deltas, so retrying cannot make the
+      // reader watch the same answer arrive twice.
+      budget = Math.min(budget * 2, ceiling);
+      continue;
+    }
+    /**
+     * A reply CUT OFF mid-document is also a budget failure, and it used to be final.
+     *
+     * `spentTheBudget` only matches empty content, so a card truncated halfway through its
+     * JSON took this branch and surfaced as "ran out of output budget before it finished" —
+     * measured on the reader's card: the repair wrote 16,384 tokens, was clipped mid-card, and
+     * died there with the whole allowance already spent. Retrying is safe under exactly the
+     * same condition as above: nothing reached the reader, so there is nothing to restart.
+     * Guarded on `!streamed` rather than on the content being empty, because `onDelta` is the
+     * only evidence of what the reader has already seen.
+     */
+    if (attempt === 0 && budget < ceiling && !streamed && result.finishReason === 'length') {
       budget = Math.min(budget * 2, ceiling);
       continue;
     }

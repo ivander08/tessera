@@ -539,3 +539,61 @@ describe('parseJsonReply control-character repair', () => {
     expect(() => parseJsonReply('{"say": "unterminated')).toThrow();
   });
 });
+
+describe('a reply clipped mid-document', () => {
+  // Measured on the reader's own card: the repair wrote 16,384 tokens, was clipped halfway
+  // through the card's JSON, and died there — "ran out of output budget before it finished".
+  // `spentTheBudget` only matches EMPTY content, so a truncated reply never escalated and the
+  // whole allowance had already been paid for nothing.
+  test('escalates when nothing was streamed but the reply was truncated', async () => {
+    const env = await configuredEnv([{ key: 'cheapMaxTokens', value: '65536' }]);
+    const budgets: number[] = [];
+    let call = 0;
+    globalThis.fetch = (async (_url: unknown, init: RequestInit) => {
+      budgets.push((JSON.parse(String(init.body)) as { max_tokens: number }).max_tokens);
+      call += 1;
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: '{"say":"starting","card":{"name":' }, finish_reason: 'length' }],
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    }) as unknown as typeof fetch;
+
+    // No `onDelta`, which is the "nothing reached the reader" case by definition.
+    const result = await streamCheap(env, {
+      messages: [{ role: 'user', content: 'u' }],
+      json: true,
+      maxTokens: 4096,
+    });
+
+    expect(budgets).toEqual([4096, 8192]);
+    expect(result.finishReason).toBe('length');
+  });
+
+  test('does NOT escalate once text has reached the reader', async () => {
+    // Restarting a half-read answer is worse than a truncated one: the reader watches the same
+    // words begin again. This is why the guard is on streamed output, not on content length.
+    const env = await configuredEnv([{ key: 'cheapMaxTokens', value: '65536' }]);
+    const budgets: number[] = [];
+    globalThis.fetch = (async (_url: unknown, init: RequestInit) => {
+      budgets.push((JSON.parse(String(init.body)) as { max_tokens: number }).max_tokens);
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: '{"say":"a long answer that was cut' }, finish_reason: 'length' }],
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    }) as unknown as typeof fetch;
+
+    const seen: string[] = [];
+    await streamCheap(
+      env,
+      { messages: [{ role: 'user', content: 'u' }], json: true, maxTokens: 4096 },
+      (text) => seen.push(text),
+    );
+
+    expect(budgets).toEqual([4096]);
+    expect(seen.length).toBeGreaterThan(0);
+  });
+});

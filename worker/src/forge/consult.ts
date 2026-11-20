@@ -419,8 +419,11 @@ async function repairMissingEdits(
     const { text } = await streamCheap(env, {
       system: opts.system,
       messages: [...history, { role: 'user', content: instruction }],
-      // 16384: the repair is where the whole-card shape lands, and the card is ~2,000 tokens.
-      maxTokens: 16384,
+      // As much as the install allows. This is where the whole-card shape lands, and a
+      // 2,000-token card plus the JSON envelope needs thousands: measured, a fixed 16,384 was
+      // clipped mid-card on the reader's own card. Whatever `cheapMaxTokens` says is the
+      // honest answer, and 0 means the transport's floor.
+      maxTokens: opts.settings?.cheapMaxTokens || 16384,
       json: true,
       model: opts.model,
       settings: opts.settings,

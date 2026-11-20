@@ -398,8 +398,9 @@ describe('a rebuild with no legal edit shape', () => {
         // (`cheapMaxTokens`), not a hardcoded number: a 2,000-token card does not fit in the
         // 4,096 transport floor, and clipping it is what the reader saw as "ran out of output
         // budget". The default here is that floor, because this stub configures nothing.
-        // The repair's own budget must fit a whole card.
-        expect(sent[1].max_tokens).toBe(16384);
+        // The repair asks for the configured ceiling — the largest budget the install allows —
+        // rather than a fixed number. This stub is configured at 32,768.
+        expect(sent[1].max_tokens).toBe(32768);
 
         expect(turn.card?.description).toContain('Loud first, cold second');
         expect(turn.card?.name).toBe('Sydney Sijun Chen');
