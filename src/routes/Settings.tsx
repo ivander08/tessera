@@ -8,7 +8,7 @@ import { useToast } from '../components/Toast';
 import type { PresetSummary } from '../components/PresetEditor';
 import { parseTheme, type Theme } from '../lib/theme';
 
-const PROVIDERS = ['openrouter', 'kenari'] as const;
+const PROVIDERS = ['openrouter', 'kenari', 'opencode-go'] as const;
 
 /**
  * What is left of the settings row.

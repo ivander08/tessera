@@ -122,6 +122,8 @@ export async function streamConsult(
     card?: unknown;
     /** The model picked in the pane, or undefined for the configured side-channel pair. */
     model?: string;
+    /** The gateway that model belongs to. The id alone is ambiguous across providers. */
+    provider?: string;
   },
   onFrame: (frame: ConsultFrame) => void,
   options: { signal?: AbortSignal } = {},
@@ -158,6 +160,8 @@ export async function streamChatConsult<T>(
     messages: Array<{ role: 'user' | 'assistant'; content: string }>;
     /** The model picked in the dock, or undefined for the configured side-channel pair. */
     model?: string;
+    /** The gateway that model belongs to. */
+    provider?: string;
   },
   onFrame: (frame: ConsultFrame<T>) => void,
   options: { signal?: AbortSignal } = {},

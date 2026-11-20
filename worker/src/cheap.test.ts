@@ -330,9 +330,9 @@ describe('the side-channel output ceiling', () => {
 });
 
 describe('a caller-chosen model', () => {
-  // The picker in the consultant modals sends `model`, and the choice must reach the request
-  // body while the provider, key and knobs still come from the configured pair — a picker
-  // that could name a provider with no key would be a 401 the reader cannot act on.
+  // The picker in the consultant modals sends `model`, and — since it lists every gateway
+  // with a key — the `provider` that model belongs to. The two move together, and an
+  // unregistered provider is ignored rather than trusted.
   test('overrides the side-channel model in the body', async () => {
     const env = await configuredEnv();
     await withFetch(
@@ -353,6 +353,53 @@ describe('a caller-chosen model', () => {
         expect(sent[0].model).toBe('deepseek-v4-flash');
       },
     );
+  });
+
+  test('a chosen provider moves the call to that gateway', async () => {
+    const env = await configuredEnv();
+    const original = globalThis.fetch;
+    const calls: Array<{ url: string; headers: Record<string, string>; body: Record<string, unknown> }> = [];
+    globalThis.fetch = (async (url: string, init: RequestInit) => {
+      calls.push({
+        url: String(url),
+        headers: init.headers as Record<string, string>,
+        body: JSON.parse(String(init.body)) as Record<string, unknown>,
+      });
+      return bufferedReply('{"ok":true}', 'stop');
+    }) as unknown as typeof fetch;
+    try {
+      await complete(env, {
+        user: 'u',
+        json: true,
+        model: 'hy4-flash-free',
+        provider: 'opencode-go',
+      });
+    } finally {
+      globalThis.fetch = original;
+    }
+
+    expect(calls[0].url).toBe('https://opencode.ai/inference/go/openai/v1/chat/completions');
+    // The gateway's router requires a session on every chat request.
+    expect(calls[0].headers['x-opencode-session']).toBe('side-channel');
+    expect(calls[0].body.model).toBe('hy4-flash-free');
+    expect(calls[0].body.reasoning_effort).toBe('none');
+  });
+
+  test('an unregistered provider is ignored, not trusted', async () => {
+    const env = await configuredEnv();
+    const original = globalThis.fetch;
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: string) => {
+      urls.push(String(url));
+      return bufferedReply('{"ok":true}', 'stop');
+    }) as unknown as typeof fetch;
+    try {
+      await complete(env, { user: 'u', json: true, model: 'm', provider: 'not-a-gateway' });
+    } finally {
+      globalThis.fetch = original;
+    }
+    // Falls back to the configured provider, which has a key and a registered adapter.
+    expect(urls[0]).toBe('https://kenari.id/v1/chat/completions');
   });
 
   test('streamCheap carries it too', async () => {

@@ -18,7 +18,7 @@ import { chatConsult, type ChatConsultTurn } from './chatConsult';
  * model's own mistake rather than prevent it.
  */
 export async function chatAdvise(env: Env, req: Request, chatId: string): Promise<Response> {
-  const body = await readJson<{ messages?: unknown; model?: unknown }>(req);
+  const body = await readJson<{ messages?: unknown; model?: unknown; provider?: unknown }>(req);
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     return badRequest('messages required');
   }
@@ -48,6 +48,8 @@ export async function chatAdvise(env: Env, req: Request, chatId: string): Promis
           messages,
           // The reader's own choice from the dock's picker; absent means the configured pair.
           model: asString(body?.model).trim() || undefined,
+          // The dock's picker names the gateway too; model ids are not unique across them.
+          provider: asString(body?.provider).trim() || undefined,
           onDelta: (fragment) => {
             buffer += fragment;
             const prefix = partialField(buffer, 'say');

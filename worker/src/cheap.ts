@@ -156,18 +156,25 @@ async function prepare(
      * call resolved, so an override cannot silently reach a provider with no key.
      */
     model?: string;
+    /** See `prepare`: the provider that model belongs to. */
+    provider?: string;
   },
 ): Promise<Prepared> {
   const settings = opts.settings ?? (await loadEffectiveSettings(env, null));
   const chosen = opts.model?.trim();
-  const cheap = chosen
+  // The picker lists every provider that has a key, so a chosen model names its own
+  // provider. An unregistered one is ignored rather than trusted: that is what stops a
+  // request body from reaching a gateway this install has no adapter for.
+  const chosenProvider = opts.provider?.trim();
+  const pair = cheapFrom(settings);
+  const cheap = chosen || chosenProvider
     ? (() => {
-        // Provider comes from the configured pair: the picker lists that provider's models,
-        // so the two always agree and no second key can be needed.
-        const pair = cheapFrom(settings);
-        return pair ? { provider: pair.provider, model: chosen } : null;
+        const provider =
+          chosenProvider && getProvider(chosenProvider) ? chosenProvider : pair?.provider;
+        const model = chosen || pair?.model;
+        return provider && model ? { provider, model } : null;
       })()
-    : cheapFrom(settings);
+    : pair;
   if (!cheap) {
     throw new Error(
       chosen
@@ -259,6 +266,8 @@ export async function complete(
     settings?: ChatSettings;
     /** See `prepare`: the model the caller chose, overriding the side-channel pair. */
     model?: string;
+    /** See `prepare`: the provider that model belongs to. */
+    provider?: string;
   },
 ): Promise<CompletionResult> {
   const settings = opts.settings ?? (await loadEffectiveSettings(env, null));
@@ -312,6 +321,8 @@ export async function streamCheap(
     settings?: ChatSettings;
     /** See `prepare`: the model the caller chose, overriding the side-channel pair. */
     model?: string;
+    /** See `prepare`: the provider that model belongs to. */
+    provider?: string;
   },
   onDelta?: (text: string) => void,
 ): Promise<CompletionResult> {

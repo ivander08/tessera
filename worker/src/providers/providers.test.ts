@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { kenari } from './kenari';
+import { opencodeGo } from './opencodeGo';
 import { openrouter } from './openrouter';
 
 describe('openrouter adapter', () => {
@@ -230,5 +231,82 @@ describe('kenari adapter', () => {
 
   test('a frame with no reason, no text and no usage is still dropped', () => {
     expect(kenari.parseFrame(JSON.stringify({ choices: [{ delta: {} }] }))).toBeNull();
+  });
+});
+
+describe('opencode-go adapter', () => {
+  test('sends the routing session and turns reasoning off with reasoning_effort', () => {
+    const { url, init } = opencodeGo.buildRequest(
+      {
+        model: 'hy4-flash-free',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+        maxTokens: 100,
+        knobs: { temperature: 0.9 },
+        sessionId: 'session-abc',
+        disableReasoning: true,
+      },
+      'sk-test',
+    );
+
+    expect(url).toBe('https://opencode.ai/inference/go/openai/v1/chat/completions');
+    const headers = init.headers as Record<string, string>;
+    // Measured: a chat request without this is rejected outright with 400 MissingSessionID.
+    expect(headers['x-opencode-session']).toBe('session-abc');
+    // Cloudflare answers 403 (error code 1010) to a user-agent it dislikes.
+    expect(headers['User-Agent']).toBe('tessera');
+    expect(headers.Authorization).toBe('Bearer sk-test');
+
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body.model).toBe('hy4-flash-free');
+    expect(body.temperature).toBe(0.9);
+    // Measured against hy4-flash-free, glm-5.3-flash and deepseek-v4.1-flash: accepted by
+    // all three, zero `reasoning_content` produced.
+    expect(body.reasoning_effort).toBe('none');
+  });
+
+  test('leaves reasoning alone when the caller did not ask to disable it', () => {
+    const { init } = opencodeGo.buildRequest(
+      {
+        model: 'hy4-flash-free',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+        maxTokens: 100,
+        knobs: {},
+        sessionId: 's',
+        disableReasoning: false,
+      },
+      'k',
+    );
+    expect(JSON.parse(String(init.body))).not.toHaveProperty('reasoning_effort');
+  });
+
+  test('reads content and ignores the reasoning channel', () => {
+    expect(
+      opencodeGo.parseFrame(JSON.stringify({ choices: [{ delta: { content: 'Hello' } }] })),
+    ).toEqual({ text: 'Hello' });
+
+    // A reasoning frame carries text the narrator has no UI for; treating it as the answer
+    // would show the model's scratch work as the reply.
+    expect(
+      opencodeGo.parseFrame(
+        JSON.stringify({ choices: [{ delta: { reasoning_content: 'thinking...' } }] }),
+      ),
+    ).toBeNull();
+
+    const terminal = opencodeGo.parseFrame(
+      JSON.stringify({
+        choices: [{ delta: {}, finish_reason: 'length' }],
+        usage: { prompt_tokens: 10, completion_tokens: 2 },
+      }),
+    );
+    expect(terminal?.finishReason).toBe('length');
+    expect(terminal?.usage?.promptTokens).toBe(10);
+  });
+
+  test('names itself in a provider error', () => {
+    expect(opencodeGo.readError(400, '{"error":{"message":"MissingSessionID"}}')).toBe(
+      'opencode-go 400: MissingSessionID',
+    );
   });
 });

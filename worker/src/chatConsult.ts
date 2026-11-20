@@ -66,6 +66,8 @@ export async function chatConsult(
     onDelta?: (text: string) => void;
     /** The model the reader picked in the dock. See `streamCheap`'s `model`. */
     model?: string;
+    /** The gateway that model belongs to. See `streamCheap`'s `provider`. */
+    provider?: string;
   },
 ): Promise<ChatConsultTurn> {
   const [settings, context] = await Promise.all([
@@ -103,7 +105,7 @@ export async function chatConsult(
       // The chat's own preset decides the model for its consultant: this answers questions
       // about one scene, and a reader who set that chat's preset to a stronger model
       // expects it to be the one answering.
-      { system, messages, maxTokens: 4096, json: true, settings, model: opts.model },
+      { system, messages, maxTokens: 4096, json: true, settings, model: opts.model, provider: opts.provider },
       onDelta,
     );
 

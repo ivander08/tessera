@@ -3,6 +3,7 @@ import { streamChatConsult, type ConsultPhase } from '../lib/api';
 import { messageOf } from '../lib/hooks';
 import { handleComposerEnter } from '../lib/composer';
 import { Markdown } from './Markdown';
+import { decodeConsultChoice } from '../lib/consultChoice';
 import { ConsultModelPicker, readConsultModel, storeConsultModel } from './ConsultModelPicker';
 
 /** One turn of the conversation, as the client holds it. Mirrors `ChatConsultMessage`. */
@@ -172,7 +173,12 @@ export function ChatConsultPanel({
     try {
       await streamChatConsult<ChatConsultTurn>(
         chatId,
-        { messages: next, model: model ?? undefined },
+        {
+          messages: next,
+          // The picker value names its gateway; the worker takes the two separately.
+          model: model ? decodeConsultChoice(model).model : undefined,
+          provider: model ? decodeConsultChoice(model).provider ?? undefined : undefined,
+        },
         (frame) => {
           if (frame.type === 'delta') {
             streamed = frame.text;

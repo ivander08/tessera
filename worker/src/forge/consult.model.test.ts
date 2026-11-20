@@ -655,3 +655,28 @@ describe('a partial card', () => {
     expect(prompt).not.toContain('copying any\nfield you did not touch verbatim');
   });
 });
+
+describe('the consultant voice', () => {
+  // The reader's instruction: consulting must be thorough, creative, adaptive and smart —
+  // not capped at a fixed length. The old contract capped "say" at three sentences, which
+  // produced critiques that named nothing.
+  test('asks for the room the question earns instead of a fixed cap', () => {
+    const prompt = systemPrompt('consult', fullCard());
+    expect(prompt).toContain('the room the question earns');
+    expect(prompt).not.toContain('at most three sentences');
+    expect(prompt).toContain('Be creative, and commit');
+    expect(prompt).toContain('Be adaptive');
+    expect(prompt).toContain('Push back when it would hurt the card');
+  });
+
+  test('allows a complete answer that changes nothing', () => {
+    const prompt = systemPrompt('consult', fullCard());
+    expect(prompt).toContain('changes nothing is a complete');
+  });
+
+  test('keeps the draft contract strict: a draft turn must ask or propose', () => {
+    const prompt = systemPrompt('draft', null);
+    expect(prompt).toContain('ask a question or propose a card');
+    expect(prompt).not.toContain('changes nothing is a complete');
+  });
+});

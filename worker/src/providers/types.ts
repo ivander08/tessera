@@ -35,8 +35,18 @@ export interface ParsedFrame {
   finishReason?: string;
 }
 
+export type ProviderId = 'openrouter' | 'kenari' | 'opencode-go';
+
 export interface Provider {
-  id: 'openrouter' | 'kenari';
+  id: ProviderId;
+  /** Where `GET /api/models/:provider` forwards to. Passed through unmodified. */
+  modelsUrl: string;
+  /**
+   * Headers for the catalogue request. On the provider because the gateways disagree:
+   * opencode.ai sits behind Cloudflare and refuses a user-agent it dislikes, and needs no
+   * session header for a list, while a chat request there does.
+   */
+  modelsHeaders(apiKey: string | null): Record<string, string>;
   buildRequest(req: ChatRequest, apiKey: string): { url: string; init: RequestInit };
   /** Parse one SSE data payload. Returns null for frames that carry no content. */
   parseFrame(payload: string): ParsedFrame | null;

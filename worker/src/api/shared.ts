@@ -91,20 +91,19 @@ async function listModels(env: Env, providerId: string): Promise<Response> {
   if (!provider) return notFound('unknown provider');
 
   const key = await loadProviderKey(env, providerId);
-  const url =
-    providerId === 'openrouter'
-      ? 'https://openrouter.ai/api/v1/models'
-      : 'https://kenari.id/v1/models';
 
-  // The model list is public on both providers, so a missing or undecryptable key
+  // The model list is public on Kenari and OpenRouter, so a missing or undecryptable key
   // still returns the list — the settings screen needs it to offer a model at all.
-  const res = await fetch(url, {
-    headers: key.ok ? { Authorization: `Bearer ${key.key}` } : {},
+  // opencode.ai is the exception: it is keyed and Cloudflare-fronted, so the adapter
+  // supplies its own headers.
+  const res = await fetch(provider.modelsUrl, {
+    headers: provider.modelsHeaders(key.ok ? key.key : null),
   });
   if (!res.ok) return json({ error: provider.readError(res.status, await res.text()) }, 502);
 
-  // OpenRouter passes through `supported_parameters`; Kenari passes through
-  // `pricing`. The client uses both to grey out knobs a model cannot honour.
+  // OpenRouter passes through `supported_parameters`; Kenari passes through `pricing`;
+  // opencode.ai passes through `capabilities` and `type`. The client uses them to filter
+  // and to grey out knobs a model cannot honour.
   const payload = (await res.json()) as { data?: unknown };
   return json(Array.isArray(payload.data) ? payload.data : []);
 }

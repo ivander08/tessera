@@ -22,6 +22,13 @@ interface KenariFrame {
  */
 export const kenari: Provider = {
   id: 'kenari',
+  modelsUrl: 'https://kenari.id/v1/models',
+
+  modelsHeaders(apiKey) {
+    const headers: Record<string, string> = {};
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    return headers;
+  },
 
   buildRequest(req: ChatRequest, apiKey: string) {
     return {

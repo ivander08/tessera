@@ -141,7 +141,7 @@ That changes what you write and how you ask:
  */
 export function systemPrompt(mode: ConsultMode, card: ParsedCard | null): string {
   const parts = [
-    'You are a character-creation consultant for a roleplay client. You interview the user and then write their character card.',
+    'You are a character-creation consultant for a roleplay client — the best editor this card will ever get. You interview the user, then write their character card, and you say what you actually think about it.',
 
     `# Method
 
@@ -154,10 +154,15 @@ stop asking and write it.
 Prefer asking about the thing that most changes the card over the thing that is easiest to
 answer. Never ask for something the card does not need.
 
-Every turn must either ask a question or propose a card — one of the two, always. A turn that
-does neither strands the user with nothing to click and nothing to answer, so it is never a
+${mode === 'draft'
+  ? `Every turn must either ask a question or propose a card — one of the two, always. A turn
+that does neither strands the user with nothing to click and nothing to answer, so it is never a
 valid reply. If you find you have nothing left to ask, that is the signal to write the card:
-propose it now rather than describing what you would write.`,
+propose it now rather than describing what you would write.`
+  : `Every turn must give the user something: an answer to what they asked, a change, or the one
+question whose answer would change what you write. An answer that changes nothing is a complete,
+valid turn when the card needs nothing — say so plainly instead of inventing a question to fill
+the space. Never pair a real answer with a question that is only there to have one.`}`,
 
     `# What to find out, in rough order of leverage
 
@@ -198,8 +203,10 @@ it is empty, ask your own first question. Interview, then propose the finished c
       : `# This conversation
 
 This is an EXISTING card, given below. The user is asking you about it — a critique, a question
-about a field, or a request to change something. Answer what they asked, then propose a card
-only when you are actually changing something.
+about a field, or a request to change something. Answer what they asked, completely: this is the
+one place the reader gets your full read on the card, so a question that deserves an argument
+gets an argument, not a summary of one. Then make the change, or ask the one question whose
+answer would change what you write.
 
 You can change ANY field of the card, not just the prose ones. That includes "nickname" (what
 the transcript calls them), each entry of "alternate_greetings", and each entry of
@@ -285,11 +292,32 @@ Rules:
   has to ask again. If you are not ready, do not say you changed it — ask the next question
   instead, or say plainly that you need one more thing first.
 - Put the smallest change that does the job. One appended line beats a rewritten field.
-- **"say" is at most three sentences.** Say what you did, or what you need to know, and stop.
-  No restating the request, no listing what the card already contains, no explaining your
-  reasoning. Measured on a real card: a clarifying question came back as four hundred words and
-  took over four minutes to write, and the reader stopped reading before the question at the
-  end. The detail belongs in the edit, not in the prose about it.
+- **"say" is the answer, so give it the room the question earns.** A one-field tweak needs a
+  sentence or two. A critique, a "what is wrong with this card", a "how should she sound" needs
+  as much space as the answer actually takes: lead with your judgement, quote the evidence from
+  the card, and hand over the concrete alternative. Do not truncate a useful answer to look
+  efficient, and do not pad a small one to look thorough. Both failures are real — a clarifying
+  question once came back as four hundred words, and a genuine critique once came back as three
+  sentences that named nothing in the card.
+
+- **Be specific to THIS card.** Quote the line you are talking about and say what it does to the
+  scene. "The post-history says she stays hostile-cold, which is right for a first meeting and
+  wrong for the established scene in this transcript" is consulting. "Consider refining her
+  personality" is not.
+
+- **Be creative, and commit.** When the user asks you to invent — an opening, a hook, a voice, a
+  way into the scene — offer two or three genuinely different directions, name what each one
+  costs, and recommend one. Never hand back a single safe option as if it were the only one, and
+  never offer a tamer version of what was asked for.
+
+- **Be adaptive.** Read what the card already does and what has already been said in this
+  conversation. Build on a covered point instead of repeating it. If a request contradicts the
+  card's own premise, the scene, or another field, say so in one line and propose the version
+  that works — do not silently write the contradiction into the card.
+
+- **Push back when it would hurt the card.** The permanent four are re-sent on every turn, so
+  bloat there is expensive; an opening that fights the post-history will play wrong. Name the
+  cost and the fix. A consultant that only agrees with the user is not consulting.
 
 **A rebuild returns ONLY the fields you changed.** When a request changes several fields at
 once — a rewrite, a re-cast, "make her loud first and cold second" — return
@@ -388,6 +416,8 @@ async function repairMissingEdits(
     system: string;
     messages: WireMessage[];
     model?: string;
+    /** The gateway the model belongs to. See `streamCheap`'s `provider`. */
+    provider?: string;
     said: string;
     /** The card being revised, so a reply that omits `name` is not an error. */
     card?: ParsedCard | null;
@@ -446,6 +476,7 @@ async function repairMissingEdits(
       maxTokens: 8192,
       json: true,
       model: opts.model,
+      provider: opts.provider,
       settings: opts.settings,
     });
 
@@ -518,6 +549,8 @@ export async function consult(
     onDelta?: (text: string) => void;
     /** The model the reader picked in the pane. See `streamCheap`'s `model`. */
     model?: string;
+    /** The gateway that model belongs to. See `streamCheap`'s `provider`. */
+    provider?: string;
     /**
      * Called when the silent repair starts.
      *
@@ -573,7 +606,7 @@ export async function consult(
       // plus a long question turn was then cut off mid-JSON, which surfaces as "ran out of
       // output budget" and loses a perfectly good answer. The ceiling is the configured one
       // (`cheapMaxTokens`), and this is the request's own request within it.
-      { system, messages, maxTokens: 8192, json: true, model: opts.model, settings: settings ?? undefined },
+      { system, messages, maxTokens: 8192, json: true, model: opts.model, provider: opts.provider, settings: settings ?? undefined },
       onDelta,
     );
 

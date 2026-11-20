@@ -6,6 +6,7 @@ import { handleComposerEnter } from '../lib/composer';
 import { estimateTokens } from '../lib/tokenEstimate';
 import { diffText, summarizeDiff, type DiffLine } from '../lib/text/diff';
 import { Markdown } from './Markdown';
+import { decodeConsultChoice } from '../lib/consultChoice';
 import { ConsultModelPicker, readConsultModel, storeConsultModel } from './ConsultModelPicker';
 import { useToast } from './Toast';
 
@@ -277,8 +278,10 @@ export function ConsultPanel({
           mode,
           messages: next,
           card: card ?? undefined,
-          // The pane's own choice; absent means the preset's side-channel pair.
-          model: model ?? undefined,
+          // The pane's own choice; absent means the preset's side-channel pair. The value
+          // names its gateway, because the same model id can exist on two of them.
+          model: model ? decodeConsultChoice(model).model : undefined,
+          provider: model ? decodeConsultChoice(model).provider ?? undefined : undefined,
         },
         (frame: ConsultFrame) => {
           if (frame.type === 'delta') {

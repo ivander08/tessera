@@ -1,14 +1,19 @@
 import { kenari } from './kenari';
+import { opencodeGo } from './opencodeGo';
 import { openrouter } from './openrouter';
-import type { Provider } from './types';
+import type { Provider, ProviderId } from './types';
 
-export type ProviderId = 'openrouter' | 'kenari';
-
-const PROVIDERS: Record<ProviderId, Provider> = { openrouter, kenari };
+const PROVIDERS: Record<ProviderId, Provider> = {
+  openrouter,
+  kenari,
+  'opencode-go': opencodeGo,
+};
 
 export function getProvider(id: string): Provider | null {
-  return id === 'openrouter' || id === 'kenari' ? PROVIDERS[id] : null;
+  return Object.prototype.hasOwnProperty.call(PROVIDERS, id)
+    ? PROVIDERS[id as ProviderId]
+    : null;
 }
 
-export { kenari, openrouter };
-export type { ChatRequest, NormalizedUsage, ParsedFrame, Provider } from './types';
+export { kenari, opencodeGo, openrouter };
+export type { ChatRequest, NormalizedUsage, ParsedFrame, Provider, ProviderId } from './types';

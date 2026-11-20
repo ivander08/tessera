@@ -152,6 +152,7 @@ export async function forgeConsult(env: Env, req: Request): Promise<Response> {
     messages?: unknown;
     card?: unknown;
     model?: unknown;
+    provider?: unknown;
   }>(req);
 
   const mode = asString(body?.mode);
@@ -185,6 +186,9 @@ export async function forgeConsult(env: Env, req: Request): Promise<Response> {
           // The reader's own choice from the pane's picker. Absent means the configured
           // side-channel pair, which is what every caller without a picker gets.
           model: asString(body?.model).trim() || undefined,
+          // The picker names the gateway as well as the model: it lists every provider the
+          // install has a key for, and two of them can carry the same model id.
+          provider: asString(body?.provider).trim() || undefined,
           // The repair is a full second call that streams nothing; without this the pane sits
           // on finished prose for up to two minutes and reads as hung.
           onRepair: () => {

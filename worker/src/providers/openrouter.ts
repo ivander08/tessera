@@ -25,6 +25,13 @@ interface OpenRouterFrame {
 
 export const openrouter: Provider = {
   id: 'openrouter',
+  modelsUrl: 'https://openrouter.ai/api/v1/models',
+
+  modelsHeaders(apiKey) {
+    const headers: Record<string, string> = {};
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    return headers;
+  },
 
   buildRequest(req: ChatRequest, apiKey: string) {
     return {

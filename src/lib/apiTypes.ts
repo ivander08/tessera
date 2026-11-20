@@ -132,6 +132,8 @@ export interface ModelInfo {
    */
   modalities?: { input?: string[]; output?: string[] };
   endpoints?: string[];
+  /** opencode.ai's own classification; `chat` is the only kind a consult can use. */
+  type?: string;
 }
 
 export interface ProviderKeyRow {
