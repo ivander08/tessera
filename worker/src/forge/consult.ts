@@ -278,6 +278,11 @@ Rules:
   has to ask again. If you are not ready, do not say you changed it — ask the next question
   instead, or say plainly that you need one more thing first.
 - Put the smallest change that does the job. One appended line beats a rewritten field.
+- **"say" is at most three sentences.** Say what you did, or what you need to know, and stop.
+  No restating the request, no listing what the card already contains, no explaining your
+  reasoning. Measured on a real card: a clarifying question came back as four hundred words and
+  took over four minutes to write, and the reader stopped reading before the question at the
+  end. The detail belongs in the edit, not in the prose about it.
 
 **A rebuild returns the whole card.** When a request changes several fields at once — a
 rewrite, a re-cast, "make her loud first and cold second" — edits are the wrong shape: a
@@ -538,6 +543,14 @@ export async function consult(
   for (let attempt = 0; attempt < 2; attempt++) {
     const { text, finishReason } = await streamCheap(
       env,
+      // 8192 on every turn, deliberately NOT sized to the request.
+      //
+      // Measured on prod: a BIG budget makes a short turn slower, because a model that is told
+      // it has room writes more — a clarifying question came back as four hundred words and
+      // took 263 s to compose. But sizing it down is worse: `response_format: json_object`
+      // plus a long question turn was then cut off mid-JSON, which surfaces as "ran out of
+      // output budget" and loses a perfectly good answer. The ceiling is the configured one
+      // (`cheapMaxTokens`), and this is the request's own request within it.
       { system, messages, maxTokens: 8192, json: true, model: opts.model, settings: settings ?? undefined },
       onDelta,
     );
