@@ -41,10 +41,11 @@ export interface CatalogueGroup {
  * (`glm-5-3-flash`) was resolved against the preset's new provider (opencode-go, where the
  * id is `glm-5.3-flash`) and failed with a 400 that looked like a server bug.
  *
- * The rule: a bare id keeps working only where it actually exists. Prefer the provider the
- * preset names; otherwise use the one gateway that carries it. If no catalogue contains it,
- * return null so the caller falls back to the preset default instead of sending a doomed
- * override.
+ * The rule: a bare id keeps working only on the provider the preset names. A match on
+ * another gateway is NOT good enough — it would silently pin the reader to a provider the
+ * preset no longer uses, which is how the Kenari model survived the switch to opencode-go.
+ * If the named provider does not carry it, return null so the caller falls back to the
+ * preset default.
  *
  * A provider-qualified value is returned untouched — it already says where it belongs, and
  * validating it here would make the picker flicker while a catalogue is still loading.
@@ -57,10 +58,9 @@ export function resolveStoredChoice(
   if (!value) return null;
   if (value.includes('|')) return value;
 
-  const has = (group: CatalogueGroup) => group.ids.includes(value);
-  const match =
-    groups.find((group) => group.provider === preferredProvider && has(group)) ??
-    groups.find(has);
+  const match = groups.find(
+    (group) => group.provider === preferredProvider && group.ids.includes(value),
+  );
 
   return match ? encodeConsultChoice({ provider: match.provider, model: value }) : null;
 }

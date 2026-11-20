@@ -40,11 +40,11 @@ describe('a stored choice saved before providers were named', () => {
     );
   });
 
-  test('moves a bare id to the gateway that actually has it', () => {
-    // The reader's bug: a Kenari id left over while the preset names opencode-go.
-    expect(resolveStoredChoice('glm-5-3-flash', groups, 'opencode-go')).toBe(
-      'kenari|glm-5-3-flash',
-    );
+  test('drops a bare id that belongs to another gateway', () => {
+    // The reader's bug: a Kenari id left over while the preset names opencode-go. Keeping
+    // it on Kenari would silently ignore the preset's provider change, so it is dropped and
+    // the preset default (opencode-go / glm-5.3-flash) applies.
+    expect(resolveStoredChoice('glm-5-3-flash', groups, 'opencode-go')).toBeNull();
   });
 
   test('drops an id no gateway carries', () => {
