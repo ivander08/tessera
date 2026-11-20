@@ -3294,9 +3294,15 @@ input[type="checkbox"] {
 }
 
 .consult-field-label {
-  display: block;
   margin-bottom: 3px;
   color: var(--brass);
+  /* The run count is a right-floated child. Without containment that float escapes this
+     box and the diff below — which establishes a block formatting context via
+     `overflow: hidden` — shrinks to the space left beside it. Measured at phone width:
+     a 326px diff became 77px wide, one or two characters per line, for its whole height.
+     `flow-root` makes this label include its float, so the diff starts below it at full
+     width. */
+  display: flow-root;
 }
 
 .consult-before {
