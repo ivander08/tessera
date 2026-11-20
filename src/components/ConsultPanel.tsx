@@ -515,9 +515,16 @@ export function ConsultPanel({
               type="button"
               className="btn primary"
               onClick={() =>
+                // Both shapes are offered on purpose. This button is pressed exactly when the
+                // previous turn announced a change and shipped none, and measured on prod the
+                // "edits only" wording dead-ends a multi-field rebuild: the model answers the
+                // edits request with more prose, because the consult prompt forbids returning a
+                // whole card. Naming the whole-card shape as the fallback gives it a legal way
+                // out, and `mergeProposal` already accepts it.
                 void send(
                   'Apply it now. Return the edits that make this change; do not ask anything else. ' +
-                    'If it cannot be done as a single small edit, say why in one sentence.',
+                    'If the change touches several fields, return the complete updated card ' +
+                    'instead. If it cannot be done, say why in one sentence.',
                 )
               }
             >

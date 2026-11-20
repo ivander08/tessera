@@ -278,6 +278,56 @@ describe('streamCheap', () => {
   });
 });
 
+describe('the side-channel output ceiling', () => {
+  // The reader's question was "why not increase the max tokens … so we can use any model".
+  // The transport used to cap escalation at 4096 with no control anywhere, so a call that
+  // asked for 8,192 got 4,096 and a whole-card rewrite returned nothing.
+  test('cheapMaxTokens raises what a call may actually ask for', async () => {
+    const env = await configuredEnv([{ key: 'cheapMaxTokens', value: '65536' }]);
+    await withFetch(
+      () => bufferedReply('{"ok":true}', 'stop'),
+      async (sent) => {
+        await complete(env, { user: 'u', json: true, maxTokens: 8192 });
+        // Asked for 8,192 and configured for 65,536: the request carries 8,192, not the
+        // transport's old 4,096 floor.
+        expect(sent[0].max_tokens).toBe(8192);
+      },
+    );
+  });
+
+  test('escalation climbs to the configured ceiling, not to 4096', async () => {
+    const env = await configuredEnv([{ key: 'cheapMaxTokens', value: '16384' }]);
+    const budgets: number[] = [];
+    let call = 0;
+    globalThis.fetch = (async (_url: unknown, init: RequestInit) => {
+      budgets.push((JSON.parse(String(init.body)) as { max_tokens: number }).max_tokens);
+      call += 1;
+      // First attempt starves, second answers: the point is what it was allowed to become.
+      const content = call === 1 ? '' : '{"ok":true}';
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content }, finish_reason: call === 1 ? 'length' : 'stop' }],
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    }) as unknown as typeof fetch;
+
+    await complete(env, { user: 'u', json: true, maxTokens: 4096 });
+    expect(budgets).toEqual([4096, 8192]);
+  });
+
+  test('a configured ceiling below the request wins, unchanged behaviour without one', async () => {
+    const env = await configuredEnv([{ key: 'cheapMaxTokens', value: '2048' }]);
+    await withFetch(
+      () => bufferedReply('{"ok":true}', 'stop'),
+      async (sent) => {
+        await complete(env, { user: 'u', json: true, maxTokens: 8192 });
+        expect(sent[0].max_tokens).toBe(2048);
+      },
+    );
+  });
+});
+
 describe('a caller-chosen model', () => {
   // The picker in the consultant modals sends `model`, and the choice must reach the request
   // body while the provider, key and knobs still come from the configured pair — a picker

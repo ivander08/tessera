@@ -83,6 +83,7 @@ export async function loadEffectiveSettings(
         maxTokens: config.maxTokens ?? 1024,
         contextBudget: config.contextSize ?? 16384,
         cheapContextBudget: config.cheapContextBudget ?? 0,
+        cheapMaxTokens: config.cheapMaxTokens ?? 0,
         knobs: parseKnobs(row?.knobs_json),
         idrPerUsd: raw.idrPerUsd ? Number(raw.idrPerUsd) : null,
         loreScanDepth: config.loreScanDepth ?? 4,

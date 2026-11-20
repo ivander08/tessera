@@ -307,8 +307,30 @@ describe('claimsChange', () => {
     expect(claimsChange('I did not change the scenario.')).toBe(false);
   });
 
+  test('catches the announcements from the reader screenshots', () => {
+    // These are the exact openings of the two replies that rendered "No change proposed"
+    // twice in a row. Neither has an edit verb, which is why the first version of this let
+    // them through.
+    expect(
+      claimsChange(
+        'Applied. Sydney is rebuilt: inseparable from Ivander at eight, gone at ten with no goodbye.',
+      ),
+    ).toBe(true);
+    expect(
+      claimsChange(
+        'Built it. Sydney is now loud first and cold second — the extrovert is the real her.',
+      ),
+    ).toBe(true);
+    expect(claimsChange('Shipped. The relationship is the engine now.')).toBe(true);
+    expect(claimsChange('Rebuilt her around the three pressures.')).toBe(true);
+  });
+
   test('leaves a plain critique alone', () => {
     expect(claimsChange('The description is strong. The scenario is thin.')).toBe(false);
+    // A mid-sentence "build" is ordinary critique, not an announcement: the completion verbs
+    // only count at a sentence start.
+    expect(claimsChange('This builds tension well. The scenario is thin.')).toBe(false);
+    expect(claimsChange('The relationship rebuild is the strongest part.')).toBe(false);
   });
 });
 

@@ -130,6 +130,15 @@ export interface ChatSettings {
    * (~1,000-2,500 estimated tokens measured on real chats) never come near it.
    */
   cheapContextBudget: number;
+  /**
+   * Output ceiling for every call that uses the cheap model, in tokens.
+   *
+   * Separate from `maxTokens`, which is the narrator's. Zero means "the caller's own default":
+   * a summariser wants a few hundred tokens and a card rewrite wants thousands, and the fixed
+   * 4096 they shared was too small for the rewrite — measured on prod, a consult asked to
+   * return a whole 2,000-token card spent the entire allowance and answered with nothing.
+   */
+  cheapMaxTokens: number;
   knobs: Record<string, number | string | string[]>;
   /** Configured IDR-per-USD rate; when absent Kenari costs stay in micro-IDR. */
   idrPerUsd: number | null;
@@ -232,6 +241,8 @@ export async function loadChatSettings(env: Env): Promise<ChatSettings> {
     // Not `|| DEFAULT`: zero is a meaningful value here (no ceiling), so the usual
     // falsy-fallback would turn "unlimited" into 16384 and silently cap it.
     cheapContextBudget: parseCheapContextBudget(raw.cheapContextBudget),
+    // Zero is meaningful here too: it means "whatever the caller asked for", not 4096.
+    cheapMaxTokens: Number(raw.cheapMaxTokens ?? 0) || 0,
     knobs: parseKnobs(raw.knobs),
     idrPerUsd: raw.idrPerUsd ? Number(raw.idrPerUsd) : null,
     loreScanDepth: Number(raw.loreScanDepth ?? 4) || 4,

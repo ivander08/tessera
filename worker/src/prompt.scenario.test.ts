@@ -51,6 +51,7 @@ function settings(contextBudget: number): EffectiveSettings {
     maxTokens: 1024,
     contextBudget,
     cheapContextBudget: 0,
+    cheapMaxTokens: 0,
     knobs: {},
     idrPerUsd: null,
     loreScanDepth: 4,

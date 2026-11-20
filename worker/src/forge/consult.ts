@@ -1,4 +1,6 @@
 import { streamCheap, parseJsonReply } from '../cheap';
+import { loadEffectiveSettings } from '../effective';
+import type { ChatSettings } from '../db';
 import { asRecord, asString, asStringArray } from '../../../src/lib/json';
 import { estimateTokens } from '../../../src/lib/tokenEstimate';
 import { analyzeTokenCost } from '../../../src/lib/forge/tokenCost';
@@ -276,7 +278,19 @@ Rules:
   has to ask again. If you are not ready, do not say you changed it — ask the next question
   instead, or say plainly that you need one more thing first.
 - Put the smallest change that does the job. One appended line beats a rewritten field.
-- Never return "card" in this conversation. Edits are the contract here.
+
+**A rebuild returns the whole card.** When a request changes several fields at once — a
+rewrite, a re-cast, "make her loud first and cold second" — edits are the wrong shape: a
+dozen "replace" operations is longer than the card, and measured on a real card the model
+instead announced the rebuild in prose and returned no edits at all. For that kind of turn
+return "card": { ...the complete card, every field... } with "changes" absent, copying any
+field you did not touch verbatim. The app merges it, so an omitted field keeps its current
+text. One small change still uses "changes"; a rebuild uses "card"; never both in one reply.
+
+- If your "say" says you are making a change — "adding", "I've added", "done", "applied",
+  "built it", "shipped", "here it is", "updated" — the reply MUST carry it: either the edits or
+  the whole card. A turn whose prose announces a revision and ships neither is the bug the user
+  reported twice. If you are not ready, do not say you changed it — ask instead.
 No prose outside the JSON. No code fences.`,
   );
 
@@ -363,36 +377,60 @@ async function repairMissingEdits(
     messages: WireMessage[];
     model?: string;
     said: string;
+    /** The generation settings, so `cheapMaxTokens` sizes the repair's output too. */
+    settings?: ChatSettings;
   },
-): Promise<CardEdit[] | null> {
-  try {
-    const { text } = await streamCheap(env, {
-      system: opts.system,
-      messages: [
-        ...opts.messages,
-        // The reply being repaired goes in as the assistant turn it was, so the retry is a
-        // correction of an answer rather than a fresh question with no context.
-        { role: 'assistant', content: JSON.stringify({ say: opts.said, question: null, changes: [] }) },
-        {
-          role: 'user',
-          content:
-            'You said you made that change but sent no edits, so nothing was applied. ' +
-            'Return ONLY the JSON object with the "changes" array that makes the change you ' +
-            'described. "say" must be one short sentence. No question.',
-        },
-      ],
-      maxTokens: 4096,
-      json: true,
-      model: opts.model,
-    });
+): Promise<{ changes?: CardEdit[]; card?: ParsedCard } | null> {
+  const history = [
+    ...opts.messages,
+    // The reply being repaired goes in as the assistant turn it was, so the retry is a
+    // correction of an answer rather than a fresh question with no context.
+    { role: 'assistant' as const, content: JSON.stringify({ say: opts.said, question: null, changes: [] }) },
+  ];
 
-    const turn = parseConsultTurn(text);
-    return turn.changes && turn.changes.length > 0 ? turn.changes : null;
-  } catch {
-    // Any failure here is the repair failing, not the reader's turn failing: the caller
-    // reports it as "it claimed a change it did not send".
-    return null;
+  /**
+   * Two shapes, in this order, because a rebuild and a one-line tweak are different jobs.
+   *
+   * Edits first: they are cheap, they cannot drift an untouched field, and measured on prod
+   * they repair a single-field change reliably. But the prompt for this mode FORBIDS returning
+   * a whole card, so a request that rewrote four fields had no legal way to answer — and the
+   * model, asked for edits, instead wrote "Applied. Sydney is rebuilt" and shipped nothing.
+   * The whole-card shape already exists on the read side (`mergeProposal`), so the repair asks
+   * for it explicitly when edits come back empty.
+   */
+  const attempts = [
+    'You said you made that change but sent no edits, so nothing was applied. ' +
+      'Return ONLY the JSON object with the "changes" array that makes the change you ' +
+      'described. "say" must be one short sentence. No question.',
+    // `maxTokens` is raised on this one: a whole 2,000-token card plus the JSON envelope does
+    // not fit in 4,096, and a reply clipped mid-card is what "ran out of output budget" was.
+    'You said you made that change but sent no edits, so nothing was applied. ' +
+      'This change touches several fields. Return the COMPLETE updated card instead: ' +
+      '{"say": "<8 words or fewer>", "question": null, "card": { ...every field... }}. ' +
+      'Copy any field you did not change verbatim. No prose outside the JSON.',
+  ];
+
+  for (let attempt = 0; attempt < attempts.length; attempt += 1) {
+    try {
+      const { text } = await streamCheap(env, {
+        system: opts.system,
+        messages: [...history, { role: 'user', content: attempts[attempt] }],
+        maxTokens: attempt === 0 ? 4096 : 16384,
+        json: true,
+        model: opts.model,
+        settings: opts.settings,
+      });
+
+      const turn = parseConsultTurn(text);
+      if (turn.changes && turn.changes.length > 0) return { changes: turn.changes };
+      if (turn.card) return { card: turn.card };
+    } catch {
+      // This shape failed; the next one may still work. A failure here is the repair failing,
+      // not the reader's turn failing — the caller reports it as "it claimed a change it did
+      // not send".
+    }
   }
+  return null;
 }
 
 /**
@@ -414,12 +452,30 @@ export function claimsChange(say: string): boolean {
   // Offers and questions are not claims: they are the model asking permission, which is a
   // legal and common turn ("Before I cut, one thing worth deciding: which paragraph").
   if (/\?/.test(say)) return false;
-  const CLAIM =
-    /\b(?:done|added|appended|rewritten|rewrote|removed|replaced|changed|updated|shortened|trimmed|stripped|rephrased|tightened|colder|warmer|cut)\b/i;
-  if (!CLAIM.test(say)) return false;
+
+  // Two families of claim, because the model uses both and the first version of this only
+  // caught one. Measured from a reader's screenshots: the replies that shipped no edits began
+  // "Applied. Sydney is rebuilt..." and "Built it. Sydney is now loud first and cold second"
+  // — neither contains any of the edit verbs below, so the whole reply was waved through and
+  // the pane rendered "No change proposed" under prose that said it was done.
+  //
+  // 1. An edit verb reporting what was done to the card.
+  const EDITED =
+    /\b(?:done|added|appended|rewritten|rewrote|removed|replaced|changed|updated|shortened|trimmed|stripped|rephrased|tightened|colder|warmer|cut|cleaned|fixed|restructured|reworked|overhauled)\b/i;
+  // 2. A bare completion, which is how a big rewrite is announced: "Applied.", "Built it.",
+  //    "Shipped.", "Rebuilt her." The verb is what matters; the object is usually "it".
+  //
+  //    Matched only at a sentence start and only in the past tense, because "build" appears in
+  //    ordinary critique ("this builds tension", "the rebuild of the relationship"). A leading
+  //    "Applied"/"Built"/"Shipped" is unambiguous.
+  const COMPLETED =
+    /(?:^|[.!?]\s+)(?:applied|built|rebuilt|shipped|wrote|wrote it|implemented|landed|installed|deployed)\b/i;
+
+  if (!EDITED.test(say) && !COMPLETED.test(say)) return false;
+
   // "Nothing to change", "no edit needed" and "I did not change it" contain the verbs but deny
   // the act. Requiring a positive assertion keeps a critique turn legal.
-  if (/\b(?:no|not|nothing|never|cannot|can't|didn'?t|doesn'?t|won'?t)\b[^.!?]{0,24}\b(?:change|edit|modif|alter|touch|add|remove|rewrite|cut)/i.test(say)) {
+  if (/\b(?:no|not|nothing|never|cannot|can't|didn'?t|doesn'?t|won'?t)\b[^.!?]{0,24}\b(?:change|edit|modif|alter|touch|add|remove|rewrite|cut|build|rebuild|apply)/i.test(say)) {
     return false;
   }
   return true;
@@ -435,10 +491,23 @@ export async function consult(
     onDelta?: (text: string) => void;
     /** The model the reader picked in the pane. See `streamCheap`'s `model`. */
     model?: string;
+    /**
+     * Called when the silent repair starts.
+     *
+     * The repair is a second full model call, and measured on prod it took 98-204 s. With
+     * nothing on screen for that long the pane looks finished — the reader's own reading of it
+     * was "it probably timed out". The route turns this into the `card` phase, so the existing
+     * "Writing the card…" indicator is up for the whole wait.
+     */
+    onRepair?: () => void;
   },
 ): Promise<ConsultTurn> {
   const card = opts.card ?? null;
   const system = systemPrompt(opts.mode, card);
+  // Resolved once: a card rewrite needs thousands of output tokens, and `cheapMaxTokens` on
+  // the preset is what says how many. Without it every consult call falls back to the
+  // transport's 4096 floor, which is what produced "ran out of output budget".
+  const settings = await loadEffectiveSettings(env, null).catch(() => null);
 
   const messages: WireMessage[] = [];
   // The card goes in as a system message rather than in the first user turn: it is context
@@ -469,7 +538,7 @@ export async function consult(
   for (let attempt = 0; attempt < 2; attempt++) {
     const { text, finishReason } = await streamCheap(
       env,
-      { system, messages, maxTokens: 8192, json: true, model: opts.model },
+      { system, messages, maxTokens: 8192, json: true, model: opts.model, settings: settings ?? undefined },
       onDelta,
     );
 
@@ -493,16 +562,28 @@ export async function consult(
       // streamed, so the reader is looking at "Done —" while nothing was applied. One repair
       // call costs a few seconds and no visible text (its output is not streamed), and turns
       // the announcement into the change it described.
-      if (card && turn.question === null && claimsChange(turn.say)) {
+      //
+      // NOT gated on `question === null`. Measured: a rebuild request came back as "Applied.
+      // Sydney is rebuilt..." WITH a question attached and no edits — the model narrating
+      // completion it had not performed. Skipping the repair there left the reader with the
+      // announcement, a question they could answer, and still no diff.
+      if (card && claimsChange(turn.say)) {
+        opts.onRepair?.();
         const repaired = await repairMissingEdits(env, {
           system,
           messages,
           model: opts.model,
           said: turn.say,
+          settings: settings ?? undefined,
         });
-        if (repaired) {
-          const result = applyEdits(card, repaired);
-          return { ...turn, changes: repaired, card: result.card, dropped: result.dropped };
+        if (repaired?.changes) {
+          const result = applyEdits(card, repaired.changes);
+          return { ...turn, changes: repaired.changes, card: result.card, dropped: result.dropped };
+        }
+        if (repaired?.card) {
+          // The whole-card shape: merged rather than adopted, so provenance and the book
+          // survive and a field the model left out keeps its current text.
+          return { ...turn, card: mergeProposal(card, repaired.card) };
         }
         // The repair did not produce a usable edit either. Return the turn with no card,
         // rather than an error: `ConsultPanel` already renders a "No change proposed" panel

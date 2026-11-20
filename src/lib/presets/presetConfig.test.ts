@@ -147,6 +147,7 @@ describe('parsePresetConfig — a complete config', () => {
       cheapProvider: 'kenari',
       cheapModel: 'deepseek-v4-flash',
       cheapContextBudget: 24000,
+      cheapMaxTokens: 32768,
       reasoning: true,
       authorsNote: 'Keep it grounded.',
       systemPrompt: 'Write in present tense.',

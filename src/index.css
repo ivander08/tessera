@@ -2991,8 +2991,12 @@ input[type="checkbox"] {
    only way it cannot be clipped by the dock's `overflow: hidden` — a custom menu measured
    384px wide, anchored to this 15ch button, and rendered 196px outside the dock as a sliver. */
 .consult-model-select {
-  flex: 0 0 auto;
-  max-width: 18ch;
+  flex: 0 1 auto;
+  /* Wide enough to show a model id — the screenshots showed "Preset default ..." on a phone,
+     which hides the one thing the control exists to tell you. It still shrinks before the
+     close button does, because the X must stay reachable. */
+  max-width: 32ch;
+  min-width: 0;
   padding: 3px 6px;
   border: 1px solid var(--line);
   border-radius: 6px;

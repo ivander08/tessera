@@ -209,8 +209,9 @@ describe('a turn that claims a change it did not send', () => {
           onDelta: () => {},
         });
 
-        // The reply, then one silent repair. No second turn.
-        expect(sent.length).toBe(2);
+        // The reply, then BOTH repair shapes (edits, then whole card). No second turn of the
+        // conversation, and no endless loop.
+        expect(sent.length).toBe(3);
         // No card is what makes `ConsultPanel` draw its "No change proposed" panel with the
         // "Do it" button. An error here would leave the reader with nothing to press.
         expect(turn.card).toBeNull();
@@ -240,6 +241,166 @@ describe('a turn that claims a change it did not send', () => {
         expect(sent.length).toBe(1);
         expect(turn.question?.options.length).toBe(2);
         expect(turn.card).toBeNull();
+      },
+    );
+  });
+});
+
+describe('a claim that also asks a question', () => {
+  // Measured on the reader's own card (1,962 tokens): a rebuild request returned
+  // "Applied. Sydney is rebuilt..." WITH a question attached and no edits. The repair was
+  // gated on `question === null`, so it never ran and the pane showed the announcement, a
+  // question, and no diff.
+  test('is repaired rather than passed through as a normal question turn', async () => {
+    const env = await configuredEnv();
+    const claimWithQuestion = JSON.stringify({
+      say: 'Applied. Sydney is rebuilt around the three pressures.',
+      question: { text: 'Want the openings rewritten too?', options: ['Yes', 'Later'], recommended: 0 },
+      changes: [],
+    });
+    const repaired = JSON.stringify({
+      say: 'Description rewritten.',
+      question: null,
+      changes: [{ field: 'personality', op: 'replace', value: 'Loud first, cold second.' }],
+    });
+    let call = 0;
+    const replies = [claimWithQuestion, repaired];
+
+    await withFetch(
+      () => jsonReply(replies[Math.min(call++, replies.length - 1)]),
+      async (sent) => {
+        const turn = await consult(env, {
+          mode: 'consult',
+          messages: [{ role: 'user', content: 'Rebuild her.' }],
+          card: fullCard(),
+          onDelta: () => {},
+        });
+
+        expect(sent.length).toBe(2);
+        expect(turn.card?.personality).toBe('Loud first, cold second.');
+        // The question is kept: it is still a real thing to answer, and the repair only
+        // supplies the edit the prose promised.
+        expect(turn.question?.options.length).toBe(2);
+      },
+    );
+  });
+});
+
+describe("the repair's progress", () => {
+  // The repair is a full second call and measured 98-204s on prod, streaming nothing. The
+  // reader's own reading of that silence was "it probably timed out", so the pane is told the
+  // repair started and keeps its "Writing the card..." indicator up.
+  test('reports when the silent repair begins', async () => {
+    const env = await configuredEnv();
+    const claim = JSON.stringify({ say: 'Applied. Sydney is rebuilt.', question: null, changes: [] });
+    const repaired = JSON.stringify({
+      say: 'Done.',
+      question: null,
+      changes: [{ field: 'description', op: 'append', value: 'A line.' }],
+    });
+    let call = 0;
+    const replies = [claim, repaired];
+
+    const events: string[] = [];
+    await withFetch(
+      () => jsonReply(replies[Math.min(call++, replies.length - 1)]),
+      async () => {
+        await consult(env, {
+          mode: 'consult',
+          messages: [{ role: 'user', content: 'Rebuild her.' }],
+          card: fullCard(),
+          onDelta: () => {},
+          onRepair: () => events.push('repair'),
+        });
+      },
+    );
+
+    expect(events).toEqual(['repair']);
+  });
+
+  test('does not report one when no repair is needed', async () => {
+    const env = await configuredEnv();
+    let repaired = 0;
+    await withFetch(
+      () =>
+        jsonReply(
+          JSON.stringify({
+            say: 'Done — appended a line.',
+            question: null,
+            changes: [{ field: 'description', op: 'append', value: 'A line.' }],
+          }),
+        ),
+      async () => {
+        await consult(env, {
+          mode: 'consult',
+          messages: [{ role: 'user', content: 'Add a line.' }],
+          card: fullCard(),
+          onDelta: () => {},
+          onRepair: () => (repaired += 1),
+        });
+      },
+    );
+    expect(repaired).toBe(0);
+  });
+});
+
+describe('a rebuild with no legal edit shape', () => {
+  // The reader's own case: a four-field rebuild. The consult prompt forbids returning a whole
+  // card, so asked for edits the model wrote "Applied. Sydney is rebuilt" and shipped nothing.
+  // The repair now escalates to the whole-card shape, which `mergeProposal` already handles.
+  test('repairs through the whole-card shape when edits come back empty', async () => {
+    const env = await configuredEnv();
+    const claim = JSON.stringify({
+      say: 'Applied. Sydney is rebuilt: inseparable from Ivander at eight, gone at ten.',
+      question: null,
+      changes: [],
+    });
+    const noEdits = JSON.stringify({ say: 'Rewriting.', question: null, changes: [] });
+    const wholeCard = JSON.stringify({
+      say: 'Rebuilt.',
+      question: null,
+      card: {
+        name: 'Sydney Sijun Chen',
+        nickname: 'Sydney',
+        description: 'Loud first, cold second. The depression is the interior.',
+        personality: 'Extrovert, performing.',
+        scenario: 'A campus at the end of a wet semester.',
+        first_mes: 'You again.',
+        mes_example: '',
+        system_prompt: '',
+        post_history_instructions: '',
+        alternate_greetings: ['Opening two.'],
+        greeting_states: [],
+        creator_notes: '',
+        tags: ['campus'],
+      },
+    });
+
+    let call = 0;
+    const replies = [claim, noEdits, wholeCard];
+    await withFetch(
+      () => jsonReply(replies[Math.min(call++, replies.length - 1)]),
+      async (sent) => {
+        const turn = await consult(env, {
+          mode: 'consult',
+          messages: [{ role: 'user', content: 'Rebuild her around the three pressures.' }],
+          card: fullCard(),
+          onDelta: () => {},
+        });
+
+        // Claim, edits attempt, whole-card attempt.
+        expect(sent.length).toBe(3);
+        // The second repair asks for the whole card. Its budget is the CONFIGURED ceiling
+        // (`cheapMaxTokens`), not a hardcoded number: a 2,000-token card does not fit in the
+        // 4,096 transport floor, and clipping it is what the reader saw as "ran out of output
+        // budget". The default here is that floor, because this stub configures nothing.
+        expect(sent[2].max_tokens).toBe(4096);
+        expect(String(JSON.stringify(sent[2].messages))).toContain('COMPLETE updated card');
+
+        expect(turn.card?.description).toContain('Loud first, cold second');
+        expect(turn.card?.name).toBe('Sydney Sijun Chen');
+        // Provenance is the app's, never the model's.
+        expect(turn.card?.sourceFormat).toBe('ccv2');
       },
     );
   });

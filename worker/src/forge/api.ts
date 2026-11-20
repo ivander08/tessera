@@ -185,6 +185,13 @@ export async function forgeConsult(env: Env, req: Request): Promise<Response> {
           // The reader's own choice from the pane's picker. Absent means the configured
           // side-channel pair, which is what every caller without a picker gets.
           model: asString(body?.model).trim() || undefined,
+          // The repair is a full second call that streams nothing; without this the pane sits
+          // on finished prose for up to two minutes and reads as hung.
+          onRepair: () => {
+            if (phase === 'card') return;
+            phase = 'card';
+            send<ConsultFrame>(controller, { type: 'phase', phase });
+          },
           onDelta: (fragment) => {
             buffer += fragment;
             const prefix = partialField(buffer, 'say');

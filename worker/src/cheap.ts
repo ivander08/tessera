@@ -261,10 +261,12 @@ export async function complete(
     model?: string;
   },
 ): Promise<CompletionResult> {
-  let budget = opts.maxTokens ?? 1024;
+  const settings = opts.settings ?? (await loadEffectiveSettings(env, null));
+  const ceiling = settings.cheapMaxTokens > 0 ? settings.cheapMaxTokens : DEFAULT_SIDE_CHANNEL_MAX_TOKENS;
+  let budget = Math.min(opts.maxTokens ?? 1024, ceiling);
 
   for (let attempt = 0; ; attempt += 1) {
-    const { provider, model, url, init } = await prepare(env, { ...opts, maxTokens: budget });
+    const { provider, model, url, init } = await prepare(env, { ...opts, settings, maxTokens: budget });
     const body = sideChannelBody(init, { stream: false, json: opts.json });
 
     const res = await fetch(url, { ...init, body: JSON.stringify(body) });
@@ -274,10 +276,10 @@ export async function complete(
     }
 
     const result = await readResponse(provider, res);
-    if (attempt === 0 && spentTheBudget(result) && budget < SIDE_CHANNEL_MAX_TOKENS) {
-      // Same question, more room. One retry: a model that empties 4096 tokens too is not
-      // going to be talked into answering by a third attempt.
-      budget = Math.min(budget * 2, SIDE_CHANNEL_MAX_TOKENS);
+    if (attempt === 0 && spentTheBudget(result) && budget < ceiling) {
+      // Same question, more room — up to the configured ceiling. One retry: a model that
+      // empties that too is not going to be talked into answering by a third attempt.
+      budget = Math.min(budget * 2, ceiling);
       continue;
     }
 
@@ -308,10 +310,12 @@ export async function streamCheap(
   },
   onDelta?: (text: string) => void,
 ): Promise<CompletionResult> {
-  let budget = opts.maxTokens ?? 1024;
+  const settings = opts.settings ?? (await loadEffectiveSettings(env, null));
+  const ceiling = settings.cheapMaxTokens > 0 ? settings.cheapMaxTokens : DEFAULT_SIDE_CHANNEL_MAX_TOKENS;
+  let budget = Math.min(opts.maxTokens ?? 1024, ceiling);
 
   for (let attempt = 0; ; attempt += 1) {
-    const { provider, model, url, init } = await prepare(env, { ...opts, maxTokens: budget });
+    const { provider, model, url, init } = await prepare(env, { ...opts, settings, maxTokens: budget });
     const body = sideChannelBody(init, { stream: true, json: opts.json });
 
     const res = await fetch(url, { ...init, body: JSON.stringify(body) });
@@ -320,10 +324,10 @@ export async function streamCheap(
     }
 
     const result = await readResponse(provider, res, onDelta);
-    if (attempt === 0 && spentTheBudget(result) && budget < SIDE_CHANNEL_MAX_TOKENS) {
+    if (attempt === 0 && spentTheBudget(result) && budget < ceiling) {
       // Nothing was streamed in this case — an empty reply has no deltas — so retrying
       // cannot make the reader watch the same answer arrive twice.
-      budget = Math.min(budget * 2, SIDE_CHANNEL_MAX_TOKENS);
+      budget = Math.min(budget * 2, ceiling);
       continue;
     }
 
@@ -372,18 +376,22 @@ async function readResponse(
 }
 
 /**
- * The most a side-channel call will escalate to.
+ * The most a side-channel call will escalate to when nothing is configured.
  *
  * A reasoning model that ignores `enable_thinking: false` spends the answer's budget on
  * `reasoning_content` and returns empty. Measured on prod: `deepseek-v4-pro` at 1400
  * tokens returned nothing, three attempts in a row, and the memory pipeline stopped for
  * the whole chat.
  *
- * 4096 is not a guess about how much thinking is enough — it is the point past which a
- * side channel is no longer cheap. A model that still finishes empty there is one the
- * reader should replace, and the error says so.
+ * This is a FLOOR on the cap, not the cap itself. `cheapMaxTokens` on the preset raises it,
+ * because the two side-channel jobs have different appetites: a summary wants a few hundred
+ * tokens while a card rewrite returns a 2,000-token JSON document. Measured on prod with the
+ * fixed 4096: a consult asked for the whole card spent 4,096 tokens on one field and answered
+ * nothing, then "used all 8192 tokens without producing an answer" once the consult asked for
+ * more. The reader's own conclusion was "why not increase the max tokens … so we can use any
+ * model", which is exactly right — the ceiling belongs to the job, not to the transport.
  */
-const SIDE_CHANNEL_MAX_TOKENS = 4096;
+const DEFAULT_SIDE_CHANNEL_MAX_TOKENS = 4096;
 
 /**
  * Whether a reply is a reasoning model eating the allowance rather than an answer.

@@ -45,6 +45,18 @@ export interface PresetConfig {
   cheapModel?: string;
   /** Input ceiling for every cheap-model call, in estimated tokens. 0 means no ceiling. */
   cheapContextBudget?: number;
+  /**
+   * Output ceiling for every cheap-model call, in tokens.
+   *
+   * Separate from `maxTokens`, which is the NARRATOR's ceiling. The side channel had a fixed
+   * 4096 that no control could raise, so a consult asked to rewrite a 2,000-token card spent
+   * the whole allowance on one field and returned nothing — measured: "the reply ran out of
+   * output budget before it finished", then "used all 8192 tokens without producing an
+   * answer". A card rewrite is a big JSON document; the ceiling has to fit it.
+   *
+   * 0 means the caller's own default, which is what every non-consultant caller wants.
+   */
+  cheapMaxTokens?: number;
   /** Let the narrator model reason. Off by default: it is latency the reader pays for. */
   reasoning?: boolean;
   /** The reader's standing note, injected in the tail. Safe to change every turn. */
@@ -193,6 +205,7 @@ export const DEFAULT_PRESET_CONFIG: PresetConfig = {
   cheapProvider: '',
   cheapModel: '',
   cheapContextBudget: 0,
+  cheapMaxTokens: 0,
   reasoning: false,
   authorsNote: '',
   systemPrompt: '',
@@ -228,6 +241,7 @@ const BOUNDS = {
   maxTokens: [16, 65536],
   contextSize: [1024, 1048576],
   cheapContextBudget: [0, 65536],
+  cheapMaxTokens: [0, 131072],
   loreScanDepth: [0, 100],
   loreTokenBudget: [0, 65536],
 } as const;
@@ -280,6 +294,7 @@ export function parsePresetConfig(raw: string | null | undefined): PresetConfig 
     cheapProvider: typeof record.cheapProvider === 'string' ? record.cheapProvider : '',
     cheapModel: typeof record.cheapModel === 'string' ? record.cheapModel : '',
     cheapContextBudget: clampNumber(record.cheapContextBudget, 'cheapContextBudget'),
+    cheapMaxTokens: clampNumber(record.cheapMaxTokens, 'cheapMaxTokens'),
     reasoning: record.reasoning === true,
     authorsNote: typeof record.authorsNote === 'string' ? record.authorsNote : '',
     systemPrompt: typeof record.systemPrompt === 'string' ? record.systemPrompt : '',

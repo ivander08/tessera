@@ -235,6 +235,17 @@ export function PresetEditor({
           value={config.cheapContextBudget}
           onChange={(value) => setConfig({ ...config, cheapContextBudget: value })}
         />
+        <ConfigNumber
+          label="Cheap output budget (0 for 4096)"
+          value={config.cheapMaxTokens}
+          onChange={(value) => setConfig({ ...config, cheapMaxTokens: value })}
+        />
+        <p className="form-hint" style={{ marginTop: -6 }}>
+          How much the side channel may write in one reply. The consultant returns a whole card
+          when it rebuilds one, which is thousands of tokens — measured on a 2,000-token card,
+          the old fixed 4,096 spent the whole allowance on one field and answered with nothing.
+          Raise this if a rewrite comes back empty, lower it to keep memory work cheap.
+        </p>
         <label className="flex min-h-10 items-center gap-3">
           <input
             type="checkbox"

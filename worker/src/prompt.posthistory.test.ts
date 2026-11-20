@@ -29,6 +29,7 @@ function settings(over: Partial<EffectiveSettings> = {}): EffectiveSettings {
     maxTokens: 1024,
     contextBudget: 16384,
     cheapContextBudget: 0,
+    cheapMaxTokens: 0,
     knobs: {},
     idrPerUsd: null,
     loreScanDepth: 4,
