@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { encryptKey } from '../../../src/lib/crypto';
+import type { ParsedCard } from '../../../src/lib/cards/types';
 import { consult } from './consult';
 
 /**
@@ -62,7 +63,7 @@ async function withFetch<T>(
 }
 
 /** A complete card: `systemPrompt` prices it, and a partial one throws before the request. */
-function fullCard(): Parameters<typeof consult>[1]['card'] {
+function fullCard(): ParsedCard {
   return {
     name: 'Ada',
     description: 'A detective.',
@@ -469,6 +470,81 @@ describe('a revision that omits the name', () => {
             onDelta: () => {},
           }),
         ).rejects.toThrow(/no name/);
+      },
+    );
+  });
+});
+
+describe('a card identical to the one being revised', () => {
+  // Measured on prod on the reader's own card: the whole-card repair returned all fourteen
+  // fields, every one byte-identical to the original, in 12 seconds. The pane then showed a
+  // card with Apply enabled — the reader's complaint in its most convincing form, because this
+  // time there WAS something to press.
+  test('is treated as no change, not as a revision', async () => {
+    const env = await configuredEnv([{ key: 'cheapMaxTokens', value: '32768' }]);
+    const current = fullCard();
+    await withFetch(
+      () =>
+        jsonReply(
+          JSON.stringify({
+            say: 'Rebuilt.',
+            question: null,
+            card: {
+              name: current.name,
+              description: current.description,
+              personality: current.personality,
+              scenario: current.scenario,
+              first_mes: current.firstMes,
+              mes_example: '',
+              system_prompt: '',
+              post_history_instructions: '',
+              alternate_greetings: [],
+              creator_notes: '',
+              tags: [],
+            },
+          }),
+        ),
+      async () => {
+        const turn = await consult(env, {
+          mode: 'consult',
+          messages: [{ role: 'user', content: 'Rebuild her.' }],
+          card: current,
+          onDelta: () => {},
+        });
+
+        // No card means the panel draws "No change proposed" and offers nothing to Apply.
+        expect(turn.card).toBeNull();
+      },
+    );
+  });
+
+  test('a card with ONE changed field is a real revision', async () => {
+    const env = await configuredEnv([{ key: 'cheapMaxTokens', value: '32768' }]);
+    const current = fullCard();
+    await withFetch(
+      () =>
+        jsonReply(
+          JSON.stringify({
+            say: 'Rebuilt.',
+            question: null,
+            card: {
+              name: current.name,
+              description: 'Actually different.',
+              personality: current.personality,
+              scenario: current.scenario,
+              first_mes: current.firstMes,
+            },
+          }),
+        ),
+      async () => {
+        const turn = await consult(env, {
+          mode: 'consult',
+          messages: [{ role: 'user', content: 'Rebuild her.' }],
+          card: current,
+          onDelta: () => {},
+        });
+
+        expect(turn.card?.description).toBe('Actually different.');
       },
     );
   });

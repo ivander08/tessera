@@ -573,7 +573,21 @@ export async function consult(
         return { ...turn, card: result.card, dropped: result.dropped };
       }
       if (card && turn.card) {
-        return { ...turn, card: mergeProposal(card, turn.card) };
+        const merged = mergeProposal(card, turn.card);
+        /**
+         * A card identical to the one being revised is NOT a revision.
+         *
+         * Measured on prod on the reader's own card: the whole-card repair returned all
+         * fourteen fields, every one byte-identical to the original, in 12 seconds. The
+         * app then showed a card with Apply enabled and "No field differs" — the reader's
+         * complaint ("it says it changed things but then doesn't change anything") in its
+         * most convincing form, because this time there WAS a card to press Apply on.
+         *
+         * Treat it as no change and let the "No change proposed" panel say so, rather than
+         * handing back a diff of nothing.
+         */
+        if (sameCard(card, merged)) return { ...turn, card: null };
+        return { ...turn, card: merged };
       }
 
       // A claim with nothing behind it is the reported bug, and it is not recoverable by
@@ -1052,6 +1066,25 @@ function PROSE_BY_WIRE(wire: string): ProseField | 'name' | 'nickname' {
  * and not the scenes, the current scenes are refitted to the new count rather than left
  * pointing at the wrong greetings.
  */
+/**
+ * Whether a proposed card is identical, field for field, to the one it revises.
+ *
+ * Compares the fields a reader can see or that reach the prompt — not `raw`, which is the
+ * model's own echo of what it sent and differs whenever it omits a field. Provenance is
+ * compared too, because a changed source format is a real change.
+ */
+function sameCard(a: ParsedCard, b: ParsedCard): boolean {
+  for (const key of PROSE_FIELDS.map(([, stored]) => stored) as Array<keyof ParsedCard>) {
+    if (String(a[key] ?? '') !== String(b[key] ?? '')) return false;
+  }
+  if (a.name !== b.name || (a.nickname ?? '') !== (b.nickname ?? '')) return false;
+  if (JSON.stringify(a.tags) !== JSON.stringify(b.tags)) return false;
+  if (JSON.stringify(a.alternateGreetings) !== JSON.stringify(b.alternateGreetings)) return false;
+  if (JSON.stringify(a.greetingStates ?? []) !== JSON.stringify(b.greetingStates ?? [])) return false;
+  if (JSON.stringify(a.characterBook ?? null) !== JSON.stringify(b.characterBook ?? null)) return false;
+  return true;
+}
+
 export function mergeProposal(current: ParsedCard, parsed: ParsedCard): ParsedCard {
   const raw = asRecord(parsed.raw) ?? {};
   const sent = (wire: string) => wire in raw;
