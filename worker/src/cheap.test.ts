@@ -272,7 +272,8 @@ describe('streamCheap', () => {
       async () => {
         await expect(
           streamCheap(env, { messages: [{ role: 'user', content: 'u' }], maxTokens: 512 }),
-        ).rejects.toThrow(/used all 1024 tokens without producing an answer/);
+        // 512 -> 1024 -> 2048 -> 4096 (the default ceiling), and it names where it stopped.
+        ).rejects.toThrow(/used all 4096 tokens without producing an answer/);
       },
     );
   });
@@ -567,7 +568,8 @@ describe('a reply clipped mid-document', () => {
       maxTokens: 4096,
     });
 
-    expect(budgets).toEqual([4096, 8192]);
+    // It keeps climbing for as long as nothing reached the reader, up to the ceiling.
+    expect(budgets).toEqual([4096, 8192, 16384, 32768, 65536]);
     expect(result.finishReason).toBe('length');
   });
 
@@ -595,5 +597,46 @@ describe('a reply clipped mid-document', () => {
 
     expect(budgets).toEqual([4096]);
     expect(seen.length).toBeGreaterThan(0);
+  });
+});
+
+describe('climbing to the configured ceiling', () => {
+  // Measured on prod after the ceiling became configurable: the call started at 4,096, emptied,
+  // doubled to 8,192, emptied again, and then FAILED at 8,192 while the preset allowed 32,768.
+  // The retry was gated on `attempt === 0`, so raising the setting did nothing past the first
+  // doubling — the reader's exact complaint.
+  test('keeps doubling until the ceiling is reached', async () => {
+    const env = await configuredEnv([{ key: 'cheapMaxTokens', value: '32768' }]);
+    const budgets: number[] = [];
+    globalThis.fetch = (async (_url: unknown, init: RequestInit) => {
+      budgets.push((JSON.parse(String(init.body)) as { max_tokens: number }).max_tokens);
+      // Always starved: the point is how far it is allowed to climb, not that it succeeds.
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: '' }, finish_reason: 'length' }] }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    }) as unknown as typeof fetch;
+
+    await complete(env, { user: 'u', json: true, maxTokens: 4096 }).catch(() => {});
+
+    // 4096 -> 8192 -> 16384 -> 32768, then it stops at the ceiling instead of looping forever.
+    expect(budgets).toEqual([4096, 8192, 16384, 32768]);
+    // Nothing beyond the ceiling, however many attempts the refusal takes.
+    expect(Math.max(...budgets)).toBe(32768);
+  });
+
+  test('still stops at the first retry when the ceiling is the old default', async () => {
+    const env = await configuredEnv();
+    const budgets: number[] = [];
+    globalThis.fetch = (async (_url: unknown, init: RequestInit) => {
+      budgets.push((JSON.parse(String(init.body)) as { max_tokens: number }).max_tokens);
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: '' }, finish_reason: 'length' }] }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    }) as unknown as typeof fetch;
+
+    await complete(env, { user: 'u', json: true, maxTokens: 2048 }).catch(() => {});
+    expect(budgets).toEqual([2048, 4096]);
   });
 });

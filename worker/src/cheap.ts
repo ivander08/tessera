@@ -276,9 +276,14 @@ export async function complete(
     }
 
     const result = await readResponse(provider, res);
-    if (attempt === 0 && spentTheBudget(result) && budget < ceiling) {
-      // Same question, more room — up to the configured ceiling. One retry: a model that
-      // empties that too is not going to be talked into answering by a third attempt.
+    /**
+     * Same question, more room — until the ceiling is reached.
+     *
+     * A buffered call has no reader, so every retry is invisible; the guard that matters on the
+     * streamed path (nothing has been shown yet) is trivially true here. Both budget-failure
+     * shapes are covered: an empty reply and one cut off mid-document.
+     */
+    if (budget < ceiling && (spentTheBudget(result) || result.finishReason === 'length')) {
       budget = Math.min(budget * 2, ceiling);
       continue;
     }
@@ -333,24 +338,23 @@ export async function streamCheap(
     }
 
     const result = await readResponse(provider, res, onDelta ? track : undefined);
-    if (attempt === 0 && budget < ceiling && spentTheBudget(result)) {
-      // Nothing was streamed: an empty reply has no deltas, so retrying cannot make the
-      // reader watch the same answer arrive twice.
-      budget = Math.min(budget * 2, ceiling);
-      continue;
-    }
     /**
-     * A reply CUT OFF mid-document is also a budget failure, and it used to be final.
+     * Climb to the ceiling, one doubling at a time — not one doubling and stop.
      *
-     * `spentTheBudget` only matches empty content, so a card truncated halfway through its
-     * JSON took this branch and surfaced as "ran out of output budget before it finished" —
-     * measured on the reader's card: the repair wrote 16,384 tokens, was clipped mid-card, and
-     * died there with the whole allowance already spent. Retrying is safe under exactly the
-     * same condition as above: nothing reached the reader, so there is nothing to restart.
-     * Guarded on `!streamed` rather than on the content being empty, because `onDelta` is the
-     * only evidence of what the reader has already seen.
+     * Measured on prod after the ceiling became configurable: a call started at 4,096, emptied,
+     * doubled to 8,192, emptied again, and then FAILED at 8,192 while the preset allowed
+     * 32,768. The retry was gated on `attempt === 0`, so "raise the max tokens" did nothing
+     * beyond the first doubling — the reader's exact complaint.
+     *
+     * Both shapes of budget failure are covered: an EMPTY reply (a reasoning model spent it all
+     * thinking) and a reply CUT OFF mid-document (a card truncated halfway through its JSON),
+     * which used to be final because `spentTheBudget` only matches the empty case.
+     *
+     * The guard is now on whether anything reached the reader, which is the only thing that
+     * makes a retry visible. `streamCheap` tracks that itself; a buffered `complete` call has
+     * no reader, so it may always retry.
      */
-    if (attempt === 0 && budget < ceiling && !streamed && result.finishReason === 'length') {
+    if (!streamed && budget < ceiling && (spentTheBudget(result) || result.finishReason === 'length')) {
       budget = Math.min(budget * 2, ceiling);
       continue;
     }
