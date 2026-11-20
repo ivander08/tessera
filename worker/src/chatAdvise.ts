@@ -1,5 +1,6 @@
 import { badRequest, notFound, readJson } from './http';
-import { send } from './prompt';
+import { asString } from '../../src/lib/json';
+import { heartbeat, send } from './prompt';
 import { asMessages, phaseOf, type ConsultFrame, type ConsultPhase } from './forge/api';
 import { partialField } from './forge/partial';
 import { chatConsult, type ChatConsultTurn } from './chatConsult';
@@ -17,7 +18,7 @@ import { chatConsult, type ChatConsultTurn } from './chatConsult';
  * model's own mistake rather than prevent it.
  */
 export async function chatAdvise(env: Env, req: Request, chatId: string): Promise<Response> {
-  const body = await readJson<{ messages?: unknown }>(req);
+  const body = await readJson<{ messages?: unknown; model?: unknown }>(req);
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     return badRequest('messages required');
   }
@@ -38,11 +39,15 @@ export async function chatAdvise(env: Env, req: Request, chatId: string): Promis
       let emitted = '';
       // Sent only when it changes: a frame per delta would be the same fact repeated.
       let phase: ConsultPhase = 'say';
+      // A silent model must not let the socket time out: see `heartbeat`.
+      const stopHeartbeat = heartbeat(controller);
 
       try {
         const turn = await chatConsult(env, {
           chatId,
           messages,
+          // The reader's own choice from the dock's picker; absent means the configured pair.
+          model: asString(body?.model).trim() || undefined,
           onDelta: (fragment) => {
             buffer += fragment;
             const prefix = partialField(buffer, 'say');
@@ -71,6 +76,7 @@ export async function chatAdvise(env: Env, req: Request, chatId: string): Promis
           // controller already closed by the client
         }
       } finally {
+        stopHeartbeat();
         try {
           controller.close();
         } catch {

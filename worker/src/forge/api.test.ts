@@ -349,3 +349,38 @@ describe('forgeConsult streaming', () => {
     }
   });
 });
+
+
+describe('the SSE keep-alive', () => {
+  // The prod failure this pins: the consultant answered in ~2s on four presses and returned a
+  // bare 502 after 116.9s with zero frames on the fifth. `server/index.ts` sets
+  // `idleTimeout: 120`, so a model that thinks for two minutes gets the socket closed before
+  // its first token — which the reader sees as "I press the button, it doesn't reply at all".
+  test('writes a comment frame while the model is silent, and stops afterwards', async () => {
+    const { heartbeat } = await import('../prompt');
+    const chunks: string[] = [];
+    let closed = false;
+    const controller = {
+      enqueue: (bytes: Uint8Array) => {
+        if (closed) throw new TypeError('closed');
+        chunks.push(new TextDecoder().decode(bytes));
+      },
+    } as unknown as ReadableStreamDefaultController<Uint8Array>;
+
+    const stop = heartbeat(controller, 5);
+    await new Promise((resolve) => setTimeout(resolve, 22));
+    stop();
+    const after = chunks.length;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(chunks.length).toBeGreaterThan(0);
+    // A comment line, which `parseSse` skips and a proxy forwards: never a data frame, which
+    // would be a lie about the model having produced something.
+    expect(chunks.every((chunk) => chunk.startsWith(':'))).toBe(true);
+    expect(chunks.every((chunk) => chunk.endsWith('\n\n'))).toBe(true);
+    // Nothing is written after `stop()`, which is what keeps a timer from outliving the
+    // response.
+    expect(chunks.length).toBe(after);
+    closed = true;
+  });
+});

@@ -2986,6 +2986,41 @@ input[type="checkbox"] {
   }
 }
 
+/* The model the consult runs on, chosen in the pane.
+   A native select styled to read as a quiet chip: the popup is the platform's, which is the
+   only way it cannot be clipped by the dock's `overflow: hidden` — a custom menu measured
+   384px wide, anchored to this 15ch button, and rendered 196px outside the dock as a sliver. */
+.consult-model-select {
+  flex: 0 0 auto;
+  max-width: 18ch;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-dim);
+  font: inherit;
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.consult-model-select:hover:not(:disabled),
+.consult-model-select:focus-visible {
+  color: var(--ink);
+  border-color: var(--ink-dim);
+}
+
+.consult-model-select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The platform popup inherits the page's surface rather than the OS light theme. */
+.consult-model-select option {
+  background: var(--surface);
+  color: var(--ink);
+}
+
 /* Both labels stay on one line each: in the docked width they wrapped, which pushed the
    close button down and made the header three lines tall. The hint is the aside, so it is
    the one that gives — and on a phone it is dropped entirely rather than wrapped, because

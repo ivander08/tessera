@@ -45,6 +45,36 @@ export function send<F extends { type: string }>(
   controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(frame)}\n\n`));
 }
 
+/**
+ * Keeps an SSE response alive while the model is silent.
+ *
+ * The server sets `idleTimeout: 120` (server/index.ts) and a reverse proxy may have its own.
+ * A provider that thinks before answering writes nothing for that whole time, so the socket
+ * is closed and the browser sees a bare 502 with no frames at all — measured on prod: the
+ * chat consultant answered in 2 seconds on four presses and returned 502 after 116.9 seconds
+ * with zero bytes on the fifth. The reader's report was "I press the button, it doesn't reply
+ * at all", which is exactly what a closed socket looks like: no error frame, no text.
+ *
+ * A comment line is SSE's own keep-alive: `parseSse` skips `:` lines, and a proxy forwards
+ * them without touching its own buffering. Started before the model call and stopped in
+ * `finally`, so no timer outlives the response.
+ */
+export function heartbeat(
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  intervalMs = 10_000,
+): () => void {
+  const encoder = new TextEncoder();
+  const timer = setInterval(() => {
+    try {
+      controller.enqueue(encoder.encode(': keepalive\n\n'));
+    } catch {
+      // The response is already closed; there is nothing left to keep alive.
+      clearInterval(timer);
+    }
+  }, intervalMs);
+  return () => clearInterval(timer);
+}
+
 export interface PromptOptions {
   mode: 'send' | 'regenerate' | 'impersonate' | 'continue';
   /**

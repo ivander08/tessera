@@ -6,6 +6,7 @@ import { handleComposerEnter } from '../lib/composer';
 import { estimateTokens } from '../lib/tokenEstimate';
 import { diffText, summarizeDiff, type DiffLine } from '../lib/text/diff';
 import { Markdown } from './Markdown';
+import { ConsultModelPicker, readConsultModel, storeConsultModel } from './ConsultModelPicker';
 import { useToast } from './Toast';
 
 /** One turn of the conversation, as the client holds it. Mirrors `ConsultMessage`. */
@@ -181,6 +182,14 @@ export function ConsultPanel({
   const [phase, setPhase] = useState<'say' | 'question' | 'card'>('say');
   const [failure, setFailure] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  /**
+   * The model this consult runs on, chosen in the pane.
+   *
+   * Seeded from what this surface last chose, NOT from the preset: `null` means "the
+   * configured side-channel pair", and the picker labels it that way. Reading it here rather
+   * than in the picker keeps the value and the request in one place.
+   */
+  const [model, setModel] = useState<string | null>(() => readConsultModel('card'));
   // The stream in flight. The transport has always accepted a signal; nothing passed one, so
   // a consultant answer could not be stopped and ran to completion even after the pane was
   // closed — the reader paid for the rest of a reply they had walked away from.
@@ -262,7 +271,13 @@ export function ConsultPanel({
 
     try {
       await streamConsult(
-        { mode, messages: next, card: card ?? undefined },
+        {
+          mode,
+          messages: next,
+          card: card ?? undefined,
+          // The pane's own choice; absent means the preset's side-channel pair.
+          model: model ?? undefined,
+        },
         (frame: ConsultFrame) => {
           if (frame.type === 'delta') {
             streamed = frame.text;
@@ -347,6 +362,14 @@ export function ConsultPanel({
           {mode === 'draft' ? 'New character' : 'Consulting this card'}
         </span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <ConsultModelPicker
+            value={model}
+            disabled={busy}
+            onChange={(next) => {
+              setModel(next);
+              storeConsultModel('card', next);
+            }}
+          />
           {mode === 'consult' && (
             <span className="form-hint">changes apply to the form, not saved</span>
           )}

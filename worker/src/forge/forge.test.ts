@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { analyzeTokenCost } from '../../../src/lib/forge/tokenCost';
 import { cardForPrompt, findSmuggledInstructions } from './smuggle';
-import { applyEdits, mergeProposal, parseConsultTurn, systemPrompt } from './consult';
+import { applyEdits, claimsChange, mergeProposal, parseConsultTurn, systemPrompt } from './consult';
 import type { ParsedCard } from '../../../src/lib/cards/types';
 
 /**
@@ -277,6 +277,41 @@ describe('cardForPrompt', () => {
     expect(prompt.greeting_states).toEqual([{ time: 'a' }]);
   });
 });
+describe('claimsChange', () => {
+  // Measured on prod, twice in six change requests: the prose announced the edit, the
+  // envelope carried `changes: []`, and the reader pressed Apply on nothing. These are the
+  // exact two sentences that did it.
+  test('catches the announcements that shipped no edits', () => {
+    expect(
+      claimsChange('Done — appended a profanity block to the description so the narrator has it.'),
+    ).toBe(true);
+    expect(
+      claimsChange('Rewritten colder — the change is mostly subtraction. She now answers flat.'),
+    ).toBe(true);
+    expect(claimsChange('Added one line at the end of the trait list.')).toBe(true);
+    expect(claimsChange('Removed the [RELATIONSHIPS] paragraph.')).toBe(true);
+  });
+
+  test('leaves offers and questions alone', () => {
+    // The real turn that preceded its own "Do it": it asks which paragraph, and it must stay
+    // a normal question rather than become an error.
+    expect(
+      claimsChange('Before I cut, one thing worth deciding: which paragraph should go?'),
+    ).toBe(false);
+    expect(claimsChange('I would add a line about the key under the mat.')).toBe(false);
+    expect(claimsChange('Should I rewrite the scenario?')).toBe(false);
+  });
+
+  test('leaves a denial alone', () => {
+    expect(claimsChange('No change is needed here; the card already says it.')).toBe(false);
+    expect(claimsChange('I did not change the scenario.')).toBe(false);
+  });
+
+  test('leaves a plain critique alone', () => {
+    expect(claimsChange('The description is strong. The scenario is thin.')).toBe(false);
+  });
+});
+
 describe('parseConsultTurn', () => {
   test('reads a turn that asks a question', () => {
     const turn = parseConsultTurn(

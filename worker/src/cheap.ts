@@ -143,13 +143,36 @@ async function prepare(
      * be ignored.
      */
     settings?: ChatSettings;
+    /**
+     * A model the CALLER chose, overriding the configured side-channel pair.
+     *
+     * The consultants are interactive: the reader is looking at the reply and can pick a
+     * model for it. Resolving that choice from a preset meant a reader who wanted a stronger
+     * model for one question had to edit the preset and change memory summarisation for
+     * every chat, which nobody asked for. This is the override — the picker in the modal
+     * sends it, and it does not touch anything background work reads.
+     *
+     * Only the model is taken; provider, key and knobs still come from the settings the
+     * call resolved, so an override cannot silently reach a provider with no key.
+     */
+    model?: string;
   },
 ): Promise<Prepared> {
   const settings = opts.settings ?? (await loadEffectiveSettings(env, null));
-  const cheap = cheapFrom(settings);
+  const chosen = opts.model?.trim();
+  const cheap = chosen
+    ? (() => {
+        // Provider comes from the configured pair: the picker lists that provider's models,
+        // so the two always agree and no second key can be needed.
+        const pair = cheapFrom(settings);
+        return pair ? { provider: pair.provider, model: chosen } : null;
+      })()
+    : cheapFrom(settings);
   if (!cheap) {
     throw new Error(
-      'No cheap model configured. Set the cheap model pair (or the model pair) on the default preset.',
+      chosen
+        ? 'No provider configured for the consultant model. Set the model pair on the default preset.'
+        : 'No cheap model configured. Set the cheap model pair (or the model pair) on the default preset.',
     );
   }
 
@@ -234,6 +257,8 @@ export async function complete(
     json?: boolean;
     /** See `prepare`: a chat's own settings beat the default preset. */
     settings?: ChatSettings;
+    /** See `prepare`: the model the caller chose, overriding the side-channel pair. */
+    model?: string;
   },
 ): Promise<CompletionResult> {
   let budget = opts.maxTokens ?? 1024;
@@ -278,6 +303,8 @@ export async function streamCheap(
     json?: boolean;
     /** See `prepare`: a chat's own settings beat the default preset. */
     settings?: ChatSettings;
+    /** See `prepare`: the model the caller chose, overriding the side-channel pair. */
+    model?: string;
   },
   onDelta?: (text: string) => void,
 ): Promise<CompletionResult> {

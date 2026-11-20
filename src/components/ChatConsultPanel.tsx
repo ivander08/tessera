@@ -3,6 +3,7 @@ import { streamChatConsult, type ConsultPhase } from '../lib/api';
 import { messageOf } from '../lib/hooks';
 import { handleComposerEnter } from '../lib/composer';
 import { Markdown } from './Markdown';
+import { ConsultModelPicker, readConsultModel, storeConsultModel } from './ConsultModelPicker';
 
 /** One turn of the conversation, as the client holds it. Mirrors `ChatConsultMessage`. */
 export interface ChatConsultMessage {
@@ -91,6 +92,11 @@ export function ChatConsultPanel({
    */
   const [phase, setPhase] = useState<ConsultPhase>('say');
   const [failure, setFailure] = useState<string | null>(null);
+  /**
+   * The model this dock runs on, chosen in the dock. `null` is "the configured
+   * side-channel pair", which is today's behaviour and the default the picker labels.
+   */
+  const [model, setModel] = useState<string | null>(() => readConsultModel('chat'));
   // The stream in flight, so the reader can stop it and so closing the dock does not leave
   // it running to completion unseen.
   const abortRef = useRef<AbortController | null>(null);
@@ -166,7 +172,7 @@ export function ChatConsultPanel({
     try {
       await streamChatConsult<ChatConsultTurn>(
         chatId,
-        { messages: next },
+        { messages: next, model: model ?? undefined },
         (frame) => {
           if (frame.type === 'delta') {
             streamed = frame.text;
@@ -214,6 +220,14 @@ export function ChatConsultPanel({
       <header className="consult-pane-head" {...dragHandlers}>
         <span className="eyebrow">Ask about this scene</span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <ConsultModelPicker
+            value={model}
+            disabled={busy}
+            onChange={(next) => {
+              setModel(next);
+              storeConsultModel('chat', next);
+            }}
+          />
           <button
             type="button"
             className="icon-btn"

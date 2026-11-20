@@ -120,6 +120,8 @@ export async function streamConsult(
     mode: 'draft' | 'consult';
     messages: Array<{ role: 'user' | 'assistant'; content: string }>;
     card?: unknown;
+    /** The model picked in the pane, or undefined for the configured side-channel pair. */
+    model?: string;
   },
   onFrame: (frame: ConsultFrame) => void,
   options: { signal?: AbortSignal } = {},
@@ -152,7 +154,11 @@ export async function streamConsult(
  */
 export async function streamChatConsult<T>(
   chatId: string,
-  body: { messages: Array<{ role: 'user' | 'assistant'; content: string }> },
+  body: {
+    messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+    /** The model picked in the dock, or undefined for the configured side-channel pair. */
+    model?: string;
+  },
   onFrame: (frame: ConsultFrame<T>) => void,
   options: { signal?: AbortSignal } = {},
 ): Promise<void> {

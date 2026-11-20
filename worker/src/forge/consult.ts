@@ -345,6 +345,86 @@ function wireContent(message: ConsultMessage): string {
   return JSON.stringify({ say: message.content, question: null, card: null });
 }
 
+/**
+ * Asks again for the edits a turn promised, without streaming anything.
+ *
+ * Deliberately a separate, silent call: the announcement is already on the reader's screen,
+ * so streaming a second reply would read as the consultant restarting mid-answer. What is
+ * wanted is the payload, not more prose.
+ *
+ * Returns null when the retry does not produce usable edits — an empty list, an unparseable
+ * reply, or a provider error. The caller turns that into an honest failure rather than
+ * pretending the card changed.
+ */
+async function repairMissingEdits(
+  env: Env,
+  opts: {
+    system: string;
+    messages: WireMessage[];
+    model?: string;
+    said: string;
+  },
+): Promise<CardEdit[] | null> {
+  try {
+    const { text } = await streamCheap(env, {
+      system: opts.system,
+      messages: [
+        ...opts.messages,
+        // The reply being repaired goes in as the assistant turn it was, so the retry is a
+        // correction of an answer rather than a fresh question with no context.
+        { role: 'assistant', content: JSON.stringify({ say: opts.said, question: null, changes: [] }) },
+        {
+          role: 'user',
+          content:
+            'You said you made that change but sent no edits, so nothing was applied. ' +
+            'Return ONLY the JSON object with the "changes" array that makes the change you ' +
+            'described. "say" must be one short sentence. No question.',
+        },
+      ],
+      maxTokens: 4096,
+      json: true,
+      model: opts.model,
+    });
+
+    const turn = parseConsultTurn(text);
+    return turn.changes && turn.changes.length > 0 ? turn.changes : null;
+  } catch {
+    // Any failure here is the repair failing, not the reader's turn failing: the caller
+    // reports it as "it claimed a change it did not send".
+    return null;
+  }
+}
+
+/**
+ * Whether the prose says a change was made.
+ *
+ * Measured on prod, twice in six change requests: the reply read "Done — appended a profanity
+ * block to the description" or "Rewritten colder — the change is mostly subtraction", and
+ * carried `changes: []` and no card. The reader saw the announcement, pressed Apply, and
+ * nothing happened — the reported symptom is "it says it changed things, but then it doesn't
+ * change anything".
+ *
+ * The prompt already forbids this in two places and the model does it anyway, so the contract
+ * is enforced instead of restated: a turn that claims an edit must ship one. The verbs are
+ * past-tense and first-person-plural-free deliberately — "I'd add", "let me cut", "should I
+ * rewrite" are offers and must NOT be counted, because turning an offer into an error would
+ * break the interview's normal question-and-answer turn.
+ */
+export function claimsChange(say: string): boolean {
+  // Offers and questions are not claims: they are the model asking permission, which is a
+  // legal and common turn ("Before I cut, one thing worth deciding: which paragraph").
+  if (/\?/.test(say)) return false;
+  const CLAIM =
+    /\b(?:done|added|appended|rewritten|rewrote|removed|replaced|changed|updated|shortened|trimmed|stripped|rephrased|tightened|colder|warmer|cut)\b/i;
+  if (!CLAIM.test(say)) return false;
+  // "Nothing to change", "no edit needed" and "I did not change it" contain the verbs but deny
+  // the act. Requiring a positive assertion keeps a critique turn legal.
+  if (/\b(?:no|not|nothing|never|cannot|can't|didn'?t|doesn'?t|won'?t)\b[^.!?]{0,24}\b(?:change|edit|modif|alter|touch|add|remove|rewrite|cut)/i.test(say)) {
+    return false;
+  }
+  return true;
+}
+
 export async function consult(
   env: Env,
   opts: {
@@ -353,6 +433,8 @@ export async function consult(
     /** The card being discussed. Consult mode only. */
     card?: ParsedCard | null;
     onDelta?: (text: string) => void;
+    /** The model the reader picked in the pane. See `streamCheap`'s `model`. */
+    model?: string;
   },
 ): Promise<ConsultTurn> {
   const card = opts.card ?? null;
@@ -387,7 +469,7 @@ export async function consult(
   for (let attempt = 0; attempt < 2; attempt++) {
     const { text, finishReason } = await streamCheap(
       env,
-      { system, messages, maxTokens: 8192, json: true },
+      { system, messages, maxTokens: 8192, json: true, model: opts.model },
       onDelta,
     );
 
@@ -405,6 +487,30 @@ export async function consult(
       if (card && turn.card) {
         return { ...turn, card: mergeProposal(card, turn.card) };
       }
+
+      // A claim with nothing behind it is the reported bug, and it is not recoverable by
+      // saying "you forgot the edits" in the same turn: the announcement has already been
+      // streamed, so the reader is looking at "Done —" while nothing was applied. One repair
+      // call costs a few seconds and no visible text (its output is not streamed), and turns
+      // the announcement into the change it described.
+      if (card && turn.question === null && claimsChange(turn.say)) {
+        const repaired = await repairMissingEdits(env, {
+          system,
+          messages,
+          model: opts.model,
+          said: turn.say,
+        });
+        if (repaired) {
+          const result = applyEdits(card, repaired);
+          return { ...turn, changes: repaired, card: result.card, dropped: result.dropped };
+        }
+        // The repair did not produce a usable edit either. Say so rather than shipping prose
+        // that claims a change the card does not have.
+        throw new Error(
+          'the consultant said it changed the card but sent no edit — ask it to apply the change',
+        );
+      }
+
       return turn;
     } catch (error) {
       // Retrying after the user has already read half a reply would visibly restart it, so

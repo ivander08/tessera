@@ -1,6 +1,6 @@
 import { badRequest, readJson } from '../http';
 import { asRecord, asString, asStringArray } from '../../../src/lib/json';
-import { send } from '../prompt';
+import { heartbeat, send } from '../prompt';
 import { consult, type ConsultMessage, type ConsultMode, type ConsultTurn } from './consult';
 import { partialField } from './partial';
 import type { GreetingState, ParsedCard } from '../../../src/lib/cards/types';
@@ -147,7 +147,12 @@ export function asMessages(value: unknown): ConsultMessage[] | string {
  * Exactly one terminal frame ends a stream, matching `worker/src/frame.ts`.
  */
 export async function forgeConsult(env: Env, req: Request): Promise<Response> {
-  const body = await readJson<{ mode?: unknown; messages?: unknown; card?: unknown }>(req);
+  const body = await readJson<{
+    mode?: unknown;
+    messages?: unknown;
+    card?: unknown;
+    model?: unknown;
+  }>(req);
 
   const mode = asString(body?.mode);
   if (mode !== 'draft' && mode !== 'consult') {
@@ -169,12 +174,17 @@ export async function forgeConsult(env: Env, req: Request): Promise<Response> {
       // Which part of the reply is being written. Sent only when it changes: a frame per
       // delta would be the same fact repeated a hundred times.
       let phase: ConsultPhase = 'say';
+      // A silent model must not let the socket time out: see `heartbeat`.
+      const stopHeartbeat = heartbeat(controller);
 
       try {
         const turn = await consult(env, {
           mode: mode as ConsultMode,
           messages,
           card,
+          // The reader's own choice from the pane's picker. Absent means the configured
+          // side-channel pair, which is what every caller without a picker gets.
+          model: asString(body?.model).trim() || undefined,
           onDelta: (fragment) => {
             buffer += fragment;
             const prefix = partialField(buffer, 'say');
@@ -203,6 +213,7 @@ export async function forgeConsult(env: Env, req: Request): Promise<Response> {
           // controller already closed by the client
         }
       } finally {
+        stopHeartbeat();
         try {
           controller.close();
         } catch {

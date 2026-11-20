@@ -278,6 +278,48 @@ describe('streamCheap', () => {
   });
 });
 
+describe('a caller-chosen model', () => {
+  // The picker in the consultant modals sends `model`, and the choice must reach the request
+  // body while the provider, key and knobs still come from the configured pair — a picker
+  // that could name a provider with no key would be a 401 the reader cannot act on.
+  test('overrides the side-channel model in the body', async () => {
+    const env = await configuredEnv();
+    await withFetch(
+      () => bufferedReply('{"ok":true}', 'stop'),
+      async (sent) => {
+        await complete(env, { user: 'u', json: true, model: 'claude-fable-5' });
+        expect(sent[0].model).toBe('claude-fable-5');
+      },
+    );
+  });
+
+  test('an absent model leaves the configured cheap pair alone', async () => {
+    const env = await configuredEnv();
+    await withFetch(
+      () => bufferedReply('{"ok":true}', 'stop'),
+      async (sent) => {
+        await complete(env, { user: 'u', json: true });
+        expect(sent[0].model).toBe('deepseek-v4-flash');
+      },
+    );
+  });
+
+  test('streamCheap carries it too', async () => {
+    const env = await configuredEnv();
+    await withFetch(
+      () => streamedReply(['{"say":"hi"}'], 'stop'),
+      async (sent) => {
+        await streamCheap(env, {
+          messages: [{ role: 'user', content: 'u' }],
+          json: true,
+          model: 'glm-5-3-flash',
+        });
+        expect(sent[0].model).toBe('glm-5-3-flash');
+      },
+    );
+  });
+});
+
 describe('cheapContextBudget', () => {
   const filler = 'word '.repeat(50);
 
