@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { encryptKey } from '../../../src/lib/crypto';
 import type { ParsedCard } from '../../../src/lib/cards/types';
-import { consult } from './consult';
+import { consult, systemPrompt } from './consult';
 
 /**
  * The model a consultant runs on, when the reader picks one in the modal.
@@ -610,5 +610,48 @@ describe('refusing an identical card', () => {
         expect(turn.card?.description).toBe('Different.');
       },
     );
+  });
+});
+
+describe('a partial card', () => {
+  // The prompt used to demand every field, copied verbatim. Measured on the reader's 4,800-token
+  // card: that made one rewrite cost 12 minutes, and the model responded by announcing the change
+  // in prose instead of making it. `mergeProposal` only writes fields the reply actually carries,
+  // so a partial card is already legal — the prompt was the only thing forbidding it.
+  test('changes only the fields it names and keeps the rest', async () => {
+    const env = await configuredEnv([{ key: 'cheapMaxTokens', value: '32768' }]);
+    const current = fullCard();
+    await withFetch(
+      () =>
+        jsonReply(
+          JSON.stringify({
+            say: 'Rebuilt.',
+            question: null,
+            // Two fields changed, nothing echoed.
+            card: { description: 'Loud first.', scenario: 'A wet campus.' },
+          }),
+        ),
+      async () => {
+        const turn = await consult(env, {
+          mode: 'consult',
+          messages: [{ role: 'user', content: 'Rebuild the description and scenario.' }],
+          card: current,
+          onDelta: () => {},
+        });
+
+        expect(turn.card?.description).toBe('Loud first.');
+        expect(turn.card?.scenario).toBe('A wet campus.');
+        // Untouched fields survive, which is the whole reason a partial card is safe.
+        expect(turn.card?.personality).toBe(current.personality);
+        expect(turn.card?.firstMes).toBe(current.firstMes);
+        expect(turn.card?.name).toBe(current.name);
+      },
+    );
+  });
+
+  test('the consult prompt does not ask for unchanged fields to be copied', () => {
+    const prompt = systemPrompt('consult', fullCard());
+    expect(prompt).toContain('ONLY the fields you changed');
+    expect(prompt).not.toContain('copying any\nfield you did not touch verbatim');
   });
 });

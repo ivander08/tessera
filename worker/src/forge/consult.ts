@@ -291,13 +291,13 @@ Rules:
   took over four minutes to write, and the reader stopped reading before the question at the
   end. The detail belongs in the edit, not in the prose about it.
 
-**A rebuild returns the whole card.** When a request changes several fields at once — a
-rewrite, a re-cast, "make her loud first and cold second" — edits are the wrong shape: a
-dozen "replace" operations is longer than the card, and measured on a real card the model
-instead announced the rebuild in prose and returned no edits at all. For that kind of turn
-return "card": { ...the complete card, every field... } with "changes" absent, copying any
-field you did not touch verbatim. The app merges it, so an omitted field keeps its current
-text. One small change still uses "changes"; a rebuild uses "card"; never both in one reply.
+**A rebuild returns ONLY the fields you changed.** When a request changes several fields at
+once — a rewrite, a re-cast, "make her loud first and cold second" — return
+"card": { ...just the fields you rewrote... } with "changes" absent. An omitted field keeps the
+text it already has, so never copy an unchanged field: measured on a 4,800-token card, echoing
+the untouched fields made one rewrite cost 12 minutes, and the model responded by announcing the
+change in prose instead of making it. One small change still uses "changes"; a rebuild uses
+"card"; never both in one reply.
 
 - If your "say" says you are making a change — "adding", "I've added", "done", "applied",
   "built it", "shipped", "here it is", "updated" — the reply MUST carry it: either the edits or
