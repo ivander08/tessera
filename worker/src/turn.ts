@@ -227,6 +227,11 @@ async function runTurn(
   const failTurn = (message: string, code: string): void => fail(controller, message, code);
 
   try {
+    // Before the wait, not after it: a phase frame while the context is built (memory
+    // recall, state, the window) tells the reader the silence is the app working rather
+    // than a frozen composer. The frames are transport, never prompt — they cannot touch
+    // the cached prefix by construction.
+    send(controller, { type: 'phase', phase: 'assembling' });
     const prompt = await buildPrompt(env, chat, settings, {
       mode,
       historyCutoff,
@@ -275,6 +280,10 @@ async function runTurn(
       },
       apiKey.key,
     );
+
+    // Context is built; the wait now is the provider's first token, and naming it is the
+    // difference between a frozen composer and one that says what it is waiting on.
+    send(controller, { type: 'phase', phase: 'waiting' });
 
     let response: Response;
     try {

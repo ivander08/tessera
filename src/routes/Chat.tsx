@@ -146,6 +146,8 @@ interface Pending {
    * just written.
    */
   settling?: boolean;
+  /** The server's pre-first-token status; shown by the thinking row while text is empty. */
+  phase?: 'assembling' | 'waiting';
 }
 
 /**
@@ -180,8 +182,11 @@ const TurnRow = memo(function TurnRow({
   onEditSave,
   onSwipe,
   onDeleteTurn,
+  phase,
 }: {
   message: TurnView;
+  /** The server's pre-first-token status, shown while this row is the thinking row. */
+  phase?: string;
   name: string;
   avatar?: string | null;
   cast?: CastVoice[];
@@ -222,6 +227,7 @@ const TurnRow = memo(function TurnRow({
         macros={macros}
         dropCap={isOpening}
         thinking
+        phase={phase}
       />
     ) : (
       <Turn
@@ -834,6 +840,11 @@ export default function Chat() {
             } else if (frame.type === 'error') {
               failed = true;
               setSendError(frame.message);
+            } else if (frame.type === 'phase') {
+              // Pre-first-token status: the thinking row shows it until the first delta
+              // replaces the dots with text. A stale frame after the overlay is gone is
+              // dropped by the `current` guard rather than resurrecting a pending turn.
+              setPending((current) => (current ? { ...current, phase: frame.phase } : current));
             } else if (frame.type === 'done') {
               // The buffered text is flushed synchronously before anything else: `done`
               // clears `busy` and the refetch follows, and a frame still queued would land
@@ -1350,6 +1361,7 @@ export default function Chat() {
             isUser={message.role === 'user'}
             isTarget={replaceTarget === message.id}
             overlayText={replaceTarget === message.id && overlay ? overlay.text : null}
+            phase={replaceTarget === message.id ? overlay?.phase : undefined}
             truncated={truncatedId === message.id}
             editing={editingId === message.id}
             busy={busy}
@@ -1384,6 +1396,7 @@ export default function Chat() {
             avatar={data.character?.avatar}
             macros={macroContext}
             thinking
+            phase={overlay.phase}
           />
         )}
         {overlay && !replaceTarget && overlay.text.length > 0 && (

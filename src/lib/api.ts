@@ -79,6 +79,8 @@ export async function apiJson<T>(path: string, init: RequestInit = {}): Promise<
 
 export type ChatFrame =
   | { type: 'delta'; text: string }
+  /** Pre-first-token status: what the wait is doing before any text exists to show. */
+  | { type: 'phase'; phase: 'assembling' | 'waiting' }
   | { type: 'done'; messageId: string; usage: NormalizedUsage; costUsd: number | null; truncated: boolean }
   | { type: 'error'; message: string; code: string };
 

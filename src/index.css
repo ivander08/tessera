@@ -3529,6 +3529,16 @@ input[type="checkbox"] {
   }
 }
 
+/* The phase line beside the thinking dots: what the wait is actually doing, while
+   there is still no text to show. Quiet — it is status, not content. */
+.thinking-phase {
+  display: inline-block;
+  margin-left: 9px;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  color: var(--ink-faint);
+}
+
 /* ---------------------------------------------------------------- code copy */
 
 /* The copy affordance lives on the block it copies. Hidden until the pointer is over

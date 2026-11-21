@@ -198,14 +198,21 @@ describe('chat streaming', () => {
     const res = await handleChat(chatRequest(), stubEnv(), stubCtx());
     const { stamps, frames } = await drainTimed(res);
 
-    if (stamps.length !== COUNT + 1) {
-      throw new Error(`expected ${COUNT + 1} frames, got ${stamps.length}:\n${frames.join('\n')}`);
+    // Phase frames are the server's own status, emitted before the upstream speaks;
+    // the burst property is about the UPSTREAM's output, so they are filtered out and
+    // the count below is deltas plus the terminal `done`, as it always was.
+    const upstreamStamps = stamps.filter((_, index) => !frames[index].includes('"type":"phase"'));
+
+    if (upstreamStamps.length !== COUNT + 1) {
+      throw new Error(
+        `expected ${COUNT + 1} upstream frames, got ${upstreamStamps.length}:\n${frames.join('\n')}`,
+      );
     }
 
     // 6 deltas plus the terminal `done` frame.
-    expect(stamps.length).toBe(COUNT + 1);
+    expect(upstreamStamps.length).toBe(COUNT + 1);
 
-    const spread = stamps[stamps.length - 1] - stamps[0];
+    const spread = upstreamStamps[upstreamStamps.length - 1] - upstreamStamps[0];
     // Buffered output would put every frame within a few ms of the last one. The
     // upstream deliberately takes COUNT*GAP ms, so a streaming pipeline must show a
     // spread of the same order. The floor is well below that and well above the noise
@@ -214,7 +221,7 @@ describe('chat streaming', () => {
 
     // And the first frame must arrive long before the upstream has finished, which is
     // the property the user actually feels.
-    expect(stamps[0]).toBeLessThan(GAP * COUNT);
+    expect(upstreamStamps[0]).toBeLessThan(GAP * COUNT);
   });
 
   test('the terminal frame is exactly one done', async () => {

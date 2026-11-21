@@ -52,6 +52,8 @@ export interface TurnProps {
   streaming?: boolean;
   /** Request sent, no text back yet: the speaker is composing. */
   thinking?: boolean;
+  /** What the wait is doing while there is no text yet — "Waiting for the model…". */
+  phase?: string;
   /** Set a drop cap on the first paragraph. Only the opening turn of a scene gets one. */
   dropCap?: boolean;
   /** Open the speaker's portrait full size when it is clicked. */
@@ -97,6 +99,7 @@ export function Turn({
 
   streaming = false,
   thinking = false,
+  phase,
   dropCap = false,
   zoomAvatar = false,
   cast,
@@ -177,13 +180,19 @@ export function Turn({
                 ties it to the character rather than to a generic spinner.
                 `role="status"`: an `aria-label` on a bare `span` is ignored by assistive
                 technology — a span is not a landmark, a widget, or a live region, so there
-                is nothing for the name to attach to. */}
+                is nothing for the name to attach to. With a phase the label carries it,
+                so the announcement says what the wait is, not only that there is one. */}
             <div className="prose">
-              <span className="thinking" role="status" aria-label={`${rowName} is writing`}>
+              <span
+                className="thinking"
+                role="status"
+                aria-label={phase ? `${rowName}: ${phase}` : `${rowName} is writing`}
+              >
                 <i />
                 <i />
                 <i />
               </span>
+              {phase && <span className="thinking-phase">{phase}</span>}
             </div>
           </>
         ) : multi ? (
