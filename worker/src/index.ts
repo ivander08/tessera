@@ -44,6 +44,7 @@ import {
 } from './api/memory';
 import { sceneRoute } from './api/scene';
 import { searchAllRoute, searchRoute } from './api/search';
+import { usageRoute } from './api/usage';
 import {
   listProviderKeys,
   modelsRoute,
@@ -137,6 +138,10 @@ async function route(req: Request, env: Env, url: URL, ctx: ExecutionContext): P
   // Global search. Top-level rather than `/api/chats/:id/search` because it is not scoped
   // to a chat — the chat id only appears in the hits it returns.
   if (path === '/api/search') return searchAllRoute(req, env, url);
+
+  // Not chat-scoped either: the dashboard aggregates every scene's turns, and `topChats`
+  // is the only place a chat id appears.
+  if (path === '/api/usage') return usageRoute(req, env);
 
   const messagesMatch = /^\/api\/chats\/([^/]+)\/messages$/.exec(path);
   if (messagesMatch) {

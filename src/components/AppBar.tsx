@@ -196,6 +196,7 @@ export function AppBar({
                   and the one you need most often is the one you came from. */}
               <MenuLink to="/" label="All chats" />
               <MenuLink to="/search" label="Search all scenes" />
+              <MenuLink to="/usage" label="Usage" />
               <MenuLink to="/settings" label="Settings" />
 
               <div className="menu-sep" />
