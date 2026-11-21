@@ -86,6 +86,7 @@ export default function Setup() {
               onChange={(event) => setValue(event.target.value)}
               placeholder="paste it here"
               autoComplete="off"
+              spellCheck={false}
               autoFocus
             />
           </label>

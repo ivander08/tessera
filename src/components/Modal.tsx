@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { AnimatePresence, motion, useDragControls, useReducedMotion } from 'motion/react';
 import { useDialogFocus } from '../lib/useDialogFocus';
 
 /**
@@ -32,6 +32,8 @@ export function Modal({
 }) {
   const reduced = useReducedMotion();
   const [closing, setClosing] = useState(false);
+  // Drag-to-dismiss, started from the header so the scrolling body is untouched.
+  const controls = useDragControls();
 
   // The parent unmounts us the moment it hears `onClose`, so the exit animation has to
   // happen BEFORE we tell it. `closing` drives the exit variant; `onExitComplete` then
@@ -83,12 +85,23 @@ export function Modal({
             aria-modal="true"
             aria-label={title}
             tabIndex={-1}
+            drag="y"
+            dragListener={false}
+            dragControls={controls}
+            dragConstraints={{ top: 0 }}
+            dragSnapToOrigin
+            onDragEnd={(_, info) => {
+              if (info.offset.y > 90 || info.velocity.y > 500) requestClose();
+            }}
             initial={{ y: 14, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: 10, opacity: 0 }}
             transition={{ duration, ease: [0.22, 0.68, 0.36, 1] }}
           >
-            <header className="sheet-panel-head">
+            <div className="sheet-grab" aria-hidden="true">
+              <span />
+            </div>
+            <header className="sheet-panel-head" onPointerDown={(event) => controls.start(event)}>
               <div className="sheet-panel-title">
                 <span className="eyebrow">{title}</span>
                 {subtitle && <p className="sheet-panel-sub">{subtitle}</p>}

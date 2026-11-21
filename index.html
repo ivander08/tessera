@@ -5,11 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <!--
-      The address bar and the Android status bar take these, so a themed app is not
-      framed by a colour it never uses. Values match the dark theme's ground and brass.
+      The address bar and the mobile status bar take this. One tag, rewritten by
+      `applyTheme` whenever the theme changes: the app's theme can be forced opposite
+      the OS, and a static OS-based value would frame it in a colour it never uses.
     -->
-    <meta name="theme-color" content="#16130F" media="(prefers-color-scheme: dark)" />
-    <meta name="theme-color" content="#F6F2EA" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#16130F" />
     <meta name="color-scheme" content="dark light" />
     <meta
       name="description"

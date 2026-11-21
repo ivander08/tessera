@@ -15,8 +15,8 @@ import { Lightbox } from './Lightbox';
  *
  *  - The cache is module-level and keyed by URL, so a list of twenty characters fetches
  *    each image once rather than once per render.
- *  - The blob URL is revoked when the component unmounts. Without that, every avatar
- *    ever displayed would be pinned in memory for the life of the tab.
+ *  - The blob URL lives in that cache for the session: revoking on unmount would pull
+ *    the image out from under every other row showing it. `invalidateAvatar` drops one.
  *
  * The alternative — a `?token=` query parameter — would put the bearer token in URLs,
  * where it lands in history, logs, and referrers. Not worth the convenience.
@@ -111,7 +111,7 @@ export function Avatar({ src, name, className = 'chip', style, zoomable = false 
     );
   }
 
-  if (!zoomable) return <img className={className} style={style} src={finalSrc} alt="" />;
+  if (!zoomable) return <img className={className} style={style} src={finalSrc} alt="" loading="lazy" decoding="async" />;
 
   // A portrait you can open. The whole image is the target rather than a corner button:
   // there is nothing else to do with a portrait, and a button that small is a miss on a
@@ -132,7 +132,7 @@ export function Avatar({ src, name, className = 'chip', style, zoomable = false 
         title={`${name} — click to enlarge`}
         aria-label={`Enlarge ${name}`}
       >
-        <img src={finalSrc} alt="" />
+        <img src={finalSrc} alt="" loading="lazy" decoding="async" />
       </button>
       {zoomed && <Lightbox src={finalSrc} name={name} onClose={() => setZoomed(false)} />}
     </>

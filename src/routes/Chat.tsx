@@ -5,7 +5,7 @@ import { apiFetch, apiJson, streamChat, type TurnMode } from '../lib/api';
 import type { MessageRow, Transcript } from '../lib/apiTypes';
 import type { WorldState } from '../lib/state/schema';
 import { messageOf, useAsync } from '../lib/hooks';
-import { handleComposerEnter, refocusesAfterSend } from '../lib/composer';
+import { enterMakesNewline, handleComposerEnter, refocusesAfterSend } from '../lib/composer';
 import { AppBar, BackLink, MenuAction, MenuLabel, MenuSep } from '../components/AppBar';
 import { PresetMenu } from '../components/PresetMenu';
 import { PersonaMenu } from '../components/PersonaMenu';
@@ -258,7 +258,23 @@ export default function Chat() {
     [id],
   );
 
-  const [draft, setDraft] = useState('');
+  // The unsent line, kept per chat across reloads and discarded tabs. Mobile Safari
+  // kills background tabs, and a draft that only lived in state died with them.
+  const [draft, setDraft] = useState(() => {
+    try {
+      return localStorage.getItem(`tessera:draft:${id}`) ?? '';
+    } catch {
+      return '';
+    }
+  });
+  useEffect(() => {
+    try {
+      if (draft.length > 0) localStorage.setItem(`tessera:draft:${id}`, draft);
+      else localStorage.removeItem(`tessera:draft:${id}`);
+    } catch {
+      // Private mode: the draft simply does not survive a reload.
+    }
+  }, [draft, id]);
   const [pending, setPending] = useState<Pending | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -883,6 +899,21 @@ export default function Chat() {
     if (wasBusy.current && !busy && refocusesAfterSend()) inputRef.current?.focus();
     wasBusy.current = busy;
   }, [busy]);
+  // One polite sentence per turn for screen readers. The transcript region mutates
+  // every frame while streaming, which would narrate the reply token by token;
+  // `aria-busy` on the region holds that off and this announces the landing.
+  const [announcement, setAnnouncement] = useState('');
+  const announcedBusy = useRef(false);
+  useEffect(() => {
+    if (busy) {
+      announcedBusy.current = true;
+      return;
+    }
+    if (announcedBusy.current) {
+      announcedBusy.current = false;
+      setAnnouncement(sendError ? `Turn failed: ${sendError}` : 'Reply complete.');
+    }
+  }, [busy, sendError]);
 
   /**
    * Puts the consultant's suggestion in the composer, ready to be edited.
@@ -910,12 +941,11 @@ export default function Chat() {
     node.style.height = `${Math.min(node.scrollHeight, window.innerHeight * 0.42)}px`;
   }, [draft]);
 
-  // The chat's dock is a bottom sheet with no `.sheet-commit` row to sit above, so the
-  // composer's real height is measured here and published as a custom property the sheet's
-  // media query reads. Measured rather than guessed: the composer wraps to two lines on a
-  // narrow phone with a long placeholder, and a constant then leaves the sheet floating.
+  // The composer's real height, published for the things that float above it: the
+  // consult dock's bottom sheet and the jump-to-latest pill. Measured rather than
+  // guessed: the composer wraps to two lines on a narrow phone with a long
+  // placeholder, and a constant then leaves the sheet floating or buries the pill.
   useEffect(() => {
-    if (!consultOpen) return;
     const composer = document.querySelector('.composer');
     if (!composer) return;
     const measure = () => {
@@ -929,7 +959,7 @@ export default function Chat() {
       observer.disconnect();
       document.documentElement.style.removeProperty('--composer-height');
     };
-  }, [consultOpen]);
+  }, []);
 
   const swipe = useCallback(
     async (messageId: string, direction: 'prev' | 'next') => {
@@ -1166,17 +1196,18 @@ export default function Chat() {
           narrator has drifted. Replaces the chip that only said "Set the scene". */}
       <SceneBar state={sceneNow} onOpen={() => setPanel('state')} />
 
-      {/* `role="log"` with `aria-live="polite"`: a streamed reply is added to this region
-          frame by frame, and without a live region a screen reader is told nothing about
-          the answer that is arriving. `aria-relevant="additions"` because the stream
-          mutates the last row rather than appending rows. */}
+      {/* `role="log"` so a screen reader knows this is the transcript; `aria-busy`
+          while a turn streams so it does not narrate every frame, and one polite
+          sentence when the turn lands instead. */}
       <main
         className="transcript"
         role="log"
         aria-live="polite"
         aria-relevant="additions"
         aria-label="Transcript"
+        aria-busy={busy || pending !== null}
       >
+        <p role="status" className="sr-only">{announcement}</p>
         {hasMore && (
           <div className="transcript-earlier">
             <button
@@ -1409,6 +1440,7 @@ export default function Chat() {
             }
             readOnly={busy}
             aria-label="Message"
+            enterKeyHint={enterMakesNewline() ? 'enter' : 'send'}
           />
 
           {/*

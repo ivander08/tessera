@@ -54,6 +54,9 @@ export default function Settings() {
   const [edits, setEdits] = useState<SettingsShape>({});
   const [theme, setTheme] = useState<Theme>(() => parseTheme(null));
   const [keyDraft, setKeyDraft] = useState<Record<string, string>>({});
+  // Which provider keys are currently readable. A 50-character key typed blind on a
+  // phone is unverifiable without one.
+  const [shownKey, setShownKey] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
   const [migrating, setMigrating] = useState(false);
   // The default-preset picker saves on change, so it reports its own state rather than
@@ -289,10 +292,10 @@ export default function Settings() {
             <label className="form-label" htmlFor={`provider-key-${providerId}`}>
               <span className="font-mono">{providerId}</span>
             </label>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <input
                 id={`provider-key-${providerId}`}
-                type="password"
+                type={shownKey[providerId] ? 'text' : 'password'}
                 value={keyDraft[providerId] ?? ''}
                 onChange={(event) =>
                   setKeyDraft((current) => ({ ...current, [providerId]: event.target.value }))
@@ -303,8 +306,21 @@ export default function Settings() {
                     : 'not set'
                 }
                 className="field"
-                style={{ fontFamily: 'var(--font-data)' }}
+                style={{ fontFamily: 'var(--font-data)', flex: '1 1 140px', minWidth: 0 }}
+                autoComplete="off"
+                spellCheck={false}
               />
+              <button
+                type="button"
+                className="btn"
+                aria-pressed={shownKey[providerId] ?? false}
+                aria-label={shownKey[providerId] ? `Hide ${providerId} key` : `Show ${providerId} key`}
+                onClick={() =>
+                  setShownKey((current) => ({ ...current, [providerId]: !current[providerId] }))
+                }
+              >
+                {shownKey[providerId] ? 'Hide' : 'Show'}
+              </button>
               <button type="button" onClick={() => void saveKey(providerId)} className="btn">
                 Save
               </button>

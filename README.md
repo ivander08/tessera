@@ -46,7 +46,7 @@ Underneath, three things run automatically while you read:
 | **The consultant** | An interview that drafts, critiques and token-costs a card, and writes it |
 | **Presets** | An authored document — system prompt, pre/post-history instructions, impersonation prompt, prefill, stop strings, sampler values — attached per chat |
 | **Cache efficiency** | The measured range in the research: a real client at 46.5% where 91.5% was achievable · a live hit-rate meter one tap from every chat |
-| **Platforms** | A website (PWA-installable) served by your own Bun process, with the SQLite database as a local file. One TypeScript codebase; the server holds the key and runs the background jobs |
+| **Platforms** | A website served by your own Bun process, with the SQLite database as a local file. One TypeScript codebase; the server holds the key and runs the background jobs |
 
 ---
 

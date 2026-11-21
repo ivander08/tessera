@@ -98,7 +98,9 @@ export function AppBar({
     const entries = () =>
       Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"], a[href], button'));
 
-    entries()[0]?.focus();
+    // Desktop only: a touch user opened this with a tap and is still looking at the
+    // button, so moving focus yanks scroll and VoiceOver for no keyboard benefit.
+    if (window.matchMedia('(pointer: fine)').matches) entries()[0]?.focus();
 
     function onKey(event: KeyboardEvent) {
       const items = entries();

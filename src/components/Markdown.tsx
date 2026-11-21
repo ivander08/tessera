@@ -119,26 +119,30 @@ function renderBlock(token: Token, key: string): ReactNode | null {
     case 'table': {
       const table = token as Tokens.Table;
       return (
-        <table key={key} className="md-table">
-          <thead>
-            <tr>
-              {table.header.map((cell, index) => (
-                <th key={`${key}-h-${index}`}>{renderInline(cell.tokens, `${key}-h-${index}`)}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {table.rows.map((row, rowIndex) => (
-              <tr key={`${key}-r-${rowIndex}`}>
-                {row.map((cell, cellIndex) => (
-                  <td key={`${key}-r-${rowIndex}-${cellIndex}`}>
-                    {renderInline(cell.tokens, `${key}-r-${rowIndex}-${cellIndex}`)}
-                  </td>
+        // The wrapper scrolls, not the page: a five-column table otherwise pushes the
+        // whole transcript sideways on a phone.
+        <div key={key} className="md-table-wrap">
+          <table className="md-table">
+            <thead>
+              <tr>
+                {table.header.map((cell, index) => (
+                  <th key={`${key}-h-${index}`}>{renderInline(cell.tokens, `${key}-h-${index}`)}</th>
                 ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {table.rows.map((row, rowIndex) => (
+                <tr key={`${key}-r-${rowIndex}`}>
+                  {row.map((cell, cellIndex) => (
+                    <td key={`${key}-r-${rowIndex}-${cellIndex}`}>
+                      {renderInline(cell.tokens, `${key}-r-${rowIndex}-${cellIndex}`)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       );
     }
 

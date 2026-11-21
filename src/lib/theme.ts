@@ -309,6 +309,17 @@ export function applyTheme(
   // Custom CSS last, so it wins. This is the escape hatch that makes a fixed token set
   // acceptable: anything not covered is still reachable.
   node.textContent = theme.customCss;
+  // The browser chrome follows the in-app theme, which can be forced opposite the OS.
+  const ground = tokens['--ground'];
+  if (ground) {
+    let meta = document.querySelector('meta[name="theme-color"]');
+    if (!meta) {
+      meta = document.createElement('meta');
+      meta.setAttribute('name', 'theme-color');
+      document.head.appendChild(meta);
+    }
+    meta.setAttribute('content', ground);
+  }
 }
 
 /** Reads a stored theme, falling back per-field so an older record stays usable. */
