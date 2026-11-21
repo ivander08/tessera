@@ -98,7 +98,13 @@ export function Modal({
             exit={{ y: 10, opacity: 0 }}
             transition={{ duration, ease: [0.22, 0.68, 0.36, 1] }}
           >
-            <div className="sheet-grab" aria-hidden="true">
+            {/* The handle is the affordance, so it drags too — it sits above the header,
+                and a bar that looks grabbable but is not is worse than no bar. */}
+            <div
+              className="sheet-grab"
+              aria-hidden="true"
+              onPointerDown={(event) => controls.start(event)}
+            >
               <span />
             </div>
             <header className="sheet-panel-head" onPointerDown={(event) => controls.start(event)}>

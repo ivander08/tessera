@@ -353,16 +353,6 @@ textarea.field {
   font-family: var(--font-ui);
 }
 
-/* iOS Safari zooms the page on focus when an input is below 16px. Every field here
-   is 13px by default, so without this every tap into the composer zooms and the
-   reader pinches back out after every turn. `max()` so a scaled-up theme still wins. */
-@media (pointer: coarse) {
-  .field,
-  .composer-input {
-    font-size: max(16px, var(--text-sm));
-  }
-}
-
 /* ---------------------------------------------------------------- chrome */
 
 /* The titlebar. Deliberately thin and quiet: it is a signpost, not a destination. */
@@ -3432,21 +3422,19 @@ input[type="checkbox"] {
 
 /* ---------------------------------------------------------------- coarse pointers */
 
-/* Thumbs, not cursors. 44px minimums per the Apple HIG, and solid chrome instead of
-   backdrop blur — bar, strip and composer blurring over a scroll is the fastest way
-   to jank a mid-range phone, and the fade rules still read without it. */
+/* What the thumb needs that the responsive section above does not already give.
+   The 44px targets live there (`.btn`, `.icon-btn`, `.tool`, `.menu-item`, `.tab`…);
+   repeating them here would only drift apart from that block. This adds the rest:
+   the iOS input-zoom floor, the pieces that section never covered, and solid chrome
+   instead of backdrop blur — bar, strip and composer blurring over a scroll is the
+   fastest way to jank a mid-range phone, and the fade rules still read without it. */
 @media (pointer: coarse) {
-  .btn {
-    min-height: 44px;
-  }
-
-  .icon-btn {
-    width: 44px;
-    height: 44px;
-  }
-
-  .menu-item {
-    min-height: 44px;
+  /* iOS Safari zooms the page on focus when an input is below 16px. Every field is
+     13px by default, so without this every tap into the composer zooms and the
+     reader pinches back out after every turn. `max()` so a scaled-up theme wins. */
+  .field,
+  .composer-input {
+    font-size: max(16px, var(--text-sm));
   }
 
   .crumb {
@@ -3456,28 +3444,6 @@ input[type="checkbox"] {
 
   .consult-grab {
     height: 44px;
-  }
-
-  /* These two outrank a bare `.btn` by specificity, so they are restated here where
-     order wins. */
-  .composer .btn.primary {
-    min-height: 44px;
-  }
-
-  .plate-actions .btn.primary {
-    min-height: 44px;
-  }
-
-  /* The turn tools keep their 27px layout and gain a 41px hit area instead: six
-     44px buttons plus the speaker's name do not fit a 390px row. */
-  .tool {
-    position: relative;
-  }
-
-  .tool::after {
-    content: "";
-    position: absolute;
-    inset: -7px;
   }
 
   .bar,

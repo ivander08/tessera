@@ -959,7 +959,9 @@ export default function Chat() {
       observer.disconnect();
       document.documentElement.style.removeProperty('--composer-height');
     };
-  }, []);
+    // `loading`, not `[]`: the first render early-returns before the composer exists
+    // (the `loading && !data` return below), so a mount-only effect measures nothing.
+  }, [loading]);
 
   const swipe = useCallback(
     async (messageId: string, direction: 'prev' | 'next') => {
