@@ -526,6 +526,45 @@ const LENGTH_LINE: Record<Craft['responseLength'], string> = {
     'The beat sets it, dialogue included: reactive four to six, transitional six to nine, developmental nine to thirteen, climax twelve to eighteen.',
 };
 
+/**
+ * The same length line for the prompt TAIL; `''` when nothing should be sent.
+ *
+ * The head copy rides in the craft block, where it is one instruction among twenty —
+ * measured ignorable: readers set "really short" and got long replies anyway. Read
+ * last, immediately before the reader's message, the same sentence is obeyed for the
+ * same reason `CONTENT_POLICY` and the anti-repetition rules are tail-only: position
+ * decides compliance, and the tail sits outside the cached prefix, so emitting it
+ * there costs nothing.
+ */
+export function renderCraftLength(craft: Craft): string {
+  const line = LENGTH_LINE[craft.responseLength];
+  // `noLimit` already says when to stop ("end early rather than filling space");
+  // the stop clause would contradict a length whose whole point is no ceiling.
+  if (line === '' || craft.responseLength === 'noLimit') return line;
+  return `${line} Stop at that length; do not keep writing past it.`;
+}
+
+/**
+ * Output-token ceiling per craft length; `null` for the two that have none.
+ *
+ * The prompt asks for the length in words; this guarantees it in tokens. The bounds
+ * are deliberately generous — a compliant reply must never be the thing that gets
+ * truncated — so they stop runaways rather than borderline replies. A genuine
+ * overflow lands on the existing truncated/Continue flow, which is the honest
+ * outcome for a model that blew past an explicit stop.
+ */
+export const CRAFT_LENGTH_CAP: Record<Craft['responseLength'], number | null> = {
+  off: null,
+  reallyShort: 450,
+  short: 900,
+  medium: 1500,
+  long: 2600,
+  noLimit: null,
+  adaptiveShort: 1200,
+  adaptiveMedium: 1800,
+  adaptiveLong: 3000,
+};
+
 const DENSITY_LINE: Record<Craft['density'], string> = {
   off: '',
   minimal:

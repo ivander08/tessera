@@ -199,7 +199,13 @@ export async function streamChat(
   chatId: string,
   content: string,
   onFrame: (frame: ChatFrame) => void,
-  options: { mode?: TurnMode; signal?: AbortSignal; targetId?: string | null } = {},
+  options: {
+    mode?: TurnMode;
+    signal?: AbortSignal;
+    targetId?: string | null;
+    /** One-shot steering for this turn only ("more conflict"); never persisted. */
+    steer?: string;
+  } = {},
 ): Promise<void> {
   const res = await apiFetch('/api/chat', {
     method: 'POST',
@@ -212,6 +218,8 @@ export async function streamChat(
       // "regenerate the last assistant reply" would be rejected as the wrong role. The
       // client knows which turn the button was pressed on, so it says so.
       targetId: options.targetId ?? null,
+      // One-shot: rides the request, never stored — the next turn simply does not send it.
+      steer: options.steer,
     }),
     signal: options.signal,
   });

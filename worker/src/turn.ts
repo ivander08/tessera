@@ -43,6 +43,8 @@ interface TurnBody {
   mode?: TurnMode;
   /** The message a `regenerate` or `continue` acts on. See `resolveTarget`. */
   targetId?: string | null;
+  /** One-shot reader steering for this turn only ("more conflict"); never persisted. */
+  steer?: string;
 }
 
 export async function handleTurn(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -70,6 +72,7 @@ export async function handleTurn(req: Request, env: Env, ctx: ExecutionContext):
           mode,
           body.content ?? '',
           body.targetId ?? null,
+          typeof body.steer === 'string' ? body.steer.trim().slice(0, 600) : null,
           // The client's own abort. Pressing Stop cancels the fetch, which aborts this
           // signal — and that is the ONLY way the server can tell "the reader pressed Stop"
           // from "the connection dropped", which want different behaviour. See `pipeStream`.
@@ -109,6 +112,8 @@ async function runTurn(
   mode: TurnMode,
   content: string,
   requestedTargetId: string | null,
+  /** The reader's one-shot steering for this turn; see `TurnBody.steer`. */
+  steer: string | null,
   /** Aborted when the client goes away — Stop, or a closed tab. */
   signal: AbortSignal,
 ): Promise<void> {
@@ -245,6 +250,7 @@ async function runTurn(
           : mode === 'continue'
             ? CONTINUE_INSTRUCTION
             : '',
+      steer: steer ?? undefined,
     });
 
     const request = provider.buildRequest(
@@ -252,7 +258,13 @@ async function runTurn(
         model: settings.model,
         messages: prompt.messages,
         stream: true,
-        maxTokens: settings.maxTokens,
+        // The craft length's ceiling, when it names one: the prompt asks for the length
+        // in words, this guarantees it in tokens. `min` so a smaller preset budget still
+        // wins — the cap only ever narrows, never widens.
+        maxTokens:
+          prompt.responseLengthCap != null
+            ? Math.min(settings.maxTokens, prompt.responseLengthCap)
+            : settings.maxTokens,
         // Stop strings come from the preset; without them the model runs past where the
         // preset author intended the reply to end.
         knobs: settings.stopStrings.length > 0

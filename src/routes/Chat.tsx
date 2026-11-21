@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router';
+import { useParams, useSearchParams } from 'react-router';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { apiFetch, apiJson, streamChat, type TurnMode } from '../lib/api';
 import type { MessageRow, Transcript } from '../lib/apiTypes';
@@ -30,6 +30,42 @@ import MemoryPanel from './Memory';
 
 /** How many earlier turns one tap of "show earlier" loads. */
 const WINDOW_STEP = 80;
+
+/**
+ * One-tap steering for the next turn, as the instruction text it sends.
+ *
+ * A label for the row, a sentence for the tail: the reader taps a label and `text`
+ * rides the request's `steer` field — one turn only, never stored, never near the
+ * cached prefix. These target the complaints the community survey puts at the top of
+ * its list (purple prose, rushed pacing, passive scenes) as single-tap corrections
+ * rather than a field the reader has to compose themselves.
+ */
+const STEERS: Array<{ label: string; text: string }> = [
+  {
+    label: 'More conflict',
+    text: 'Raise the conflict this turn: let disagreement, stakes, or friction visibly escalate.',
+  },
+  {
+    label: 'Slower pace',
+    text: 'Slow down this turn: linger on small gestures and beats; do not advance the plot.',
+  },
+  {
+    label: 'Less purple',
+    text: 'Plain description this turn: cut ornate metaphor and elevated diction.',
+  },
+  {
+    label: 'More dialogue',
+    text: 'Carry this turn primarily in dialogue; keep narration to staging only.',
+  },
+  {
+    label: 'More body',
+    text: 'Ground this turn in physical action and sensation; minimal abstraction.',
+  },
+  {
+    label: 'Surprise me',
+    text: 'Do something genuinely unexpected this turn, within what the scene has already established.',
+  },
+];
 
 /**
  * How many pages a search jump will load before giving up.
@@ -275,6 +311,9 @@ export default function Chat() {
       // Private mode: the draft simply does not survive a reload.
     }
   }, [draft, id]);
+  // The one-shot steer for the next turn; see `STEERS`. Captured by `run` and cleared
+  // the moment a turn starts, so it applies exactly once — to this reply and no other.
+  const [steer, setSteer] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -515,6 +554,23 @@ export default function Chat() {
     [cursor, id, messages, older],
   );
 
+  /**
+   * A global-search hit lands on its turn: `/search` links here with `?seq=`.
+   *
+   * Consumed with `replace` so the URL returns to the plain scene — the param is a
+   * delivery mechanism, not state worth keeping — and `jumpTo` does the rest, paging
+   * the transcript back until the target is in range exactly as the in-scene panel does.
+   */
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    const raw = searchParams.get('seq');
+    if (!raw || !data) return;
+    const seq = Number(raw);
+    if (!Number.isFinite(seq)) return;
+    setSearchParams({}, { replace: true });
+    void jumpTo(seq);
+  }, [searchParams, data, jumpTo, setSearchParams]);
+
   const loadOlder = useCallback(async () => {
     if (loadingOlder || cursor === null) return;
     setLoadingOlder(true);
@@ -745,6 +801,10 @@ export default function Chat() {
       // the refetch. The ref guard is immune to that stale frame.
       if (turnActive.current) return;
       turnActive.current = true;
+      // One-shot: captured for THIS request and cleared from the chips immediately, so
+      // the next turn starts unsteered whether this one succeeds or fails.
+      const thisSteer = steer;
+      setSteer(null);
       setStopping(false);
       setBusy(true);
       setSendError(null);
@@ -789,7 +849,7 @@ export default function Chat() {
               setBusy(false);
             }
           },
-          { mode, signal: controller.signal, targetId },
+          { mode, signal: controller.signal, targetId, steer: thisSteer ?? undefined },
         );
       } catch (cause) {
         // An abort is the user pressing stop, not a failure.
@@ -852,11 +912,27 @@ export default function Chat() {
         }
       }
     },
-    [id, reload, queueDelta, flushDelta],
+    [id, reload, queueDelta, flushDelta, steer],
   );
 
   function send() {
-    const content = draft.trim();
+    // A roll is the reader's own line: `/roll 4d6+2` becomes the formatted result as the
+    // message that goes to the model — dice are something that HAPPENS in the scene, and
+    // the transcript is where it should land. Anything that is not a well-formed roll
+    // expression is sent exactly as written.
+    const roll = draft
+      .trim()
+      .match(/^\/roll\s+(\d{1,2})d(\d{1,3})(?:\s*([+-])\s*(\d{1,2}))?$/i);
+    let content = draft.trim();
+    if (roll) {
+      const count = Number(roll[1]);
+      const sides = Number(roll[2]);
+      const modifier = roll[3] ? Number(`${roll[3]}${roll[4]}`) : 0;
+      const faces = Array.from({ length: count }, () => 1 + Math.floor(Math.random() * sides));
+      const total = faces.reduce((sum, face) => sum + face, 0) + modifier;
+      const modText = roll[3] ? ` ${roll[3]}${roll[4]}` : '';
+      content = `🎲 ${count}d${sides}${modText} = ${total} (${faces.join(', ')})`;
+    }
 
     // An empty send continues the last reply. That is the gesture the reader already
     // makes when they want more of the same voice — the button that used to do it was a
@@ -962,6 +1038,38 @@ export default function Chat() {
     // `loading`, not `[]`: the first render early-returns before the composer exists
     // (the `loading && !data` return below), so a mount-only effect measures nothing.
   }, [loading]);
+
+  /**
+   * The keyboard's covered strip, published as `--kb-inset` on the root.
+   *
+   * iOS never resizes the layout viewport for the keyboard — the viewport meta
+   * attribute only convinces Android — so a bottom-pinned composer otherwise sits
+   * behind it. The distance from the layout bottom to the visible bottom is exactly
+   * what the composer has to lift by; on Android the layout shrinks instead and the
+   * inset computes to zero, so the CSS lift is a no-op there rather than a double
+   * compensation.
+   */
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const root = document.documentElement;
+    if (!viewport) return;
+    const update = () => {
+      const inset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
+      const open = inset > 120;
+      root.classList.toggle('kb-open', open);
+      if (open) root.style.setProperty('--kb-inset', `${Math.round(inset)}px`);
+      else root.style.removeProperty('--kb-inset');
+    };
+    update();
+    viewport.addEventListener('resize', update);
+    viewport.addEventListener('scroll', update);
+    return () => {
+      viewport.removeEventListener('resize', update);
+      viewport.removeEventListener('scroll', update);
+      root.classList.remove('kb-open');
+      root.style.removeProperty('--kb-inset');
+    };
+  }, []);
 
   const swipe = useCallback(
     async (messageId: string, direction: 'prev' | 'next') => {
@@ -1400,6 +1508,22 @@ export default function Chat() {
           send();
         }}
       >
+        {/* One tap, one turn: the chip lights while armed, and `run` captures and clears
+            it the moment the request starts. Inside the form so the measured composer
+            height (consult dock, jump pill) carries the row with it. */}
+        <div className="steer-row" role="group" aria-label="Steer the next reply">
+          {STEERS.map((chip) => (
+            <button
+              key={chip.label}
+              type="button"
+              className="steer-chip"
+              aria-pressed={steer === chip.text}
+              onClick={() => setSteer((current) => (current === chip.text ? null : chip.text))}
+            >
+              {chip.label}
+            </button>
+          ))}
+        </div>
         <div className="composer-inner">
           {/* Impersonate sits to the LEFT of the field, where it reads as a modifier of
               what you are about to write rather than a peer of Send.

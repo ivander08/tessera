@@ -14,6 +14,8 @@ import { renderStateBlock } from '../../src/lib/prompt/stateBlock';
 import {
   renderAntiRepetition,
   renderCraftBlock,
+  renderCraftLength,
+  CRAFT_LENGTH_CAP,
   renderContentPolicy,
   renderVocalisation,
 } from '../../src/lib/prompt/craftBlock';
@@ -126,6 +128,13 @@ export interface PromptOptions {
   userContent: string;
   /** Mode-specific instruction appended to the tail, after the author's note. */
   tailExtra: string;
+  /**
+   * The reader's one-shot steering for this turn only (the composer's chips: "more
+   * conflict"). Joins the same instruction slot, dead last before their own message —
+   * see the composition below. Per-turn state by construction; it must never be
+   * assembled anywhere near the cached prefix.
+   */
+  steer?: string;
 }
 
 /**
@@ -201,7 +210,9 @@ export async function buildPrompt(
       settings.presetPostHistory,
       settings.authorsNote,
       settings.responseLengthRule,
+      renderCraftLength(setup.craft),
       options.tailExtra,
+      options.steer ?? '',
       options.userContent,
     ].join('\n'),
     calibration,
@@ -441,11 +452,21 @@ export async function buildPrompt(
       // It sat in `PromptOptions` unwired until now, so `continue` and `impersonate`
       // were sending nothing that told the model what they were asking for.
       //
-      // The preset's reply-length rule rides in the same slot and BEFORE the mode's
-      // instruction, so a mode that is more specific about what to write still has the
-      // last word. Both are per-turn state, so neither can disturb the cached prefix.
+      // Order in this slot IS precedence: the preset's reply-length rule first, then the
+      // craft length (the per-chat setting wins by being read later when both speak),
+      // then the mode's instruction — a mode more specific about what to write still has
+      // the last word over length — and the reader's one-shot steer dead last, the
+      // freshest thing said before their own message. All per-turn state, so none of it
+      // can disturb the cached prefix.
       instruction: substituteTail(
-        [settings.responseLengthRule, options.tailExtra].filter((part) => part.length > 0).join('\n'),
+        [
+          settings.responseLengthRule,
+          renderCraftLength(setup.craft),
+          options.tailExtra,
+          options.steer ?? '',
+        ]
+          .filter((part) => part.length > 0)
+          .join('\n'),
         macroContext,
       ),
       userMessage: substituteTail(options.userContent, macroContext),
@@ -464,6 +485,11 @@ export async function buildPrompt(
     // `tailStart` is unchanged, so the prefill sits AFTER the cacheable prefix — it is
     // per-turn state and must never enter the head.
   }
+
+  // The craft length's token ceiling rides back with the prompt: `runTurn` is the only
+  // place `maxTokens` is chosen, and it already holds this object. See `CRAFT_LENGTH_CAP`.
+  const cap = CRAFT_LENGTH_CAP[setup.craft.responseLength];
+  if (cap != null) assembled.responseLengthCap = cap;
 
   return assembled;
 }
