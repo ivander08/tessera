@@ -195,6 +195,7 @@ export function AppBar({
               {/* The way home goes first. Everything else in this menu is a destination,
                   and the one you need most often is the one you came from. */}
               <MenuLink to="/" label="All chats" />
+              <MenuLink to="/search" label="Search all scenes" />
               <MenuLink to="/settings" label="Settings" />
 
               <div className="menu-sep" />

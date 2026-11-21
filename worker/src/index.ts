@@ -43,7 +43,7 @@ import {
   memoryRoute,
 } from './api/memory';
 import { sceneRoute } from './api/scene';
-import { searchRoute } from './api/search';
+import { searchAllRoute, searchRoute } from './api/search';
 import {
   listProviderKeys,
   modelsRoute,
@@ -133,6 +133,10 @@ async function route(req: Request, env: Env, url: URL, ctx: ExecutionContext): P
   if (characterMatch) return characterRoute(req, env, decodeURIComponent(characterMatch[1]));
 
   if (path === '/api/chats') return chatsRoute(req, env, ctx);
+
+  // Global search. Top-level rather than `/api/chats/:id/search` because it is not scoped
+  // to a chat — the chat id only appears in the hits it returns.
+  if (path === '/api/search') return searchAllRoute(req, env, url);
 
   const messagesMatch = /^\/api\/chats\/([^/]+)\/messages$/.exec(path);
   if (messagesMatch) {

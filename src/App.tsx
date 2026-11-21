@@ -15,6 +15,7 @@ import Personas from './routes/Personas';
 import Forge from './routes/Forge';
 import Presets from './routes/Presets';
 import PresetEdit from './routes/PresetEdit';
+import Search from './routes/Search';
 
 export default function App() {
   return (
@@ -37,6 +38,7 @@ export default function App() {
         <Route path="/forge" element={<RequireToken>{<Forge />}</RequireToken>} />
         <Route path="/presets" element={<RequireToken>{<Presets />}</RequireToken>} />
         <Route path="/presets/:id" element={<RequireToken>{<PresetEdit />}</RequireToken>} />
+        <Route path="/search" element={<RequireToken>{<Search />}</RequireToken>} />
         <Route path="/settings" element={<RequireToken>{<Settings />}</RequireToken>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
@@ -176,11 +178,13 @@ function RouteTitle() {
                     ? 'Forge'
                     : pathname.startsWith('/presets')
                       ? 'Presets'
-                      : pathname.startsWith('/settings')
-                        ? 'Settings'
-                        : pathname.startsWith('/setup')
-                          ? 'Setup'
-                          : 'Tessera';
+                      : pathname.startsWith('/search')
+                        ? 'Search'
+                        : pathname.startsWith('/settings')
+                          ? 'Settings'
+                          : pathname.startsWith('/setup')
+                            ? 'Setup'
+                            : 'Tessera';
     document.title = `${name} · Tessera`;
   }, [pathname]);
   return null;
