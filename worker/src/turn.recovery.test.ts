@@ -300,7 +300,7 @@ describe('recovering a turn stopped before its reply', () => {
 });
 
 describe('a turn that never delivers a reply', () => {
-  test('Stop keeps the reader’s line and writes no reply', async () => {
+  test('Stop keeps the reader’s line and the partial reply', async () => {
     // The reported bug: the reader sends `Test`, presses Stop while the "…" placeholder is
     // up, and their own message disappears from the transcript. It disappeared because the
     // row was only ever written on the success path — so a stopped turn had nothing stored
@@ -335,18 +335,19 @@ describe('a turn that never delivers a reply', () => {
       .get() as { id: string } | null;
     expect(mine).not.toBeNull();
 
-    // And no reply was written: the partial text the server had already streamed is
-    // discarded, because Stop means "I withdraw this".
-    const replies = db
-      .query("SELECT COUNT(*) AS n FROM messages WHERE role = 'assistant' AND id != 'greet'")
-      .get() as { n: number };
-    expect(replies.n).toBe(0);
+    // And the partial IS written: the text the server had already streamed stays in the
+    // scene. The reader watched it arrive — making it vanish on Stop cost them words
+    // they had already seen and paid for.
+    const reply = db
+      .query("SELECT content FROM messages WHERE role = 'assistant' AND id != 'greet'")
+      .get() as { content: string } | null;
+    expect(reply?.content).toBe('"Partway through," she says.');
 
-    // The visible path is greeting, the reader's line, and nothing after it — which is the
-    // state a recovery `continue` answers.
+    // The visible path is greeting, the reader's line, and the partial after it: a
+    // stopped turn leaves a real reply at the tail rather than a gap.
     const path = await loadPath(env, 'chat-1');
-    expect(path.map((row) => row.role)).toEqual(['assistant', 'user', 'user']);
-    expect(path[path.length - 1].content).toBe('Test');
+    expect(path.map((row) => row.role)).toEqual(['assistant', 'user', 'user', 'assistant']);
+    expect(path[path.length - 1].content).toBe('"Partway through," she says.');
   });
 
   test('a dropped connection keeps the reader’s line and leaves no half-reply', async () => {

@@ -872,11 +872,13 @@ export default function Chat() {
         // it before streaming began, so the refetch below always brings it back. What
         // differs is only what happens to the reply.
         if (controller.signal.aborted) {
-          // Stop: the server discards the reply, so the streamed text must go — but the
-          // reader's own `sent` line stays on screen until the refetched transcript carries
-          // the row the server committed. `settling` keeps the overlay up for exactly that
-          // gap; emptying `text` makes the assistant overlay yield while `sent` renders on.
-          setPending((current) => (current ? { ...current, text: '', settling: true } : null));
+          // Stop keeps the partial: the server now persists whatever had arrived, so the
+          // streamed text stays on screen as the overlay until the refetch brings back the
+          // stored copy of the same words. Blank-then-reappear was the old behaviour and it
+          // cost the reader the reply they had already watched arrive. `settling` holds the
+          // overlay across that gap exactly as it does on success; the reader's own `sent`
+          // line was always safe — the server commits it before the provider is called.
+          setPending((current) => (current ? { ...current, settling: true } : null));
           reload();
           window.setTimeout(() => {
             setStopping(false);

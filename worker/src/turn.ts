@@ -300,10 +300,17 @@ async function runTurn(
       aborted,
     } = await pipeStream(controller, provider, response.body, signal);
 
-    // Stop: NO reply is written, but the reader's own message stays — it was committed
-    // before the provider was called, and "Stop" means "I withdraw this reply", not "delete
-    // what I sent". Reporting an error here would be wrong too: Stop is not a failure.
-    if (aborted) return;
+    // Stop keeps what had already arrived. The partial crossed the wire and the reader
+    // watched it appear — blanking it on abort cost them something they had already seen
+    // and paid for, and it is what every other client (and Apple's HIG) does. An abort
+    // with NO text still returns silently: there is nothing to keep, and Stop is not a
+    // failure — the reader's own line, committed before the provider was called, stays
+    // either way.
+    //
+    // From here the partial is an ordinary reply: it persists, the state snapshot reads
+    // it (the scene on screen contains it, so the world must too), memory cadence counts
+    // it, and the client's refetch finds exactly the text its overlay is holding.
+    if (aborted && assistantText.length === 0) return;
 
     if (assistantText.length === 0) {
       return failTurn(error ?? 'The provider returned no content.', 'stream');
