@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link } from 'react-router';
 import { apiJson } from '../lib/api';
 import type { ChatSummary } from '../lib/apiTypes';
@@ -24,6 +25,18 @@ import { Wordmark } from '../components/Mark';
  */
 export default function ChatList() {
   const { data, error, loading } = useAsync(() => apiJson<ChatSummary[]>('/api/chats'), []);
+  const [filter, setFilter] = useState('');
+
+  // A whitespace-only filter is no filter: it would hide every scene while looking empty.
+  const query = filter.trim().toLowerCase();
+  const matches =
+    data && query
+      ? data.filter((chat) =>
+          [chat.character_name, chat.title, chat.preview].some((field) =>
+            (field ?? '').toLowerCase().includes(query),
+          ),
+        )
+      : data;
 
   return (
     <>
@@ -35,7 +48,9 @@ export default function ChatList() {
             <h1 className="title">Scenes</h1>
             {data && data.length > 0 && (
               <p className="sheet-sub">
-                {data.length} {data.length === 1 ? 'scene' : 'scenes'}
+                {query && matches
+                  ? `${matches.length} of ${data.length} ${data.length === 1 ? 'scene' : 'scenes'}`
+                  : `${data.length} ${data.length === 1 ? 'scene' : 'scenes'}`}
               </p>
             )}
           </div>
@@ -43,9 +58,32 @@ export default function ChatList() {
             Characters
           </Link>
         </div>
+
+        {data && data.length > 0 && (
+          <div style={{ marginBottom: 14 }}>
+            <input
+              type="search"
+              className="field"
+              aria-label="Filter scenes"
+              placeholder="Filter scenes…"
+              value={filter}
+              onChange={(event) => setFilter(event.target.value)}
+            />
+          </div>
+        )}
+
         <hr className="rule-fade" style={{ marginBottom: 14 }} />
 
-        {loading && <p className="sheet-sub">Loading…</p>}
+        {loading && !data && (
+          <div className="plates">
+            {Array.from({ length: 6 }, (_, index) => (
+              <div key={index} className="skeleton skeleton-plate" aria-hidden="true" />
+            ))}
+            <p className="sr-only" role="status">
+              Loading…
+            </p>
+          </div>
+        )}
         {error && <div className="note danger">{error}</div>}
 
         {data && data.length === 0 && (
@@ -77,8 +115,19 @@ export default function ChatList() {
           </div>
         )}
 
+        {query && data && data.length > 0 && matches?.length === 0 && (
+          <div className="empty">
+            <span className="eyebrow" style={{ display: 'block' }}>
+              No scenes match
+            </span>
+            <p style={{ margin: '12px auto 0', maxWidth: '46ch' }}>
+              Clear the filter to see every scene again.
+            </p>
+          </div>
+        )}
+
         <div className="plates">
-          {data?.map((chat) => {
+          {matches?.map((chat) => {
             const name = chat.character_name ?? chat.title ?? 'Untitled';
             const written = new Date(chat.updated_at);
             return (

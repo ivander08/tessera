@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { apiJson } from '../lib/api';
 import type { ProviderKeyRow } from '../lib/apiTypes';
-import { messageOf, useAsync } from '../lib/hooks';
+import { messageOf, useAsync, useUnsavedChanges } from '../lib/hooks';
 import { AppBar } from '../components/AppBar';
 import { ThemeEditor, useLiveTheme } from '../components/ThemeEditor';
 import { useToast } from '../components/Toast';
@@ -53,6 +53,11 @@ export default function Settings() {
 
   const [edits, setEdits] = useState<SettingsShape>({});
   const [theme, setTheme] = useState<Theme>(() => parseTheme(null));
+  // What the theme looked like when the row was loaded. A snapshot is needed because the
+  // editor mutates `theme` live: without the original there is nothing to call "changed".
+  // Null until the settings row arrives, which keeps the first paint from counting as a
+  // pending edit.
+  const [themeSeed, setThemeSeed] = useState<string | null>(null);
   const [keyDraft, setKeyDraft] = useState<Record<string, string>>({});
   // Which provider keys are currently readable. A 50-character key typed blind on a
   // phone is unverifiable without one.
@@ -67,13 +72,27 @@ export default function Settings() {
 
   const form: SettingsShape = { ...data, ...edits };
 
-  // Seed the theme editor from storage once, then let it own the value. Re-seeding on
-  // every render would fight the user's drag.
+  // Seed the theme editor from storage when the row loads, then let it own the value.
+  // Re-seeding on every render would fight the user's drag; keyed on the fetched object,
+  // a reload after saving re-seeds from what the server actually stored.
   useEffect(() => {
-    if (data?.theme) setTheme(parseTheme(data.theme));
-  }, [data?.theme]);
+    if (!data) return;
+    const seeded = parseTheme(data.theme);
+    setTheme(seeded);
+    setThemeSeed(JSON.stringify(seeded));
+  }, [data]);
 
   useLiveTheme(theme);
+
+  // Three ways the screen can hold something the server does not: an edited field, a
+  // provider key typed but not stored, or a theme dragged away from the snapshot. The
+  // default-preset picker is excluded because it writes on change — its value is pending
+  // nothing, and counting it would warn about work the user already committed.
+  const dirty =
+    Object.keys(edits).some((key) => key !== 'default_preset_id') ||
+    Object.values(keyDraft).some((value) => value.trim() !== '') ||
+    (themeSeed !== null && JSON.stringify(theme) !== themeSeed);
+  useUnsavedChanges(dirty);
 
   const presetList = presets.data ?? [];
   const presetName = (id: string): string =>
@@ -104,6 +123,11 @@ export default function Settings() {
     try {
       await apiJson('/api/settings', { method: 'PUT', body: JSON.stringify({ settings }) });
       toast.success('Settings saved.');
+      // The form no longer holds anything the server lacks. Clearing here rather than
+      // waiting for the reload keeps the unsaved guard from firing on a page the user
+      // just committed — including when they close the tab before the fetch lands.
+      setEdits({});
+      setThemeSeed(JSON.stringify(theme));
       reload();
     } catch (cause) {
       toast.failure(messageOf(cause));
@@ -247,7 +271,10 @@ export default function Settings() {
               // immediately — every other select in the app does — and leaving it pending
               // on a Save button three sections down is why it appeared not to stick.
               const value = event.target.value;
-              setEdits({ ...form, default_preset_id: value });
+              // Only this key is written. Spreading `form` here copied every loaded
+              // setting into `edits`, which left the form looking dirty after a change
+              // that had already been saved.
+              setEdits((current) => ({ ...current, default_preset_id: value }));
               void saveDefaultPreset(value);
             }}
           >

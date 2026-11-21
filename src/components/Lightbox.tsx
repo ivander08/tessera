@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { useDialogFocus } from '../lib/useDialogFocus';
+import { useSheetHistory } from '../lib/useSheetHistory';
 
 /**
  * A portrait, full size.
@@ -28,6 +29,8 @@ export function Lightbox({ src, name, onClose }: { src: string; name: string; on
   // Same hook as `Modal`: the lightbox is a dialog, so it traps focus, marks the page
   // behind `inert`, restores focus on close, and lets Escape close only the topmost sheet.
   useDialogFocus(figureRef, requestClose);
+  // Back closes the lightbox before it leaves the route — see `useSheetHistory`.
+  useSheetHistory(requestClose);
 
   useEffect(() => {
     const previous = document.body.style.overflow;

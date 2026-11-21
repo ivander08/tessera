@@ -152,7 +152,16 @@ export default function Characters() {
           </div>
         </div>
 
-        {loading && <p className="sheet-sub">Loading…</p>}
+        {loading && !data && (
+          <div className="plates" style={{ marginTop: 14 }}>
+            {Array.from({ length: 6 }, (_, index) => (
+              <div key={index} className="skeleton skeleton-plate" aria-hidden="true" />
+            ))}
+            <p className="sr-only" role="status">
+              Loading characters…
+            </p>
+          </div>
+        )}
         {error && <div className="note danger">{error}</div>}
 
         {data && data.length === 0 && (

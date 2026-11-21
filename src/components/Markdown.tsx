@@ -1,4 +1,5 @@
-import { Fragment, memo, type ReactNode } from 'react';
+import { Fragment, memo, useState, type ReactNode } from 'react';
+import { copyText } from '../lib/clipboard';
 import { Marked, type Token, type Tokens } from 'marked';
 
 /**
@@ -85,11 +86,7 @@ function renderBlock(token: Token, key: string): ReactNode | null {
       return <hr key={key} className="md-hr" />;
 
     case 'code':
-      return (
-        <pre key={key} className="md-pre">
-          <code>{(token as Tokens.Code).text}</code>
-        </pre>
-      );
+      return <CodeBlock key={key} code={(token as Tokens.Code).text} />;
 
     case 'list': {
       const list = token as Tokens.List;
@@ -158,6 +155,37 @@ function renderBlock(token: Token, key: string): ReactNode | null {
         </p>
       );
   }
+}
+
+/**
+ * A code block that owns its own copy affordance.
+ *
+ * The button lives ON the block it copies rather than in a toolbar: a phone has no
+ * hover to reveal a distant control, and the reader who wants the code wants exactly
+ * this block. `copyText` is the helper that also works on plain-http origins, where
+ * `navigator.clipboard` does not exist at all.
+ */
+function CodeBlock({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <pre className="md-pre">
+      <button
+        type="button"
+        className="btn quiet code-copy"
+        aria-label={copied ? 'Code copied' : 'Copy code'}
+        onClick={() => {
+          void copyText(code).then((ok) => {
+            if (!ok) return;
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1500);
+          });
+        }}
+      >
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+      <code>{code}</code>
+    </pre>
+  );
 }
 
 /**

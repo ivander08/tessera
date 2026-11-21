@@ -165,6 +165,80 @@ button, a, input, select, textarea, label {
   border: 0;
 }
 
+/* ---------------------------------------------------------------- skip link */
+
+/* The first thing a keyboard user reaches. Off-screen until focused, then pinned
+   where the eye already is. */
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 100;
+  padding: 8px 12px;
+  background: var(--surface-raised);
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+  text-decoration: none;
+  transform: translateY(-250%);
+}
+
+.skip-link:focus {
+  transform: none;
+}
+
+/* ---------------------------------------------------------------- offline */
+
+/* Connection state, stated once at the top, instead of rediscovered by every
+   request failing on its own. */
+.offline-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 90;
+  padding: 7px 16px;
+  padding-top: max(7px, env(safe-area-inset-top));
+  background: var(--warn);
+  color: var(--ground);
+  text-align: center;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------- skeletons */
+
+/* Content that is coming, shaped like the content that will arrive, so the grid
+   does not jump when it lands. Opacity-only pulse: compositor-friendly, and it
+   stops under reduced motion. */
+.skeleton {
+  background: color-mix(in srgb, var(--ink) 6%, var(--surface));
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  animation: skeleton-pulse 1.4s ease-in-out infinite alternate;
+}
+
+.skeleton-plate {
+  min-height: 240px;
+}
+
+@keyframes skeleton-pulse {
+  from {
+    opacity: 0.5;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
 /* ---------------------------------------------------------------- typography */
 
 /* Small caps with real letterspacing. This is the display voice: it costs no font file
@@ -3453,4 +3527,107 @@ input[type="checkbox"] {
     background: var(--ground);
     backdrop-filter: none;
   }
+}
+
+/* ---------------------------------------------------------------- code copy */
+
+/* The copy affordance lives on the block it copies. Hidden until the pointer is over
+   it, always present where there is no hover — a phone has no hover to reveal it. */
+.md-pre {
+  position: relative;
+}
+
+.code-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  min-height: 30px;
+  padding: 0 9px;
+  font-size: var(--text-xs);
+  opacity: 0;
+  transition: opacity var(--dur-fast) ease;
+}
+
+.md-pre:hover .code-copy,
+.md-pre:focus-within .code-copy {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .code-copy {
+    opacity: 1;
+  }
+}
+
+/* ---------------------------------------------------------------- steering */
+
+/* One-tap instructions for the next turn only, as a scrollable row inside the composer —
+   inside so the measured composer height (consult dock, jump pill) carries the row. */
+.steer-row {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: 8px;
+}
+
+.steer-row::-webkit-scrollbar {
+  display: none;
+}
+
+.steer-chip {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-dim);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: color var(--dur-fast) ease, border-color var(--dur-fast) ease,
+    background-color var(--dur-fast) ease, transform var(--dur-fast) ease-out;
+}
+
+.steer-chip:hover {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+}
+
+.steer-chip:active {
+  transform: scale(0.97);
+}
+
+.steer-chip[aria-pressed='true'] {
+  color: var(--action-ink);
+  background: var(--action);
+  border-color: var(--action);
+  font-weight: 600;
+}
+
+@media (pointer: coarse) {
+  .steer-chip {
+    min-height: 40px;
+    padding: 0 14px;
+    font-size: var(--text-sm);
+  }
+}
+
+/* ---------------------------------------------------------------- keyboard */
+
+/* iOS leaves the layout viewport alone when the keyboard opens, so a bottom-pinned
+   composer sits behind it. The chat measures the covered strip through `visualViewport`
+   and publishes `--kb-inset`; the composer lifts by exactly that much. Android resizes
+   the layout instead (the viewport meta says so), which makes the inset zero there —
+   no double lift. */
+.kb-open .composer {
+  transform: translateY(calc(-1 * var(--kb-inset, 0px)));
+  transition: transform var(--dur-base) var(--ease);
+}
+
+.kb-open .jump-latest {
+  bottom: calc(
+    var(--composer-height, 76px) + 12px + var(--kb-inset, 0px) + env(safe-area-inset-bottom)
+  );
 }

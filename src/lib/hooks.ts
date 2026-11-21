@@ -70,12 +70,40 @@ export function messageOf(error: unknown): string {
 }
 
 /**
- * Warn before a form's edits are thrown away.
+ * Warn before a refresh or a tab close throws away a form's edits.
  *
- * Two exits need covering and they need different mechanisms. A reload or a tab close
- * cannot be intercepted with a custom dialog, so `beforeunload` asks the browser's own
- * question. In-app navigation is a plain anchor click through `react-router`'s `<Link>`,
- * which fires no event the router exposes without a data router — and this app renders
+ * `beforeunload` is the only mechanism for these exits: the browser owns the reload
+ * button and the window close, so the most this can do is ask the browser's own question.
+ *
+ * `returnValue` is set next to `preventDefault` because Chrome shows the prompt only when
+ * it is assigned. The string it used to carry is no longer displayed, so empty is enough.
+ *
+ * In-app link navigation is deliberately outside this hook's scope: a capture-level click
+ * guard nags on every route hop the app's own links take, and warning on those is not the
+ * standard minimum. Screens that want the extra catch use `useUnsavedGuard` below.
+ *
+ * Nothing is registered while `dirty` is false, so a clean form leaves no listener behind
+ * to speak for a page it has no opinion about.
+ */
+export function useUnsavedChanges(dirty: boolean): void {
+  useEffect(() => {
+    if (!dirty) return;
+
+    function onBeforeUnload(event: BeforeUnloadEvent) {
+      event.preventDefault();
+      event.returnValue = '';
+    }
+
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [dirty]);
+}
+
+/**
+ * `useUnsavedChanges` plus the in-app link catch.
+ *
+ * An in-app navigation is a plain anchor click through `react-router`'s `<Link>`, which
+ * fires no event the router exposes without a data router — and this app renders
  * `<BrowserRouter>` with plain `<Routes>`, so `useBlocker` is not available. A
  * capture-phase click listener on the document catches the anchor before React Router's
  * handler sees it, which is the whole mechanism.
@@ -84,16 +112,10 @@ export function messageOf(error: unknown): string {
  * work behind in this app.
  */
 export function useUnsavedGuard(dirty: boolean, message = 'You have unsaved changes.'): void {
+  useUnsavedChanges(dirty);
+
   useEffect(() => {
     if (!dirty) return;
-
-    function onBeforeUnload(event: BeforeUnloadEvent) {
-      event.preventDefault();
-      // Some browsers ignore `preventDefault` here and show the prompt only when
-      // `returnValue` is set. The string itself is not shown any more.
-      event.returnValue = message;
-      return message;
-    }
 
     function onClick(event: MouseEvent) {
       // Modified clicks open a new tab and leave this document untouched.
@@ -117,11 +139,7 @@ export function useUnsavedGuard(dirty: boolean, message = 'You have unsaved chan
       }
     }
 
-    window.addEventListener('beforeunload', onBeforeUnload);
     document.addEventListener('click', onClick, true);
-    return () => {
-      window.removeEventListener('beforeunload', onBeforeUnload);
-      document.removeEventListener('click', onClick, true);
-    };
+    return () => document.removeEventListener('click', onClick, true);
   }, [dirty, message]);
 }

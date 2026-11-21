@@ -5,7 +5,7 @@ import { CARD_FIELD_ROWS } from '../lib/cards/fields';
 import type { GreetingState, ParsedCard } from '../lib/cards/types';
 import { loadTokenCounter } from '../lib/tokenizerClient';
 import { apiJson } from '../lib/api';
-import { messageOf } from '../lib/hooks';
+import { messageOf, useUnsavedChanges } from '../lib/hooks';
 import { AppBar, BackLink } from '../components/AppBar';
 import { Avatar } from '../components/Avatar';
 import { ConsultDock } from '../components/ConsultDock';
@@ -216,11 +216,16 @@ export default function CharacterNew() {
         return out;
       });
 
+      const stored = { ...card, greetingStates };
       const created = await apiJson<{ id: string }>('/api/characters', {
         method: 'POST',
-        body: JSON.stringify({ card: { ...card, greetingStates }, avatar }),
+        body: JSON.stringify({ card: stored, avatar }),
       });
       toast.success('Character saved.');
+      // The form is now the server's copy. Moving the baseline with it keeps the guard
+      // from firing on the way out of a screen whose work was just written — and keeps the
+      // unsaved count honest if the navigation is held up.
+      setBaseline(stored);
       navigate(`/characters?created=${encodeURIComponent(created.id)}`);
     } catch (cause) {
       toast.failure(`Could not save the card: ${messageOf(cause)}`);
@@ -242,6 +247,7 @@ export default function CharacterNew() {
         ).length
       : 0;
 
+  useUnsavedChanges(dirtyCount > 0);
   if (!card) {
     return (
       <>

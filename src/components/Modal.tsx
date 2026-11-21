@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, useDragControls, useReducedMotion } from 'motion/react';
 import { useDialogFocus } from '../lib/useDialogFocus';
+import { useSheetHistory } from '../lib/useSheetHistory';
 
 /**
  * A sheet over the current screen.
@@ -45,6 +46,8 @@ export function Modal({
   // Escape, the focus trap, `inert` on the page behind and focus restoration all live in
   // the shared hook, which also makes Escape close only the topmost sheet.
   useDialogFocus(panelRef, requestClose);
+  // Back closes the sheet before it leaves the route — the mobile convention.
+  useSheetHistory(requestClose);
 
   useEffect(() => {
     // The page behind must not scroll while the sheet is open, or a flick inside the

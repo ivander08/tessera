@@ -2,7 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- `interactive-widget=resizes-content`: Android Chrome then shrinks the layout
+         for the keyboard instead of overlaying it, so the sticky composer stays
+         visible. iOS ignores the attribute; Chat's visualViewport effect covers it. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <!--
       The address bar and the mobile status bar take this. One tag, rewritten by
