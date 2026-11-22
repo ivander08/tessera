@@ -91,11 +91,6 @@
   inherits: false;
   initial-value: 88px;
 }
-@property --dock-height {
-  syntax: '<length>';
-  inherits: false;
-  initial-value: 520px;
-}
 
 *,
 *::before,
@@ -2937,8 +2932,8 @@ input[type="checkbox"] {
 
 /* The consultant floats over the page rather than taking a column in it. On a desktop it is
    a panel you drag anywhere, because the thing you are asking about is somewhere on the form
-   behind it and a fixed column pushed that form into half the width. On a phone it is a
-   bottom sheet you resize. Both cases are the same element with the same contents. */
+   behind it and a fixed column pushed that form into half the width. On a phone it is full
+   screen. Both cases are the same element with the same contents. */
 .consult-dock {
   position: fixed;
   z-index: 40;
@@ -2948,7 +2943,7 @@ input[type="checkbox"] {
   /* Set from the component, which owns where the reader dragged it. */
   right: var(--dock-right, 24px);
   bottom: var(--dock-bottom, 88px);
-  height: var(--dock-height, 520px);
+  height: 520px;
   border: 1px solid var(--line-strong);
   border-radius: 12px;
   background: var(--surface);
@@ -2961,55 +2956,35 @@ input[type="checkbox"] {
   user-select: none;
 }
 
-/* The drag surfaces, not the whole dock. An ancestor's `touch-action` does not apply to a
-   descendant that sets its own — the transcript inside resolves against its own `auto` — but
-   scoping it here is free and stops the next reader having to work that out. */
-.consult-grab,
+/* The drag surface, not the whole dock: an ancestor's `touch-action` does not apply to a
+   descendant that sets its own, so the transcript inside keeps its own `auto`. */
 .consult-pane-head {
   touch-action: none;
 }
 
-/* Anchored to the bottom on a phone, above the commit row so Save stays reachable. The
-   dragged desktop offset is deliberately discarded here: there is nowhere to drag it to. */
+/* Full screen on a phone: there is no form worth peeking at behind it, so a resizable sheet
+   was a height the reader had to choose and a drag that never rested where the finger
+   stopped. The dragged desktop offset is discarded here, as it always was. */
 @media (max-width: 1000px) {
   .consult-dock {
-    left: 0;
-    right: 0;
-    bottom: var(--commit-height, 58px);
-    width: auto;
-    border-radius: 14px 14px 0 0;
-    border-bottom: 0;
-  }
-}
-
-/* The drag strip: a grab bar on a phone, and the header itself on a desktop. */
-.consult-grab {
-  display: none;
-}
-
-@media (max-width: 1000px) {
-  .consult-grab {
-    display: grid;
-    place-items: center;
-    /* 28px rather than 22: it is the only affordance for resizing the sheet, and 22 is
-       below WCAG 2.5.8's minimum. The rule lives here rather than in the coarse-pointer
-       block because this is the only breakpoint at which the bar is displayed at all. */
-    height: 28px;
-    cursor: ns-resize;
-    flex: 0 0 auto;
+    inset: 0;
+    height: auto;
+    border-radius: 0;
+    border: 0;
   }
 
-  .consult-grab span {
-    width: 38px;
-    height: 4px;
-    border-radius: 999px;
-    background: var(--line-strong);
-    /* The only affordance telling a thumb the sheet can be resized. */
-    transition: background-color var(--dur-fast) ease;
+  /* The dock now reaches the screen edges, so it clears the notch and the home indicator
+     the way every other fixed surface in the app does. */
+  .consult-dock .consult-pane-head {
+    padding-top: max(10px, env(safe-area-inset-top));
   }
 
-  .consult-grab:active span {
-    background: var(--ink-faint);
+  .consult-dock .consult-commit {
+    padding-bottom: max(9px, env(safe-area-inset-bottom));
+  }
+
+  .consult-dock .consult-compose {
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
   }
 }
 
@@ -3044,16 +3019,6 @@ input[type="checkbox"] {
   border-radius: 0;
   background: transparent;
   flex: 1;
-}
-
-/* The chat screen has no `.sheet-commit` row for the dock to measure — that row exists only
-   on the character forms. The dock's fallback is a guessed 58px and the chat composer is a
-   different height, so the sheet's foot is pinned to the composer's real measurement here.
-   Set by the chat screen from a ResizeObserver on `.composer` while the dock is open. */
-@media (max-width: 1000px) {
-  .chat-consult-dock {
-    bottom: var(--composer-height, 58px);
-  }
 }
 
 /* One reply, with the shortcut that puts its words in the chat composer underneath. */
@@ -3514,10 +3479,6 @@ input[type="checkbox"] {
   .crumb {
     min-height: 44px;
     min-width: 44px;
-  }
-
-  .consult-grab {
-    height: 44px;
   }
 
   .bar,

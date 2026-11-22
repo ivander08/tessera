@@ -42,41 +42,6 @@ function resisted(value: number, min: number, max: number, dimension: number): n
   return value;
 }
 
-/** The phone sheet's resting heights, as fractions of the space above the commit row. */
-const DETENTS = [0.35, 0.65, 1];
-
-/**
- * Where the sheet last settled, per device.
- *
- * A reader who opens the dock to a height that hides half the form has to resize it every
- * time; the height they chose is a preference, not a per-open decision. Stored as the
- * DETENT FRACTION rather than pixels, so the same choice survives a rotated phone or a
- * different window.
- *
- * Guarded because storage throws in a private window and in some embedded webviews, and a
- * dock that cannot remember a height must still open.
- */
-const HEIGHT_KEY = 'tessera.consult.height';
-
-function readStoredFraction(): number | null {
-  try {
-    const raw = window.localStorage.getItem(HEIGHT_KEY);
-    if (raw === null) return null;
-    const value = Number(raw);
-    return DETENTS.includes(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-function storeFraction(value: number): void {
-  try {
-    window.localStorage.setItem(HEIGHT_KEY, String(value));
-  } catch {
-    // A preference that cannot be saved is not a reason to break the dock.
-  }
-}
-
 /**
  * The floating frame the consultant lives in.
  *
@@ -84,8 +49,8 @@ function storeFraction(value: number): void {
  * somewhere on the form behind it — a fixed column would have pushed that form into half the
  * width, which is what this replaces.
  *
- * Phone: a bottom sheet anchored above the commit row, resized by dragging its grab bar. It
- * cannot be moved horizontally because there is nowhere to move it to.
+ * Phone: full screen. There is no form to see behind it, so there is nothing to drag out of
+ * the way and no height to choose — the sheet the reader had to resize every time is gone.
  *
  * Position is kept as an offset from the bottom-right corner rather than as absolute
  * coordinates. That way the panel stays where the reader put it when the window resizes,
@@ -97,7 +62,6 @@ function storeFraction(value: number): void {
  */
 export function ConsultDock({
   children,
-  className = '',
   label = 'Character consultant',
 }: {
   children: (handlers: {
@@ -106,11 +70,6 @@ export function ConsultDock({
     onPointerUp: (event: ReactPointerEvent<HTMLElement>) => void;
     onPointerCancel: (event: ReactPointerEvent<HTMLElement>) => void;
   }) => ReactNode;
-  /**
-   * An extra class on the dock itself, for a screen that needs to adjust where the dock
-   * sits. The chat adds one because it has no `.sheet-commit` row for the sheet to measure.
-   */
-  className?: string;
   /** What a screen reader calls this dialog. The chat's dock advises, it does not consult. */
   label?: string;
 }) {
@@ -118,17 +77,6 @@ export function ConsultDock({
   const reduced = useReducedMotion();
   // Distance from the right and bottom edges, in px.
   const [offset, setOffset] = useState({ right: 24, bottom: 88 });
-  const [height, setHeight] = useState(() => {
-    // A 520px sheet plus a ~58px commit row does not fit a 568px-tall phone, which put the
-    // close button off-screen. The ceiling is the viewport, not a constant.
-    if (typeof window === 'undefined') return 520;
-    const max = window.innerHeight - 140;
-    // The stored detent wins when the reader has chosen one: the default is only a guess
-    // about what they want, and on a phone it is a guess that hides the form.
-    const stored = readStoredFraction();
-    if (stored !== null) return Math.round(max * stored);
-    return Math.min(520, max);
-  });
   /**
    * Live drag state. Everything the move handler needs is captured at `pointerdown`,
    * including the element's own box — measuring inside the move handler forces a synchronous
@@ -146,19 +94,13 @@ export function ConsultDock({
     /** The live, banded position. Written by the move handler, read by the release. */
     current: { right: number; bottom: number };
   } | null>(null);
-  const resize = useRef<{
-    y: number;
-    height: number;
-    samples: Array<{ t: number; y: number }>;
-    /** The live, banded height. Written by the move handler, read by the release. */
-    current: number;
-  } | null>(null);
   // A second, coarser flag for the settle transition: the refs above are deliberately not
   // render-visible, but `is-dragging` has to change the class, so this one is state. It
   // flips once per gesture, not once per move, so it costs nothing.
   const [dragging, setDragging] = useState(false);
 
-  /** True on a phone-width viewport, where the sheet is anchored and only resizes. */
+  /** True on a phone-width viewport, where the dock is full screen and the header is not a
+   * drag surface — the free drag is the desktop's answer to a form behind the panel. */
   const anchored = useCallback(
     () => window.matchMedia('(max-width: 1000px)').matches,
     [],
@@ -174,32 +116,10 @@ export function ConsultDock({
         right: Math.max(8, Math.min(current.right, window.innerWidth - box.width - 8)),
         bottom: Math.max(8, Math.min(current.bottom, window.innerHeight - 120)),
       }));
-      setHeight((current) => Math.min(current, window.innerHeight - 140));
     }
     clamp();
     window.addEventListener('resize', clamp);
     return () => window.removeEventListener('resize', clamp);
-  }, []);
-
-  // On a phone the sheet sits ON TOP of the commit row, so it needs that row's real height.
-  // A guessed constant left a gap under the sheet when the row wrapped to two lines, which
-  // it does once the three buttons no longer fit on one — which is a function of the button
-  // text, not of a breakpoint. Measuring is the honest answer; there is no width tier that
-  // predicts it.
-  useEffect(() => {
-    const row = document.querySelector('.sheet-commit');
-    if (!row) return;
-    const measure = () => {
-      const height = row.getBoundingClientRect().height;
-      document.documentElement.style.setProperty('--commit-height', `${Math.round(height)}px`);
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(row);
-    return () => {
-      observer.disconnect();
-      document.documentElement.style.removeProperty('--commit-height');
-    };
   }, []);
 
   /**
@@ -229,10 +149,6 @@ export function ConsultDock({
 
   function writeBottom(value: number): void {
     ref.current?.style.setProperty('--dock-bottom', `${value}px`);
-  }
-
-  function writeHeight(value: number): void {
-    ref.current?.style.setProperty('--dock-height', `${value}px`);
   }
 
   function onPointerDown(event: ReactPointerEvent<HTMLElement>) {
@@ -329,75 +245,6 @@ export function ConsultDock({
     void spring('bottom', from.bottom, to.bottom, -velocity.y).then(finish);
   }
 
-  /** The phone's grab bar: drag up to grow, down to shrink. */
-  function onGrabDown(event: ReactPointerEvent<HTMLElement>) {
-    resize.current = {
-      y: event.clientY,
-      height,
-      samples: [{ t: event.timeStamp, y: event.clientY }],
-      current: height,
-    };
-    setDragging(true);
-    event.currentTarget.setPointerCapture(event.pointerId);
-  }
-
-  function onGrabMove(event: ReactPointerEvent<HTMLElement>) {
-    const start = resize.current;
-    if (!start) return;
-    start.samples.push({ t: event.timeStamp, y: event.clientY });
-    if (start.samples.length > 5) start.samples.shift();
-
-    const max = window.innerHeight - 140;
-    const raw = start.height + (start.y - event.clientY);
-    const next = resisted(raw, 160, max, start.height);
-    start.current = next;
-    writeHeight(next);
-  }
-
-  function onGrabUp(event: ReactPointerEvent<HTMLElement>) {
-    const start = resize.current;
-    resize.current = null;
-    setDragging(false);
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    if (!start) return;
-
-    const samples = start.samples.map((sample) => ({ t: sample.t, x: 0, y: sample.y }));
-    const releaseVelocity = velocityOf(samples).y;
-    const max = window.innerHeight - 140;
-    // Snap to the detent nearest where the gesture was heading, not nearest where the
-    // finger stopped: a flick upward from a short sheet should open it, not stay put. The
-    // projection starts from the LIVE height, which is the banded one the finger actually
-    // pulled to.
-    const projected = start.current + project(releaseVelocity);
-    const target = DETENTS.map((fraction) => Math.round(max * fraction)).reduce((best, candidate) =>
-      Math.abs(candidate - projected) < Math.abs(best - projected) ? candidate : best,
-    );
-    const clamped = Math.max(160, Math.min(target, max));
-    // Which detent we snapped TO, not the pixel height: the sheet is anchored to the
-    // viewport, so the fraction is the part that is worth remembering.
-    const reached = DETENTS.reduce((best, fraction) =>
-      Math.abs(max * fraction - clamped) < Math.abs(max * best - clamped) ? fraction : best,
-    );
-    storeFraction(reached);
-
-    if (reduced) {
-      writeHeight(clamped);
-      setHeight(clamped);
-      return;
-    }
-    animate(start.current, clamped, {
-      type: 'spring',
-      // A flick carries momentum, so the sheet may pass its detent; a slow drag may not.
-      bounce: Math.abs(releaseVelocity) > 300 ? 0.2 : 0,
-      duration: 0.4,
-      velocity: releaseVelocity,
-      onUpdate: writeHeight,
-      onComplete: () => setHeight(clamped),
-    });
-  }
-
   /**
    * Committed position is written to the DOM from an effect rather than through the `style`
    * prop. The prop would be re-applied on every render, and a render that lands mid-gesture —
@@ -410,45 +257,13 @@ export function ConsultDock({
     writeBottom(offset.bottom);
   }, [offset]);
 
-  useEffect(() => {
-    writeHeight(height);
-  }, [height]);
-
-  /** The keyboard path. ARIA requires a separator to be operable, not merely labelled. */
-  function onGrabKey(event: React.KeyboardEvent<HTMLElement>) {
-    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
-    event.preventDefault();
-    const step = event.shiftKey ? 8 : 24;
-    const max = window.innerHeight - 140;
-    setHeight(Math.max(160, Math.min(height + (event.key === 'ArrowUp' ? step : -step), max)));
-  }
-
   return (
     <div
       ref={ref}
-      className={`consult-dock${dragging ? ' is-dragging' : ''}${className ? ` ${className}` : ''}`}
+      className={`consult-dock${dragging ? ' is-dragging' : ''}`}
       role="dialog"
       aria-label={label}
     >
-      {/* Phone only: the handle that resizes the sheet. */}
-      <div
-        className="consult-grab"
-        role="separator"
-        aria-label="Resize the consultant"
-        aria-orientation="horizontal"
-        aria-valuenow={Math.round(height)}
-        aria-valuemin={160}
-        aria-valuemax={typeof window === 'undefined' ? 520 : window.innerHeight - 140}
-        tabIndex={0}
-        onKeyDown={onGrabKey}
-        onPointerDown={onGrabDown}
-        onPointerMove={onGrabMove}
-        onPointerUp={onGrabUp}
-        onPointerCancel={onGrabUp}
-      >
-        <span />
-      </div>
-
       {children({ onPointerDown, onPointerMove, onPointerUp: endDrag, onPointerCancel: endDrag })}
     </div>
   );

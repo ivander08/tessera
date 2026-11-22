@@ -1031,9 +1031,8 @@ export default function Chat() {
   }, [draft]);
 
   // The composer's real height, published for the things that float above it: the
-  // consult dock's bottom sheet and the jump-to-latest pill. Measured rather than
-  // guessed: the composer wraps to two lines on a narrow phone with a long
-  // placeholder, and a constant then leaves the sheet floating or buries the pill.
+  // jump-to-latest pill. Measured rather than guessed: the composer wraps to two lines on a
+  // narrow phone with a long placeholder, and a constant then buries the pill.
   useEffect(() => {
     const composer = document.querySelector('.composer');
     if (!composer) return;
@@ -1618,11 +1617,11 @@ export default function Chat() {
         </div>
       </form>
 
-      {/* A dock, not a Modal: the reader has to see the scene they are asking about. It
-          floats above the composer (`z-index: 40` against the composer's 15) and below any
-          open panel, so the card consultant's own frame is reused unchanged. */}
+      {/* A dock, not a Modal: on a desktop it floats over the scene (`z-index: 40` against
+          the composer's 15) so the reader keeps the scene they are asking about in view, and
+          on a phone it takes the screen. The card consultant's own frame is reused. */}
       {consultOpen && (
-        <ConsultDock className="chat-consult-dock" label="Scene consultant">
+        <ConsultDock label="Scene consultant">
           {(dragHandlers) => (
             <ChatConsultPanel
               chatId={id}
