@@ -335,7 +335,6 @@ export default function Chat() {
         startScrollLeft: event.currentTarget.scrollLeft,
         moved: false,
       };
-      event.currentTarget.setPointerCapture(event.pointerId);
     },
     [],
   );
@@ -347,6 +346,12 @@ export default function Chat() {
         state.moved = true;
         suppressSteerClick.current = true;
         event.currentTarget.dataset.dragging = 'true';
+        // Captured here, not on pointerdown: capturing the row retargets the whole
+        // pointer stream, so the click generated at release lands on the row instead of
+        // the chip under it — capturing from the start turned every chip press into a
+        // no-op. Capturing only once a real drag begins keeps an un-dragged press a
+        // click, and still keeps tracking once the pointer leaves the row.
+        event.currentTarget.setPointerCapture(event.pointerId);
       }
       event.preventDefault();
       event.currentTarget.scrollLeft = state.startScrollLeft - (event.clientX - state.startX);
