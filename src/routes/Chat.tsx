@@ -318,6 +318,55 @@ export default function Chat() {
     window.addEventListener('resize', measureSteerFades);
     return () => window.removeEventListener('resize', measureSteerFades);
   }, [measureSteerFades, steers.length]);
+
+  // Drag to scroll the row with the mouse. Touch needs none of this — an overflow row
+  // drags natively there — so only mouse pointers are handled, leaving pen and touch to
+  // the browser. A drag that ends over a chip must not also steer: the row's capture-phase
+  // click handler swallows exactly the click that follows a real drag (5px threshold),
+  // which keeps a lazy click a click.
+  const steerDrag = useRef({ startX: 0, startScrollLeft: 0, moved: false });
+  const suppressSteerClick = useRef(false);
+  const onSteerPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.pointerType !== 'mouse' || event.button !== 0) return;
+      suppressSteerClick.current = false;
+      steerDrag.current = {
+        startX: event.clientX,
+        startScrollLeft: event.currentTarget.scrollLeft,
+        moved: false,
+      };
+      event.currentTarget.setPointerCapture(event.pointerId);
+    },
+    [],
+  );
+  const onSteerPointerMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const state = steerDrag.current;
+      if (!state || (!state.moved && Math.abs(event.clientX - state.startX) < 5)) return;
+      if (!state.moved) {
+        state.moved = true;
+        suppressSteerClick.current = true;
+        event.currentTarget.dataset.dragging = 'true';
+      }
+      event.preventDefault();
+      event.currentTarget.scrollLeft = state.startScrollLeft - (event.clientX - state.startX);
+    },
+    [],
+  );
+  const onSteerPointerEnd = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (steerDrag.current.moved) {
+      steerDrag.current.moved = false;
+      event.currentTarget.dataset.dragging = 'false';
+      measureSteerFades();
+    }
+    steerDrag.current = { startX: 0, startScrollLeft: 0, moved: false };
+  }, [measureSteerFades]);
+  const onSteerClickCapture = useCallback((event: React.MouseEvent) => {
+    if (!suppressSteerClick.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    suppressSteerClick.current = false;
+  }, []);
   const [pending, setPending] = useState<Pending | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1526,6 +1575,11 @@ export default function Chat() {
         <div
           ref={steerRef}
           onScroll={measureSteerFades}
+          onPointerDown={onSteerPointerDown}
+          onPointerMove={onSteerPointerMove}
+          onPointerUp={onSteerPointerEnd}
+          onPointerCancel={onSteerPointerEnd}
+          onClickCapture={onSteerClickCapture}
           className="steer-row"
           role="group"
           aria-label="Steer the next reply"

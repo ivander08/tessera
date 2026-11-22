@@ -3545,6 +3545,15 @@ input[type="checkbox"] {
   padding-bottom: 8px;
   max-width: min(calc(var(--measure) + var(--avatar) + 12px), 100%);
   margin: 0 auto;
+  /* The row drags to scroll on a mouse, so say so; a chip keeps its pointer cursor
+     until a drag starts, when the whole row reads as grabbed. */
+  cursor: grab;
+}
+
+.steer-row[data-dragging='true'],
+.steer-row[data-dragging='true'] .steer-chip {
+  cursor: grabbing;
+  user-select: none;
 }
 
 .steer-row::-webkit-scrollbar {
