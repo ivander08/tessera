@@ -5,6 +5,7 @@ import { apiFetch, apiJson, streamChat, type TurnMode } from '../lib/api';
 import type { MessageRow, Transcript } from '../lib/apiTypes';
 import type { WorldState } from '../lib/state/schema';
 import { messageOf, useAsync } from '../lib/hooks';
+import { BUILTIN_STEERS, parseSteers } from '../lib/steers';
 import { enterMakesNewline, handleComposerEnter, refocusesAfterSend } from '../lib/composer';
 import { AppBar, BackLink, MenuAction, MenuLabel, MenuSep } from '../components/AppBar';
 import { PresetMenu } from '../components/PresetMenu';
@@ -30,42 +31,6 @@ import MemoryPanel from './Memory';
 
 /** How many earlier turns one tap of "show earlier" loads. */
 const WINDOW_STEP = 80;
-
-/**
- * One-tap steering for the next turn, as the instruction text it sends.
- *
- * A label for the row, a sentence for the tail: the reader taps a label and `text`
- * rides the request's `steer` field — one turn only, never stored, never near the
- * cached prefix. These target the complaints the community survey puts at the top of
- * its list (purple prose, rushed pacing, passive scenes) as single-tap corrections
- * rather than a field the reader has to compose themselves.
- */
-const STEERS: Array<{ label: string; text: string }> = [
-  {
-    label: 'More conflict',
-    text: 'Raise the conflict this turn: let disagreement, stakes, or friction visibly escalate.',
-  },
-  {
-    label: 'Slower pace',
-    text: 'Slow down this turn: linger on small gestures and beats; do not advance the plot.',
-  },
-  {
-    label: 'Less purple',
-    text: 'Plain description this turn: cut ornate metaphor and elevated diction.',
-  },
-  {
-    label: 'More dialogue',
-    text: 'Carry this turn primarily in dialogue; keep narration to staging only.',
-  },
-  {
-    label: 'More body',
-    text: 'Ground this turn in physical action and sensation; minimal abstraction.',
-  },
-  {
-    label: 'Surprise me',
-    text: 'Do something genuinely unexpected this turn, within what the scene has already established.',
-  },
-];
 
 /**
  * How many pages a search jump will load before giving up.
@@ -317,9 +282,42 @@ export default function Chat() {
       // Private mode: the draft simply does not survive a reload.
     }
   }, [draft, id]);
-  // The one-shot steer for the next turn; see `STEERS`. Captured by `run` and cleared
-  // the moment a turn starts, so it applies exactly once — to this reply and no other.
+  // The one-shot steer for the next turn; see `BUILTIN_STEERS`. Captured by `run` and
+  // cleared the moment a turn starts, so it applies exactly once — to this reply and no
+  // other.
   const [steer, setSteer] = useState<string | null>(null);
+
+  // Custom chips from the settings row, shown ahead of the built-in six. A settings
+  // failure leaves the built-in row: the fetch is decoration on a row that already works,
+  // so its error is deliberately unread (`useAsync` requires a reader to surface one).
+  const settings = useAsync(() => apiJson<Record<string, string>>('/api/settings'), []);
+  const steers = [...parseSteers(settings.data?.steers), ...BUILTIN_STEERS];
+
+  // Which edges of the chip row hide content, written straight onto the row as data
+  // attributes rather than into component state: a scroll handler firing setState on
+  // every pixel would re-render the whole transcript for two booleans. The row hides its
+  // scrollbar, so without a fade the chips past the fold are invisible and
+  // undiscoverable; the mask only covers an edge that actually hides something. The
+  // measurement reruns on scroll (the handler), after the custom chips arrive (they
+  // change the row's width), and on resize (a rotation can turn overflow off entirely).
+  const steerRef = useRef<HTMLDivElement | null>(null);
+  const measureSteerFades = useCallback(() => {
+    const el = steerRef.current;
+    if (!el) return;
+    const start = el.scrollLeft > 1;
+    const end = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+    const at = `${start ? 's' : ''}${end ? 'e' : ''}`;
+    if (el.dataset.fades !== at) {
+      el.dataset.fades = at;
+      el.dataset.fadeStart = start ? 'true' : 'false';
+      el.dataset.fadeEnd = end ? 'true' : 'false';
+    }
+  }, []);
+  useLayoutEffect(() => {
+    measureSteerFades();
+    window.addEventListener('resize', measureSteerFades);
+    return () => window.removeEventListener('resize', measureSteerFades);
+  }, [measureSteerFades, steers.length]);
   const [pending, setPending] = useState<Pending | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1525,8 +1523,14 @@ export default function Chat() {
         {/* One tap, one turn: the chip lights while armed, and `run` captures and clears
             it the moment the request starts. Inside the form so the measured composer
             height (consult dock, jump pill) carries the row with it. */}
-        <div className="steer-row" role="group" aria-label="Steer the next reply">
-          {STEERS.map((chip) => (
+        <div
+          ref={steerRef}
+          onScroll={measureSteerFades}
+          className="steer-row"
+          role="group"
+          aria-label="Steer the next reply"
+        >
+          {steers.map((chip) => (
             <button
               key={chip.label}
               type="button"

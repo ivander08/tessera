@@ -8,6 +8,7 @@ import { useToast } from '../components/Toast';
 import type { PresetSummary } from '../components/PresetEditor';
 import { PROVIDERS } from '../lib/providers';
 import { parseTheme, type Theme } from '../lib/theme';
+import { parseSteers, STEERS_SETTING_KEY, type Steer } from '../lib/steers';
 
 
 /**
@@ -26,6 +27,8 @@ interface SettingsShape {
   idrPerUsd?: string;
   default_preset_id?: string;
   theme?: string;
+  /** Custom steering chips, a JSON array of `{label, text}`; see `src/lib/steers.ts`. */
+  steers?: string;
   // Legacy generation keys. Read only by the migration card below; nothing here writes them.
   provider?: string;
   model?: string;
@@ -239,6 +242,56 @@ export default function Settings() {
     }
   }
 
+  // The custom steering chips shown on the composer ahead of the built-in six. Like the
+  // default-preset picker they write on change — a chip list is a set of small committed
+  // actions, not a form field waiting for one Save — so nothing here participates in the
+  // unsaved-changes guard.
+  const customSteers = parseSteers(data?.steers);
+  const [chipLabel, setChipLabel] = useState('');
+  const [chipPrompt, setChipPrompt] = useState('');
+  const [savingChips, setSavingChips] = useState(false);
+
+  /**
+   * Writes the whole chip list as the one `steers` setting.
+   *
+   * Add and remove are the same write: the server stores a string, so every mutation
+   * serializes the next array whole. `reload()` re-reads the row afterwards, which keeps
+   * this section on the server's truth rather than tracking its own copy.
+   */
+  async function writeChips(next: Steer[]): Promise<boolean> {
+    setSavingChips(true);
+    try {
+      await apiJson('/api/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ key: STEERS_SETTING_KEY, value: JSON.stringify(next) }),
+      });
+      reload();
+      return true;
+    } catch (cause) {
+      toast.failure(messageOf(cause));
+      return false;
+    } finally {
+      setSavingChips(false);
+    }
+  }
+
+  async function addChip() {
+    const label = chipLabel.trim();
+    const text = chipPrompt.trim();
+    if (label.length === 0 || text.length === 0) return;
+    if (await writeChips([...customSteers, { label, text }])) {
+      setChipLabel('');
+      setChipPrompt('');
+      toast.success('Chip added.');
+    }
+  }
+
+  async function removeChip(index: number) {
+    if (await writeChips(customSteers.filter((_, at) => at !== index))) {
+      toast.success('Chip removed.');
+    }
+  }
+
   if (loading) return <Frame>Loading…</Frame>;
   if (error) return <Frame>{error}</Frame>;
 
@@ -310,6 +363,74 @@ export default function Settings() {
             </button>
           </div>
         )}
+      </section>
+
+      <section className="section panel panel-pad">
+        <h2 className="eyebrow">Steering chips</h2>
+        <p className="form-hint" style={{ marginTop: 0 }}>
+          One-tap instructions on the chat composer. A chip steers the next reply only —
+          it is never stored in the scene — and your chips are shown ahead of the
+          built-in ones.
+        </p>
+
+        {customSteers.map((chip, index) => (
+          <div key={`${index}:${chip.label}`} className="form-row">
+            <span className="form-label">
+              <span>{chip.label}</span>
+              <span className="form-hint">{chip.text}</span>
+            </span>
+            <button
+              type="button"
+              className="btn"
+              disabled={savingChips}
+              onClick={() => void removeChip(index)}
+            >
+              Remove
+            </button>
+          </div>
+        ))}
+        {customSteers.length === 0 && (
+          <p className="form-hint" style={{ marginTop: 6 }}>
+            No custom chips yet — the composer shows the six built-in ones.
+          </p>
+        )}
+
+        <div className="form-row">
+          <span className="form-label">
+            <span>Add a chip</span>
+            <span className="form-hint">
+              The label is what you tap; the prompt is the instruction the model receives.
+            </span>
+          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              value={chipLabel}
+              onChange={(event) => setChipLabel(event.target.value)}
+              placeholder="Label — e.g. Shorter responses"
+              className="field"
+              style={{ flex: '0 1 200px', minWidth: 0 }}
+              maxLength={40}
+            />
+            <input
+              value={chipPrompt}
+              onChange={(event) => setChipPrompt(event.target.value)}
+              placeholder="Prompt — e.g. Keep this turn under half its usual length."
+              className="field"
+              style={{ flex: '1 1 240px', minWidth: 0 }}
+              maxLength={400}
+            />
+            <button
+              type="button"
+              className="btn"
+              disabled={
+                savingChips || chipLabel.trim().length === 0 || chipPrompt.trim().length === 0
+              }
+              onClick={() => void addChip()}
+            >
+              Add
+            </button>
+          </div>
+        </div>
       </section>
 
       <section className="section panel panel-pad">

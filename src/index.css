@@ -3533,17 +3533,58 @@ input[type="checkbox"] {
 /* ---------------------------------------------------------------- steering */
 
 /* One-tap instructions for the next turn only, as a scrollable row inside the composer —
-   inside so the measured composer height (consult dock, jump pill) carries the row. */
+   inside so the measured composer height (consult dock, jump pill) carries the row. The
+   row shares the input column's measure and auto margins so both rows read as one object;
+   the chips stay left-aligned within it, because centring varying-width chips would make
+   the row's start drift as chips come and go. */
 .steer-row {
   display: flex;
   gap: 6px;
   overflow-x: auto;
   scrollbar-width: none;
   padding-bottom: 8px;
+  max-width: min(calc(var(--measure) + var(--avatar) + 12px), 100%);
+  margin: 0 auto;
 }
 
 .steer-row::-webkit-scrollbar {
   display: none;
+}
+
+/* The row hides its scrollbar, so chips past the fold are invisible unless an edge says
+   something is there. The mask fades only the edges that currently hide content —
+   `data-fade-start` / `data-fade-end` are measured by the chat screen — so a fully
+   scrolled row shows its last chip unshaded. */
+.steer-row[data-fade-end='true'] {
+  -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 24px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 24px), transparent 100%);
+}
+
+.steer-row[data-fade-start='true'][data-fade-end='false'] {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 100%);
+}
+
+.steer-row[data-fade-start='true'][data-fade-end='true'] {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 18px,
+    #000 calc(100% - 24px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 18px,
+    #000 calc(100% - 24px),
+    transparent 100%
+  );
+}
+
+.steer-row[data-fade-start='false'][data-fade-end='false'] {
+  -webkit-mask-image: none;
+  mask-image: none;
 }
 
 .steer-chip {
