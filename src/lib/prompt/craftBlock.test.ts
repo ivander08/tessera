@@ -17,11 +17,16 @@ import { DEFAULT_CRAFT, type Craft } from '../scene/setup';
  * positions are not interchangeable and are tested separately.
  */
 describe('renderCraftBlock', () => {
-  test('the default craft emits the quality rules and the person', () => {
+  test('the default craft emits the quality rules and leaves the person to the card', () => {
     const block = renderCraftBlock(DEFAULT_CRAFT);
     expect(block).toContain('<craft');
     expect(block).toContain('<craft_antislop>');
-    expect(block).toContain('"you"');
+    // The default person is the card's: a default of 'second' made a third-person card
+    // address the reader as "you". The wizard still chooses one per chat.
+    expect(block).not.toContain('Address the reader as "you"');
+    expect(renderCraftBlock({ ...DEFAULT_CRAFT, pov: 'second' })).toContain(
+      'Address the reader as "you"',
+    );
     // The policy is NOT here: it belongs in the tail, emitted by `renderContentPolicy`.
     expect(block).not.toContain('<craft_content>');
   });
@@ -132,8 +137,8 @@ describe('renderCraftBlock', () => {
   test('changing any prefix field changes the output', () => {
     const base = renderCraftBlock(DEFAULT_CRAFT);
     const variants: Craft[] = [
-      { ...DEFAULT_CRAFT, pov: 'off' },
-      { ...DEFAULT_CRAFT, register: 'literary' },
+      { ...DEFAULT_CRAFT, pov: 'second' },
+      { ...DEFAULT_CRAFT, register: 'cinematic' },
       { ...DEFAULT_CRAFT, antiSlop: false },
       { ...DEFAULT_CRAFT, interiority: false },
       { ...DEFAULT_CRAFT, earnedKnowledge: false },

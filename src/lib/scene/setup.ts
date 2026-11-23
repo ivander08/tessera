@@ -196,15 +196,26 @@ export interface Craft {
   threads: boolean;
 }
 
+/**
+ * The default is a novel voice, not a camera.
+ *
+ * These are opinionated on purpose, because every `'off'` enum emits nothing and leaves
+ * the model to its own default — which is the clipped, reactive register that reads as a
+ * narrator with no personality. `literary` + `fid` give the narration a temperament;
+ * `full` density and `medium` length give it room to use one. The person stays `'off'`
+ * because only the card knows whether the scene is second-person or a third-person novel;
+ * pinning `'second'` made a third-person card address the reader as "you".
+ *
+ * `contentPolicy` and `vocalisation` stay on: they are content and sound rules rather than
+ * prose style, and the app ships them on deliberately (see `craftBlock.ts` on position).
+ */
 export const DEFAULT_CRAFT: Craft = {
   contentPolicy: true,
-  pov: 'second',
-  register: 'cinematic',
+  pov: 'off',
+  register: 'literary',
   antiSlop: true,
   interiority: true,
-  // Off by default: this changes how every reply is written, and a new behaviour must not
-  // silently rewrite chats that were working.
-  povInteriority: 'off',
+  povInteriority: 'sometimes',
   earnedKnowledge: true,
   independentNpcs: true,
   vocalisation: true,
@@ -221,16 +232,16 @@ export const DEFAULT_CRAFT: Craft = {
   momentum: 'active',
   tense: 'off',
   showTell: 'balanced',
-  narrativeDistance: 'close',
-  responseLength: 'adaptiveMedium',
-  density: 'standard',
+  narrativeDistance: 'fid',
+  responseLength: 'medium',
+  density: 'full',
   rhythm: 'dynamic',
-  figurative: 'adaptive',
-  vocabulary: 'adaptive',
+  figurative: 'moderate',
+  vocabulary: 'literary',
   profanity: 'natural',
   dialogueFrequency: 'balanced',
   dialogueNaturalism: 'casual',
-  dialogueDepth: 'realistic',
+  dialogueDepth: 'layered',
   changeResistance: 'adaptive',
   traitAdherence: 'natural',
   consequence: 'realistic',
