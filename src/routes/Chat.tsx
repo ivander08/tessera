@@ -319,21 +319,26 @@ export default function Chat() {
     return () => window.removeEventListener('resize', measureSteerFades);
   }, [measureSteerFades, steers.length]);
 
-  // Drag to scroll the row with the mouse. Touch needs none of this — an overflow row
-  // drags natively there — so only mouse pointers are handled, leaving pen and touch to
-  // the browser. A drag that ends over a chip must not also steer: the row's capture-phase
-  // click handler swallows exactly the click that follows a real drag (5px threshold),
-  // which keeps a lazy click a click.
-  const steerDrag = useRef({ startX: 0, startScrollLeft: 0, moved: false });
+  // Drag to scroll the row, with click suppression for every pointer kind.
+  //
+  // Mouse: the row is scrolled by hand (manual scrollLeft, pointer captured at the drag
+  // threshold). Touch and pen: the row pans ITSELF natively, so the handlers here only
+  // track the gesture — once a press has clearly become a horizontal drag (10px and more
+  // sideways than down, so a resting thumb or a stray diagonal never counts), the click the
+  // browser may still fire at release is swallowed. That is the reported mobile bug: a
+  // drag that ended on a chip "snapped" the chip armed even though the reader was scrolling.
+  const steerDrag = useRef({ startX: 0, startY: 0, startScrollLeft: 0, moved: false, kind: '' });
   const suppressSteerClick = useRef(false);
   const onSteerPointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
-      if (event.pointerType !== 'mouse' || event.button !== 0) return;
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
       suppressSteerClick.current = false;
       steerDrag.current = {
         startX: event.clientX,
+        startY: event.clientY,
         startScrollLeft: event.currentTarget.scrollLeft,
         moved: false,
+        kind: event.pointerType,
       };
     },
     [],
@@ -341,11 +346,21 @@ export default function Chat() {
   const onSteerPointerMove = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
       const state = steerDrag.current;
-      if (!state || (!state.moved && Math.abs(event.clientX - state.startX) < 5)) return;
+      if (!state) return;
+      const dx = event.clientX - state.startX;
       if (!state.moved) {
+        const threshold = state.kind === 'mouse' ? 5 : 10;
+        if (Math.abs(dx) <= threshold || Math.abs(dx) <= Math.abs(event.clientY - state.startY)) {
+          return;
+        }
         state.moved = true;
         suppressSteerClick.current = true;
         event.currentTarget.dataset.dragging = 'true';
+        if (state.kind !== 'mouse') {
+          // Touch and pen pan the row natively — implicit pointer capture keeps these
+          // events arriving at the row, and there is nothing to scroll by hand.
+          return;
+        }
         // Captured here, not on pointerdown: capturing the row retargets the whole
         // pointer stream, so the click generated at release lands on the row instead of
         // the chip under it — capturing from the start turned every chip press into a
@@ -354,18 +369,21 @@ export default function Chat() {
         event.currentTarget.setPointerCapture(event.pointerId);
       }
       event.preventDefault();
-      event.currentTarget.scrollLeft = state.startScrollLeft - (event.clientX - state.startX);
+      event.currentTarget.scrollLeft = state.startScrollLeft - dx;
     },
     [],
   );
-  const onSteerPointerEnd = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (steerDrag.current.moved) {
-      steerDrag.current.moved = false;
-      event.currentTarget.dataset.dragging = 'false';
-      measureSteerFades();
-    }
-    steerDrag.current = { startX: 0, startScrollLeft: 0, moved: false };
-  }, [measureSteerFades]);
+  const onSteerPointerEnd = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (steerDrag.current.moved) {
+        steerDrag.current.moved = false;
+        event.currentTarget.dataset.dragging = 'false';
+        measureSteerFades();
+      }
+      steerDrag.current = { startX: 0, startY: 0, startScrollLeft: 0, moved: false, kind: '' };
+    },
+    [measureSteerFades],
+  );
   const onSteerClickCapture = useCallback((event: React.MouseEvent) => {
     if (!suppressSteerClick.current) return;
     event.preventDefault();
