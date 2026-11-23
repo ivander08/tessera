@@ -18,6 +18,15 @@ export interface ConsultMessage {
 
 export type ConsultMode = 'draft' | 'consult';
 
+/** One question a turn asks, as the client renders it. */
+export interface ConsultQuestion {
+  text: string;
+  /** Two to four short suggested answers. */
+  options: string[];
+  /** Index into `options` of the answer it recommends. */
+  recommended: number;
+}
+
 /** What the consultant says back. One shape covers all three situations. */
 export interface ConsultTurn {
   /** The prose the consultant says. Always present. */
@@ -30,6 +39,16 @@ export interface ConsultTurn {
     /** Index into `options` of the answer it recommends. */
     recommended: number;
   } | null;
+  /**
+   * Every question the turn asks, in the order the reader answers them.
+   *
+   * One turn may ask one to three questions: the reader answers them one by one in the
+   * interface, and the answers reach the model together in the next user turn — the agent
+   * pattern, not one round-trip per question. Always present; empty when the turn asks
+   * nothing. `question` is this list's first entry, kept so the single-question shape the
+   * earlier contract produced still reads the same everywhere.
+   */
+  questions: ConsultQuestion[];
   /**
    * Set when a CONSULT turn proposes a revision.
    *
@@ -145,24 +164,28 @@ export function systemPrompt(mode: ConsultMode, card: ParsedCard | null): string
 
     `# Method
 
-Ask exactly ONE question at a time and wait for the answer. Never batch questions.
-Every question carries two to four short suggested answers, with "recommended" naming the one
-you would pick. The user may always answer in their own words instead of picking an option —
-the options are a shortcut, not a limit.
-Ask at most ${MAX_QUESTIONS} questions. The moment you have enough to write a card that plays,
-stop asking and write it.
+Ask one to THREE questions per turn, as an ordered list the reader answers one by one: the
+interface collects every answer before your next turn runs, so a batch costs the reader seconds
+instead of one round-trip each. Every question carries two to four short suggested answers,
+with "recommended" naming the one you would pick. The reader may always answer in their own
+words instead of picking an option — the options are a shortcut, not a limit.
+Batch only questions that stand alone: a question whose answer would change what the NEXT
+question should be waits for the next turn.
+Ask at most ${MAX_QUESTIONS} questions across the whole interview. The moment you have enough
+to write a card that plays, stop asking and write it.
 Prefer asking about the thing that most changes the card over the thing that is easiest to
 answer. Never ask for something the card does not need.
 
 ${mode === 'draft'
-  ? `Every turn must either ask a question or propose a card — one of the two, always. A turn
+  ? `Every turn must either ask questions or propose a card — one of the two, always. A turn
 that does neither strands the user with nothing to click and nothing to answer, so it is never a
 valid reply. If you find you have nothing left to ask, that is the signal to write the card:
 propose it now rather than describing what you would write.`
-  : `Every turn must give the user something: an answer to what they asked, a change, or the one
-question whose answer would change what you write. An answer that changes nothing is a complete,
-valid turn when the card needs nothing — say so plainly instead of inventing a question to fill
-the space. Never pair a real answer with a question that is only there to have one.`}`,
+  : `Every turn must give the user something: an answer to what they asked, a change, or the
+questions whose answers would change what you write. An answer that changes nothing is a complete,
+valid turn when the card needs nothing — say so plainly instead of inventing a
+question to fill the space. Never pair a real answer with a question that is only there to
+have one.`}`,
 
     `# What to find out, in rough order of leverage
 
@@ -216,10 +239,18 @@ You do it by listing EDITS, not by re-typing the card. An edit names one field a
 operation, and the app applies it to the card the user is looking at. That is why you never
 need to repeat text you are not changing: an untouched field stays exactly as it was.
 
-Openings are numbered from 0: index 0 is "first_mes", index 1 is the first alternate, and so
-on — the same "Opening 1"/"Opening 2" the user sees, shifted by one. Leave every other index
-alone; an index you do not mention is not touched, and there is no way to delete an opening by
-omitting it.
+Openings are numbered in the UI from 1: "Opening 1" is "first_mes", "Opening 2" is the first
+alternate. On the wire the two lists differ, and mixing them up is how an opening edit gets
+dropped:
+
+- "alternate_greetings" holds ONLY the alternates, indexed from 0: [0] is "Opening 2", [1] is
+  "Opening 3". To ADD a new alternate, "replace" with "index" equal to the CURRENT number of
+  alternates — count them in the card above; that appends one. An index past the end also
+  appends, so a miscount cannot silently drop the opening the reader asked for.
+- "greeting_states" is index-aligned with the OPENINGS: [0] is "first_mes"'s scene, [1] is the
+  first alternate's.
+Leave every other index alone; an index you do not mention is not touched, and there is no way
+to delete an opening by omitting it.
 
 When the user asks for a scene change, edit "greeting_states" rather than folding the time into
 the greeting's prose: the prose is what the model reads, and the scene is what the narrator
@@ -231,15 +262,16 @@ reads.`,
 Return ONLY a JSON object, with "say" as the FIRST key:
 {
   "say": string,
-  "question": { "text": string, "options": string[], "recommended": number } | null,
+  "questions": [ { "text": string, "options": string[], "recommended": number } ] | null,
   "card": ${CARD_KEYS} | null
 }
 
 - "say" comes first, always. It is streamed to the user as you write it.
-- Set "question" while you still need an answer. Set it to null once you do not.
-- Set "card" only when you are proposing the finished draft. When you set "card", "question"
-  is null.
-- Never set both "question" and "card".
+- "questions" holds one to three entries, in the order the reader answers them. Set it to
+  null (or an empty list) once you have nothing left to ask.
+- Set "card" only when you are proposing the finished draft. When you set "card", "questions"
+  is empty.
+- Never set both "questions" and "card".
 - One of them is ALWAYS set. A draft turn that sets neither is not a valid reply: the user
   has nothing to answer and nothing to accept. If the interview has run its course, set "card".
 - **If your "say" says you are making a card — "here it is", "drafted" — you MUST set
@@ -251,7 +283,7 @@ No prose outside the JSON. No code fences.`
 Return ONLY a JSON object, with "say" as the FIRST key:
 {
   "say": string,
-  "question": { "text": string, "options": string[], "recommended": number } | null,
+  "questions": [ { "text": string, "options": string[], "recommended": number } ] | null,
   "changes": [
     { "field": string, "op": "replace" | "append" | "add" | "remove", "index"?: number, "value"?: any }
   ]
@@ -277,14 +309,19 @@ The operations:
 Examples:
   {"field":"description","op":"append","value":"- Keeps a crate of vinyl under the bed."}
   {"field":"post_history_instructions","op":"replace","value":"..."}
+  {"field":"alternate_greetings","op":"replace","index":0,"value":"..."}
   {"field":"alternate_greetings","op":"replace","index":2,"value":"..."}
-  {"field":"greeting_states","op":"replace","index":2,"value":{"time":"Friday, 22:40"}}
+  {"field":"greeting_states","op":"replace","index":1,"value":{"time":"Friday, 22:40"}}
   {"field":"tags","op":"add","value":"slow-burn"}
 
+The opening examples on a card with two alternates: the first edits the FIRST alternate
+("Opening 2"); the second — index 2 equals the current count — APPENDS a third alternate
+("Opening 4"); the third edits the first alternate's scene, which is "greeting_states"[1].
+
 Rules:
-- Set "question" while you still need an answer; set "changes" when you are making the change.
+- Set "questions" while you still need answers; set "changes" when you are making the change.
   Never both.
-- Making NO change is a legal, common answer: return "question": null and "changes": [].
+- Making NO change is a legal, common answer: return "questions": null and "changes": [].
   A critique that finds nothing to change is exactly this.
 - **If your "say" says you are making a change — "adding", "I've added", "here it is",
   "updated", "appended" — you MUST return the edits.** A turn whose prose announces a revision
@@ -767,14 +804,14 @@ export function parseConsultTurn(text: string, revising?: ParsedCard | null): Co
     }
 
     if (say.length === 0) throw new Error('the model returned no reply.');
-    return { say, question: null, card: null };
+    return { say, questions: [], question: null, card: null };
   }
 
   // A bare JSON string is the model having answered `say` and nothing else.
   if (typeof parsed.value === 'string') {
     const say = parsed.value.trim();
     if (say.length === 0) throw new Error('the model returned no reply.');
-    return { say, question: null, card: null };
+    return { say, questions: [], question: null, card: null };
   }
 
   const record = asRecord(parsed.value);
@@ -786,7 +823,7 @@ export function parseConsultTurn(text: string, revising?: ParsedCard | null): Co
   const say = asString(record.say);
   if (say.trim().length === 0) throw new Error('the model returned no reply.');
 
-  const question = parseQuestion(record.question);
+  const questions = parseQuestions(record);
   // `revising` supplies the name for a card the model returned without one; a draft has none.
   const card =
     record.card === null || record.card === undefined
@@ -794,7 +831,13 @@ export function parseConsultTurn(text: string, revising?: ParsedCard | null): Co
       : toParsedCard(record.card, revising?.name);
   const changes = readEdits(record.changes);
 
-  return { say, question, card, ...(changes.length > 0 ? { changes } : {}) };
+  return {
+    say,
+    questions,
+    question: questions[0] ?? null,
+    card,
+    ...(changes.length > 0 ? { changes } : {}),
+  };
 }
 
 /** The parsed reply, or a flag saying the text is not JSON at all. */
@@ -924,7 +967,13 @@ function readEdits(value: unknown): CardEdit[] {
   return edits;
 }
 
-function parseQuestion(value: unknown): ConsultTurn['question'] {
+/**
+ * One question off the wire, validated.
+ *
+ * A question with nothing to click is not a question; the free-text box alone is not what
+ * the caller renders, so it collapses rather than returning an unanswerable prompt.
+ */
+function parseOneQuestion(value: unknown): ConsultQuestion | null {
   if (value === null || value === undefined) return null;
   const record = asRecord(value);
   if (!record) return null;
@@ -934,8 +983,6 @@ function parseQuestion(value: unknown): ConsultTurn['question'] {
     .map((option) => option.trim())
     .filter((option) => option.length > 0);
 
-  // A question with nothing to click is not a question; the free-text box alone is not what
-  // the caller renders, so this collapses rather than returning an unanswerable prompt.
   if (options.length === 0) return null;
 
   const raw = record.recommended;
@@ -945,6 +992,24 @@ function parseQuestion(value: unknown): ConsultTurn['question'] {
       : 0;
 
   return { text, options, recommended };
+}
+
+/**
+ * Every question a turn asks, in the order the reader answers them.
+ *
+ * The current contract puts a list under `"questions"`. The earlier one put a single object
+ * under `"question"`, and a model that half-learned the old prompt still sends it, so it is
+ * read as a list of one. Entries that fail validation are dropped individually — one broken
+ * question must not discard the answers the turn was waiting on.
+ */
+function parseQuestions(record: Record<string, unknown>): ConsultQuestion[] {
+  if (Array.isArray(record.questions)) {
+    return record.questions
+      .map(parseOneQuestion)
+      .filter((question): question is ConsultQuestion => question !== null);
+  }
+  const single = parseOneQuestion(record.question);
+  return single ? [single] : [];
 }
 
 /** The stored names of the prose fields a reply can revise. */
@@ -1064,9 +1129,20 @@ export function applyEdits(
         if (typeof index !== 'number' || !Number.isInteger(index) || typeof edit.value !== 'string') {
           return false;
         }
-        if (index < 0 || index > greetings.length) return false;
-        if (index === greetings.length) greetings = [...greetings, edit.value];
-        else greetings = greetings.map((entry, at) => (at === index ? (edit.value as string) : entry));
+        if (index < 0) return false;
+        // An index past the end APPENDS rather than drops. Measured failure: the model was
+        // told openings are numbered with "first_mes" at 0, so on a card with no alternates
+        // it sent index 1 for "the first alternate", the edit was refused, and the reader's
+        // workaround was adding an empty alternate in the form by hand first. "Replace at
+        // index == length" already meant append, so a miscount lands in the same place
+        // instead of silently discarding the opening the reader asked for — the same
+        // leniency `greeting_states` below already has with its padding.
+        const at = Math.min(index, greetings.length);
+        if (at === greetings.length) greetings = [...greetings, edit.value];
+        else
+          greetings = greetings.map((entry, position) =>
+            position === at ? (edit.value as string) : entry,
+          );
         listsTouched = true;
         return true;
       }

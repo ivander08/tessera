@@ -676,7 +676,7 @@ describe('the consultant voice', () => {
 
   test('keeps the draft contract strict: a draft turn must ask or propose', () => {
     const prompt = systemPrompt('draft', null);
-    expect(prompt).toContain('ask a question or propose a card');
+    expect(prompt).toContain('ask questions or propose a card');
     expect(prompt).not.toContain('changes nothing is a complete');
   });
 });

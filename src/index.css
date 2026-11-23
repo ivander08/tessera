@@ -2964,10 +2964,14 @@ input[type="checkbox"] {
 
 /* Full screen on a phone: there is no form worth peeking at behind it, so a resizable sheet
    was a height the reader had to choose and a drag that never rested where the finger
-   stopped. The dragged desktop offset is discarded here, as it always was. */
+   stopped. The dragged desktop offset is discarded here, as it always was. `width` must go
+   too: the base rule's `width: min(440px, …)` with `inset: 0` over-constrains the box, and
+   in LTR the ignored side is `right` — which left a strip of the page behind showing on the
+   phone's right edge. */
 @media (max-width: 1000px) {
   .consult-dock {
     inset: 0;
+    width: auto;
     height: auto;
     border-radius: 0;
     border: 0;
@@ -3200,6 +3204,31 @@ input[type="checkbox"] {
   display: block;
   white-space: normal;
   color: inherit;
+}
+
+/* The rest of a turn's batch, above and below the active question. A turn may ask one to
+   three questions and the reader answers them one by one, so the queue shows where they are:
+   answered rows carry the answer that will be sent, waiting rows stay dim. */
+.consult-queue {
+  margin: 0;
+  padding: 0 0 0 20px;
+  display: grid;
+  gap: 8px;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--ink-dim);
+}
+
+.consult-queue + .consult-queue,
+.consult-queue + .consult-question {
+  margin-top: 12px;
+}
+
+.consult-queue-done .consult-queue-answer {
+  display: block;
+  color: var(--ink-faint);
+  white-space: pre-wrap;
 }
 
 .consult-option {

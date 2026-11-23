@@ -432,9 +432,65 @@ describe('parseConsultTurn', () => {
     expect(turn.question).toBeNull();
   });
 
+  test('reads a turn that asks several questions, and keeps the first as `question`', () => {
+    // A turn may ask one to three questions; the reader answers them one by one and the
+    // answers reach the model together. The first is mirrored into the singular field the
+    // earlier contract read.
+    const turn = parseConsultTurn(
+      JSON.stringify({
+        say: 'Three things decide this card:',
+        questions: [
+          { text: 'How do they speak?', options: ['Clipped', 'Warm'], recommended: 1 },
+          { text: 'What do they want?', options: ['Escape', 'Belong'], recommended: 0 },
+        ],
+        card: null,
+      }),
+    );
+
+    expect(turn.questions).toHaveLength(2);
+    expect(turn.questions[1]).toEqual({
+      text: 'What do they want?',
+      options: ['Escape', 'Belong'],
+      recommended: 0,
+    });
+    expect(turn.question).toEqual(turn.questions[0]);
+    expect(turn.card).toBeNull();
+  });
+
+  test('still reads the single-question shape as a list of one', () => {
+    // A model that half-learned the old prompt sends `"question"`, and a one-question turn
+    // is what most turns are — the old shape must keep parsing into the new one.
+    const turn = parseConsultTurn(
+      JSON.stringify({
+        say: 'One thing:',
+        question: { text: 'Which?', options: ['a', 'b'], recommended: 0 },
+        card: null,
+      }),
+    );
+    expect(turn.questions).toHaveLength(1);
+    expect(turn.questions[0]).toEqual(turn.question!);
+  });
+
+  test('a broken entry in a question list is dropped, not fatal', () => {
+    // One malformed question must not discard the answers the turn was waiting on.
+    const turn = parseConsultTurn(
+      JSON.stringify({
+        say: 'Two things:',
+        questions: [
+          { text: 'Good?', options: ['Yes', 'No'], recommended: 0 },
+          'not even an object',
+          { text: 'No options here', options: [], recommended: 0 },
+        ],
+        card: null,
+      }),
+    );
+    expect(turn.questions).toHaveLength(1);
+    expect(turn.questions[0].text).toBe('Good?');
+  });
+
   test('a turn with neither a question nor a card is legal — it is just talking', () => {
     const turn = parseConsultTurn(JSON.stringify({ say: 'Nothing to change here.', question: null, card: null }));
-    expect(turn).toEqual({ say: 'Nothing to change here.', question: null, card: null });
+    expect(turn).toEqual({ say: 'Nothing to change here.', questions: [], question: null, card: null });
   });
 
   test('a reply with no say throws', () => {
@@ -901,15 +957,60 @@ describe('applyEdits', () => {
 
   test('a bad edit is dropped and the good ones still apply', () => {
     // A rejection at the first bad line would ship nothing at all, which is the failure mode
-    // the whole edit contract exists to remove.
+    // the whole edit contract exists to remove. `greeting_states` with a non-object value is
+    // the stand-in bad line: an alternate index PAST THE END is no longer bad — it appends,
+    // which is the test below.
     const result = applyEdits(base, [
       { field: 'nonsense', op: 'replace', value: 'x' },
       { field: 'description', op: 'append', value: 'Added.' },
-      { field: 'alternate_greetings', op: 'replace', index: 99, value: 'x' },
+      { field: 'greeting_states', op: 'replace', index: 0, value: 'not an object' },
     ]);
     expect(result.applied).toBe(1);
     expect(result.dropped).toBe(2);
     expect(result.card.description).toContain('Added.');
+  });
+
+  test('an alternate index past the end appends instead of dropping the opening', () => {
+    // Measured failure behind this: the model was told openings are numbered with "first_mes"
+    // at 0, so on a card with no alternates it sent index 1 for "the first alternate", the
+    // edit was refused, and the reader's workaround was adding an empty alternate in the form
+    // by hand before asking. Appending is also what "index == length" already meant, so a
+    // miscount lands in the same place.
+    //
+    // `base` carries two alternates ('Second.', 'Third.').
+    const replaced = applyEdits(base, [
+      { field: 'alternate_greetings', op: 'replace', index: 1, value: 'Rewritten.' },
+    ]);
+    expect(replaced.applied).toBe(1);
+    expect(replaced.card.alternateGreetings).toEqual(['Second.', 'Rewritten.']);
+
+    // At the current count — the "add a new alternate" edit — appends.
+    const added = applyEdits(base, [
+      { field: 'alternate_greetings', op: 'replace', index: 2, value: 'A third alternate.' },
+    ]);
+    expect(added.applied).toBe(1);
+    expect(added.card.alternateGreetings).toEqual(['Second.', 'Third.', 'A third alternate.']);
+
+    // An index past the end lands in the same place instead of being dropped.
+    const far = applyEdits(base, [
+      { field: 'alternate_greetings', op: 'replace', index: 99, value: 'Still lands at the end.' },
+    ]);
+    expect(far.applied).toBe(1);
+    expect(far.card.alternateGreetings).toEqual(['Second.', 'Third.', 'Still lands at the end.']);
+
+    // The reported scenario itself: no alternates, and the model's miscounted "first
+    // alternate" edit (index 1) becomes the first alternate rather than nothing.
+    const empty = applyEdits(card(), [
+      { field: 'alternate_greetings', op: 'replace', index: 1, value: 'The first alternate.' },
+    ]);
+    expect(empty.applied).toBe(1);
+    expect(empty.card.alternateGreetings).toEqual(['The first alternate.']);
+
+    // A negative index is still refused: it names nothing the reader can see.
+    const negative = applyEdits(base, [
+      { field: 'alternate_greetings', op: 'replace', index: -1, value: 'x' },
+    ]);
+    expect(negative).toMatchObject({ applied: 0, dropped: 1 });
   });
 
   test('append is refused on a list field, and replace is refused on tags', () => {

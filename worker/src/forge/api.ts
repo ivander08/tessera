@@ -39,7 +39,9 @@ export type ConsultFrame<T = ConsultTurn> =
  */
 export function phaseOf(buffer: string): ConsultPhase {
   if (/"card"\s*:\s*\{/.test(buffer)) return 'card';
-  if (/"question"\s*:\s*\{/.test(buffer)) return 'question';
+  // The question phase recognizes both the singular key the earlier contract used and the
+  // list the current one asks for.
+  if (/"question"\s*:\s*\{/.test(buffer) || /"questions"\s*:\s*\[/.test(buffer)) return 'question';
   return 'say';
 }
 

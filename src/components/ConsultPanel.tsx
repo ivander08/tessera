@@ -24,14 +24,24 @@ export interface CardEdit {
   value?: unknown;
 }
 
-/** The parsed reply. Mirrors `ConsultTurn` in `worker/src/forge/consult.ts`. */
+/** One question a turn asks. Mirrors `ConsultQuestion` in `worker/src/forge/consult.ts`. */
+export interface ConsultQuestion {
+  text: string;
+  options: string[];
+  recommended: number;
+}
+
+/**
+ * The parsed reply. Mirrors `ConsultTurn` in `worker/src/forge/consult.ts`.
+ *
+ * `questions` is the authoritative list — one turn may ask one to three questions, which the
+ * reader answers one by one before the next turn runs. The wire also still carries the
+ * singular `question` from the earlier contract, so `questionsOf` below normalizes both.
+ */
 export interface ConsultTurn {
   say: string;
-  question: {
-    text: string;
-    options: string[];
-    recommended: number;
-  } | null;
+  questions: ConsultQuestion[];
+  question: ConsultQuestion | null;
   card: ParsedCard | null;
   /** The edits the reply carried, before they were applied. */
   changes?: CardEdit[];
@@ -39,6 +49,12 @@ export interface ConsultTurn {
   dropped?: number;
   /** Why a returned card was refused, when one was. */
   refused?: string;
+}
+
+/** The turn's questions, from either wire shape. */
+function questionsOf(turn: { questions?: ConsultQuestion[]; question?: ConsultQuestion | null }) {
+  if (Array.isArray(turn.questions)) return turn.questions;
+  return turn.question ? [turn.question] : [];
 }
 
 /**
@@ -51,8 +67,13 @@ export interface ConsultTurn {
  */
 export interface ConsultSession {
   messages: ConsultMessage[];
-  /** The question or proposed card awaiting an answer, if any. */
+  /** The questions or proposed card awaiting answers, if any. */
   turn: ConsultTurn | null;
+  /**
+   * Answers already given to `turn.questions`, in order. A batch is answered here, one by
+   * one, and reaches the model together on the turn that completes it.
+   */
+  answers: string[];
   /** A half-typed answer, kept so closing mid-sentence does not lose it. */
   answer: string;
   /** The opening premise in draft mode, kept for the same reason. */
@@ -61,7 +82,7 @@ export interface ConsultSession {
 
 /** A session with nothing in it, for a fresh consult. */
 export function emptyConsultSession(): ConsultSession {
-  return { messages: [], turn: null, answer: '', brief: '' };
+  return { messages: [], turn: null, answers: [], answer: '', brief: '' };
 }
 
 /** The permanent fields, which is what the token summary is about. */
@@ -170,7 +191,7 @@ export function ConsultPanel({
     onPointerCancel: (event: ReactPointerEvent<HTMLElement>) => void;
   };
 }) {
-  const { messages, turn, answer, brief } = session;
+  const { messages, turn, answers: answersState, answer, brief } = session;
   const [pending, setPending] = useState('');
   const [busy, setBusy] = useState(false);
   /**
@@ -249,16 +270,20 @@ export function ConsultPanel({
   // failure the reader has to scroll to find reads as "nothing happened".
   useEffect(() => {
     scrollToBottom();
-  }, [pending, messages.length, turn, failure, busy]);
+  }, [pending, messages.length, turn, answersState, failure, busy]);
 
+  /**
+   * Sends a completed turn to the model.
+   *
+   * The user's turn is appended BEFORE the request so the transcript shows what was asked
+   * while the answer streams, rather than after it.
+   */
   async function send(content: string) {
     const text = content.trim();
-    if (busy) return;
+    if (busy || text.length === 0) return;
 
-    // The user's turn is appended BEFORE the request so the transcript shows what was asked
-    // while the answer streams, rather than after it.
     const next = [...messages, { role: 'user' as const, content: text }];
-    patch({ messages: next, answer: '', turn: null });
+    patch({ messages: next, answer: '', turn: null, answers: [] });
     setPending('');
     setFailure(null);
     setPhase('say');
@@ -300,7 +325,11 @@ export function ConsultPanel({
           }
           const parsed = frame.turn as ConsultTurn;
           settled = true;
-          patch({ messages: [...next, { role: 'assistant', content: parsed.say }], turn: parsed });
+          patch({
+            messages: [...next, { role: 'assistant', content: parsed.say }],
+            turn: { ...parsed, questions: questionsOf(parsed) },
+            answers: [],
+          });
           setPending('');
         },
         { signal: controller.signal },
@@ -321,6 +350,38 @@ export function ConsultPanel({
 
   // Closing the pane mid-answer stops the request rather than letting it finish unseen.
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  /**
+   * Records one answer to the turn's active question.
+   *
+   * A batch is answered locally: each answer is stored in the session and the next question
+   * becomes active, and only the LAST answer sends anything — one model turn carrying every
+   * question with its answer, the way a task agent collects a batch of clarifications. A
+   * single question sends its answer alone, exactly as the one-question contract always did,
+   * so nothing about a one-question turn changes on the wire.
+   */
+  function recordAnswer(value: string): void {
+    const questions = turn?.questions ?? [];
+    if (busy || questions.length === 0) return;
+    const text = value.trim();
+    if (text.length === 0) return;
+
+    const answers = [...answersState, text];
+    if (answers.length < questions.length) {
+      patch({ answers });
+      return;
+    }
+    const content =
+      questions.length === 1
+        ? text
+        : questions
+            .map(
+              (question, index) =>
+                `Q${index + 1}: ${question.text}\nA${index + 1}: ${answers[index] ?? ''}`,
+            )
+            .join('\n\n');
+    void send(content);
+  }
 
   async function save(card: ParsedCard) {
     if (!onDone) return;
@@ -353,12 +414,19 @@ export function ConsultPanel({
     onApply?.(proposed);
     // The proposed card is spent once applied; the transcript stays, so the user can keep
     // asking about the card they just changed.
-    patch({ turn: null });
+    patch({ turn: null, answers: [] });
     toast.success('Applied to the form — nothing is saved until you press Save.');
   }
   // Deliberately NOT gated on `busy`: the row holds the Stop button, and hiding it the
   // instant a stream starts is exactly when the reader wants it.
   const canType = messages.length > 0 || mode === 'consult';
+
+  // The turn's question batch, as the interview state holds it: what is answered, which
+  // question is active, and what is still waiting behind it.
+  const queue = turn?.questions ?? [];
+  const answeredCount = answersState.length;
+  const activeQuestion = answeredCount < queue.length ? queue[answeredCount] : null;
+  const upcomingQuestions = queue.slice(answeredCount + 1);
 
   return (
     <section className="consult-pane">
@@ -411,7 +479,8 @@ export function ConsultPanel({
                 <span>What are you making?</span>
               </span>
               <span className="form-hint" style={{ display: 'block', marginBottom: 5 }}>
-                One line is enough — the consultant asks the rest, one question at a time.
+                One line is enough — the consultant asks what it needs, a few questions at a
+                time, and writes the card.
               </span>
               <textarea
                 className="field"
@@ -478,27 +547,52 @@ export function ConsultPanel({
           </span>
         )}
 
-        {turn?.question && !busy && (
+        {queue.length > 0 && !busy && (
           <div className="panel panel-pad">
-            <p className="consult-question">
-              <span className="consult-question-label">{turn.question.text}</span>
-            </p>
-            <div className="consult-options">
-              {turn.question.options.map((option, index) => {
-                const recommended = index === turn.question?.recommended;
-                return (
-                  <button
-                    key={index}
-                    type="button"
-                    className={`btn consult-option${recommended ? ' primary' : ''}`}
-                    onClick={() => void send(option)}
-                  >
-                    <span>{option}</span>
-                    {recommended && <span className="consult-badge">best</span>}
-                  </button>
-                );
-              })}
-            </div>
+            {/* Already answered: kept visible with their answers, so the reader can see how
+                far through the batch they are and what will be sent. */}
+            {answeredCount > 0 && (
+              <ol className="consult-queue">
+                {queue.slice(0, answeredCount).map((question, index) => (
+                  <li key={index} className="consult-queue-done">
+                    <span className="consult-question-label">{question.text}</span>
+                    <span className="consult-queue-answer">{answersState[index]}</span>
+                  </li>
+                ))}
+              </ol>
+            )}
+
+            {activeQuestion && (
+              <>
+                <p className="consult-question">
+                  <span className="consult-question-label">{activeQuestion.text}</span>
+                </p>
+                <div className="consult-options">
+                  {activeQuestion.options.map((option, index) => {
+                    const recommended = index === activeQuestion.recommended;
+                    return (
+                      <button
+                        key={index}
+                        type="button"
+                        className={`btn consult-option${recommended ? ' primary' : ''}`}
+                        onClick={() => recordAnswer(option)}
+                      >
+                        <span>{option}</span>
+                        {recommended && <span className="consult-badge">best</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+
+            {upcomingQuestions.length > 0 && (
+              <ol className="consult-queue" start={answeredCount + 2}>
+                {upcomingQuestions.map((question, index) => (
+                  <li key={index}>{question.text}</li>
+                ))}
+              </ol>
+            )}
           </div>
         )}
 
@@ -508,7 +602,7 @@ export function ConsultPanel({
             forbids and a cheap model does anyway: the prose says "added" and there is no
             diff, no Apply. Rather than leaving the reader to notice, offer the one action
             that resolves it. */}
-        {!busy && mode === 'consult' && turn && !turn.question && !proposed && (
+        {!busy && mode === 'consult' && turn && queue.length === 0 && !proposed && (
           <div className="panel panel-pad">
             <span className="eyebrow">No change proposed</span>
             <p style={{ margin: '6px 0 10px', fontSize: 'var(--text-sm)' }}>
@@ -578,7 +672,9 @@ export function ConsultPanel({
 
       {/* Every question is answerable in the user's own words. The options are a shortcut,
           so the box is present whenever there is anything to answer — and in consult mode it
-          is also the only way in, since there is no premise box to open with. */}
+          is also the only way in, since there is no premise box to open with. While a batch
+          is pending, the box answers the ACTIVE question and the turn sends when the batch
+          is complete. */}
       {canType && (
         <div className="consult-compose">
           {/* A textarea, not an `input`: a premise, a pasted character description or a
@@ -595,12 +691,13 @@ export function ConsultPanel({
               // sends, because a soft keyboard has no Shift. See `handleComposerEnter`.
               handleComposerEnter(event, () => {
                 if (answer.trim().length === 0) return;
-                void send(answer);
+                if (activeQuestion) recordAnswer(answer);
+                else void send(answer);
               });
             }}
             placeholder={
-              turn?.question
-                ? 'Or answer in your own words…'
+              activeQuestion
+                ? `Answer ${answeredCount + 1} of ${queue.length} in your own words…`
                 : mode === 'consult'
                   ? 'Ask about the card…'
                   : 'Say anything else…'
@@ -616,11 +713,15 @@ export function ConsultPanel({
                 abortRef.current?.abort();
                 return;
               }
+              if (activeQuestion) {
+                recordAnswer(answer);
+                return;
+              }
               void send(answer);
             }}
             disabled={!busy && answer.trim().length === 0}
           >
-            {busy ? 'Stop' : 'Send'}
+            {busy ? 'Stop' : activeQuestion ? 'Answer' : 'Send'}
           </button>
         </div>
       )}
