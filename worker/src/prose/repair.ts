@@ -165,7 +165,10 @@ export async function repairReply(
 
   if (repaired.length === 0) throw new Error('the repair came back empty');
   if (repaired === target.content.trim()) throw new Error('the repair did not change anything');
-  if (repaired.length > target.content.length * 2.5) {
+  // A floor, not only a ratio. A short reply (a line and a beat) legitimately corrects
+  // into a paragraph, and a bare 2.5x rule rejected that as expansion. The ratio still
+  // catches a model that turns one reply into a scene.
+  if (repaired.length > Math.max(target.content.length * 2.5, 600)) {
     throw new Error('the repair expanded the reply too far to be a correction');
   }
   if (!preservesDialogue(target.content, repaired)) {

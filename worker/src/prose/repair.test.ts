@@ -133,6 +133,27 @@ describe('repairReply', () => {
     expect(rows[0].active).toBe(0);
   });
 
+  test('accepts a short reply repaired into a paragraph', async () => {
+    const { env, db } = await configured();
+    const chatId = seedChat(db);
+    exec(
+      db,
+      'INSERT INTO chat_scene_setup (chat_id, json, updated_at) VALUES (?, ?, ?)',
+      chatId,
+      JSON.stringify({ ...DEFAULT_SCENE_SETUP, proseGuard: 'button' }),
+      Date.now(),
+    );
+    const messageId = seedMessage(db, chatId, 'm4', 'Her jaw works. "Okay."');
+    // 34 chars in, ~400 out: over the ratio, under the floor. The correction is longer
+    // because the input was a fragment; that is not the expansion the ratio is for.
+    const repaired = 'She looks at the door. ' + 'The room stays quiet. '.repeat(16) + '"Okay."';
+
+    await withReply(repaired, async () => {
+      const result = await repairReply(env, chatId, messageId, { activate: false });
+      expect(result.id).toBeString();
+    });
+  });
+
   test('rejects a repair that paraphrases the dialogue', async () => {
     const { env, db } = await configured();
     const chatId = seedChat(db);
