@@ -1,6 +1,7 @@
 import type { Role } from '../../src/lib/prompt/types';
 import { badRequest, json, notFound, readJson } from './http';
 import { estimateTokens as estimate } from '../../src/lib/tokenEstimate';
+import { learnProseBans } from './prose/learn';
 import { loadPath } from './branch';
 import type { BranchRow } from './branch';
 import { BRANCH_COLUMNS } from './branch';
@@ -48,11 +49,12 @@ interface MessageRow {
   role: Role;
   content: string;
   active: number;
+  source: string | null;
 }
 
 async function loadMessage(env: Env, chatId: string, id: string): Promise<MessageRow | null> {
   return await env.DB.prepare(
-    'SELECT seq, id, chat_id, parent_id, role, content, active FROM messages WHERE id = ? AND chat_id = ?',
+    'SELECT seq, id, chat_id, parent_id, role, content, active, source FROM messages WHERE id = ? AND chat_id = ?',
   )
     .bind(id, chatId)
     .first<MessageRow>();
@@ -123,6 +125,7 @@ async function addVersion(
   role: Role,
   content: string,
   speaker: string | null = null,
+  source: string | null = null,
 ): Promise<string> {
   const id = crypto.randomUUID();
   const now = Date.now();
@@ -135,9 +138,9 @@ async function addVersion(
   await env.DB.batch([
     deactivatePosition(env, chatId, parentId),
     env.DB.prepare(
-      `INSERT INTO messages (id, chat_id, parent_id, role, content, content_tokens, active, speaker, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
-    ).bind(id, chatId, parentId, role, content, estimate(content), speaker, now),
+      `INSERT INTO messages (id, chat_id, parent_id, role, content, content_tokens, active, speaker, source, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+    ).bind(id, chatId, parentId, role, content, estimate(content), speaker, source, now),
     env.DB.prepare('UPDATE chats SET updated_at = ? WHERE id = ?').bind(now, chatId),
   ]);
   return id;
@@ -225,6 +228,22 @@ export async function editMessage(env: Env, req: Request): Promise<Response> {
   )
     .bind(content, estimate(content), message.id, body.chatId)
     .run();
+
+  // The edit is the strongest statement of taste the app gets. Feed it back, but only
+  // from an assistant row: a reader correcting their own line is not teaching the narrator
+  // anything, and learning their phrasing would ban the persona. Never let a learning
+  // failure surface as a failed edit — the text is already saved.
+  try {
+    if (message.role === 'assistant') {
+      await learnProseBans(env, body.chatId, message.content, content);
+    }
+  } catch (error) {
+    console.warn(
+      `[prose] learning from edit failed for chat=${body.chatId}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
 
   return json({ ok: true, id: message.id });
 }
@@ -320,6 +339,7 @@ interface AddSwipeBody {
   chatId?: string;
   id?: string;
   content?: string;
+  source?: string;
 }
 
 /**
@@ -336,11 +356,20 @@ export async function addAlternativeRow(
   targetId: string,
   content: string,
   speaker: string | null = null,
+  source: string | null = null,
 ): Promise<string> {
   const message = await loadMessage(env, chatId, targetId);
   if (!message) throw new Error('message not found');
 
-  return await addVersion(env, chatId, message.parent_id ?? null, message.role, content, speaker);
+  return await addVersion(
+    env,
+    chatId,
+    message.parent_id ?? null,
+    message.role,
+    content,
+    speaker,
+    source,
+  );
 }
 
 /** Appends an alternative to a position without changing which one is active. */
@@ -356,13 +385,53 @@ export async function addAlternative(env: Env, req: Request): Promise<Response> 
   const id = crypto.randomUUID();
   const now = Date.now();
   await env.DB.prepare(
-    `INSERT INTO messages (id, chat_id, parent_id, role, content, content_tokens, active, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
+    `INSERT INTO messages (id, chat_id, parent_id, role, content, content_tokens, active, source, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
   )
-    .bind(id, body.chatId, message.parent_id, message.role, body.content, estimate(body.content), now)
+    .bind(
+      id,
+      body.chatId,
+      message.parent_id,
+      message.role,
+      body.content,
+      estimate(body.content),
+      body.source === 'prose' ? 'prose' : null,
+      now,
+    )
     .run();
 
   return json({ ok: true, id });
+}
+
+/**
+ * Adds a prose-guard version of a reply.
+ *
+ * `activate` is the difference between the button and auto mode. The button is a request,
+ * so the corrected version becomes the one on screen and the model's original stays as the
+ * other swipe. Auto runs while the reader is reading, so it must not swap the text under
+ * them: the version is added inactive and only the swipe count changes.
+ */
+export async function addProseAlternative(
+  env: Env,
+  chatId: string,
+  targetId: string,
+  content: string,
+  activate: boolean,
+): Promise<string> {
+  if (activate) return await addAlternativeRow(env, chatId, targetId, content, null, 'prose');
+
+  const message = await loadMessage(env, chatId, targetId);
+  if (!message) throw new Error('message not found');
+
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT INTO messages (id, chat_id, parent_id, role, content, content_tokens, active, source, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, 0, 'prose', ?)`,
+  )
+    .bind(id, chatId, message.parent_id, message.role, content, estimate(content), now)
+    .run();
+  return id;
 }
 
 /**

@@ -57,6 +57,8 @@ export interface BranchRow {
    * the current version but still swipable to". A removed row is in neither set.
    */
   deleted: number;
+  /** `'prose'` when the prose guard wrote this version; null for the model's own text. */
+  source: string | null;
   created_at: number;
 }
 
@@ -73,7 +75,7 @@ export interface BranchRow {
  */
 export const BRANCH_COLUMNS = `seq, id, parent_id, role, content, content_tokens, active,
                                prompt_tokens, completion_tokens, cached_tokens,
-                               cost_usd, speaker, state_json, deleted, created_at`;
+                               cost_usd, speaker, state_json, deleted, source, created_at`;
 
 /**
  * The single-chat walk down the visible path, as a `WITH RECURSIVE` prefix.

@@ -105,6 +105,9 @@ describe('scene setup: writing', () => {
       memoryMode: DEFAULT_SCENE_SETUP.memoryMode,
       memoryBox: DEFAULT_SCENE_SETUP.memoryBox,
       generateOpeningState: DEFAULT_SCENE_SETUP.generateOpeningState,
+      proseGuard: DEFAULT_SCENE_SETUP.proseGuard,
+      proseBans: DEFAULT_SCENE_SETUP.proseBans,
+      proseSample: DEFAULT_SCENE_SETUP.proseSample,
       craft: DEFAULT_SCENE_SETUP.craft,
     });
     expect(await loadSceneSetup(env, chatId)).toEqual(payload.setup);

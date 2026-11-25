@@ -1267,6 +1267,17 @@ html[data-avatars="hidden"] .turn-avatar {
   transition: opacity var(--dur-fast) ease;
 }
 
+.turn-fixed {
+  margin-left: 7px;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-faint);
+  font-size: var(--text-xs);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
 .turn:hover .turn-tools,
 .turn:focus-within .turn-tools {
   opacity: 1;
@@ -2817,7 +2828,7 @@ input[type="checkbox"] {
   /* The tools ride the speaker's line rather than dropping to a line of their own. Only
      the row that carries every control gives up width.
 
-     Six 44px buttons and the counter are 292px, and a 390px phone has ~265px beside a
+     Seven 44px buttons and the counter are 316px, and a 390px phone has ~265px beside a
      name — so the old "wrap only when it must" rule wrapped exactly the assistant turns,
      which are the ones whose swipe controls matter most, while the reader's own three
      controls stayed inline. Copy/edit/delete is 132px and a four-control row 176px, so

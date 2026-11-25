@@ -33,6 +33,8 @@ export interface TurnView {
   cost_usd?: number | null;
   /** Who wrote this row; null or absent means the chat's own character. */
   speaker?: string | null;
+  /** `'prose'` when the prose guard wrote this version; null for the model's own text. */
+  source?: string | null;
   /** The world state as of this turn, when one was recorded. */
   state?: WorldState | null;
 }
@@ -241,6 +243,11 @@ export function Turn({
           <>
             <div className="turn-head">
               <span className="turn-speaker">{rowName}</span>
+              {message.source === 'prose' && (
+                <span className="turn-fixed" title="Corrected by the prose guard">
+                  fixed
+                </span>
+              )}
               {actions}
             </div>
             {/* Double-click edits on a pointer device. There is deliberately no single-tap

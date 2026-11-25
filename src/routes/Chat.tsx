@@ -142,12 +142,14 @@ const TurnRow = memo(function TurnRow({
   after,
   onContinue,
   onRegenerate,
+  onFixProse,
   onEditStart,
   onEditCancel,
   onEditSave,
   onSwipe,
   onDeleteTurn,
   phase,
+  fixing,
 }: {
   message: TurnView;
   /** The server's pre-first-token status, shown while this row is the thinking row. */
@@ -169,6 +171,8 @@ const TurnRow = memo(function TurnRow({
   after: number;
   onContinue: (messageId: string) => void;
   onRegenerate: (messageId: string) => void;
+  onFixProse?: (messageId: string) => void;
+  fixing: boolean;
   onEditStart: (messageId: string) => void;
   onEditCancel: () => void;
   onEditSave: (messageId: string, content: string) => void;
@@ -250,6 +254,8 @@ const TurnRow = memo(function TurnRow({
               // rewriting a scene's direction possible without losing the scene you had.
               !isUser ? () => onRegenerate(message.id) : undefined
             }
+            onFixProse={!isUser && onFixProse ? () => onFixProse(message.id) : undefined}
+            fixing={fixing}
             busy={busy}
           />
         )
@@ -392,6 +398,7 @@ export default function Chat() {
   }, []);
   const [pending, setPending] = useState<Pending | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [fixingId, setFixingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   // The turn the reader asked to remove when turns after it would leave the scene with it.
@@ -479,6 +486,15 @@ export default function Chat() {
   );
 
   const messages = useMemo(() => data?.messages ?? [], [data]);
+
+  // Auto mode's repair lands after `done`, so the transcript fetched at the end of the
+  // turn is the one WITHOUT it. One delayed refetch picks up the inactive alternative;
+  // the row keeps the model's text until the reader swipes, so this cannot change what
+  // they are reading.
+  const proseGuardRef = useRef<'off' | 'button' | 'auto'>('button');
+  useEffect(() => {
+    proseGuardRef.current = data?.chat?.proseGuard ?? 'button';
+  }, [data?.chat?.proseGuard]);
 
   // Turns fetched from before the first window, oldest-first. The server serves the
   // transcript from the END of the visible path, so these are pages the reader explicitly
@@ -920,6 +936,7 @@ export default function Chat() {
               // clears `busy` and the refetch follows, and a frame still queued would land
               // after the overlay was already settled.
               flushDelta();
+              if (frame.proseGuard) proseGuardRef.current = frame.proseGuard;
               if (frame.truncated) setTruncatedId(frame.messageId);
               // The composer unlocks HERE, not when the stream closes. The server holds the
               // stream open a moment longer to write this turn's scene snapshot before
@@ -986,6 +1003,9 @@ export default function Chat() {
           reload();
           // The reply may have introduced a speaker, so the cast is stale too.
           castReload.current();
+          if (proseGuardRef.current === 'auto') {
+            window.setTimeout(() => reload(), 7000);
+          }
           // A refetch that returns the same transcript never trips the settle check, so the
           // overlay would stay up forever. The timeout is the guarantee that it comes down.
           window.setTimeout(() => {
@@ -1185,6 +1205,41 @@ export default function Chat() {
         // added because the row is easy to miss when the edit form has already closed.
         setSendError(messageOf(cause));
         toast.failure(messageOf(cause));
+      }
+    },
+    [id, reload, toast],
+  );
+
+  /**
+   * The Fix prose button.
+   *
+   * The server adds the corrected version as the ACTIVE one, so the original stays one
+   * swipe away and the text on screen becomes the fix the reader asked for. `keepInView`
+   * holds the row because the active row's id changes with the version.
+   */
+  const fixProse = useCallback(
+    async (messageId: string) => {
+      setFixingId(messageId);
+      try {
+        const result = await apiJson<{
+          violations: Array<{ detail: string }>;
+          id?: string;
+        }>('/api/prose/fix', {
+          method: 'POST',
+          body: JSON.stringify({ chatId: id, messageId }),
+        });
+        if (result.violations.length === 0) {
+          toast.success('No prose issues found.');
+        } else {
+          const count = result.violations.length;
+          toast.success(`Fixed version added (${count} issue${count === 1 ? '' : 's'}).`);
+        }
+        keepInView.current = result.id ?? messageId;
+        reload();
+      } catch (cause) {
+        toast.failure(messageOf(cause));
+      } finally {
+        setFixingId(null);
       }
     },
     [id, reload, toast],
@@ -1436,6 +1491,8 @@ export default function Chat() {
             busy={busy}
             onContinue={onContinue}
             onRegenerate={onRegenerate}
+            onFixProse={data.chat.proseGuard === 'off' ? undefined : fixProse}
+            fixing={fixingId === message.id}
             onEditStart={onEditStart}
             onEditCancel={onEditCancel}
             onEditSave={onEditSave}

@@ -35,6 +35,7 @@ export const TEST_MIGRATIONS = [
   '0015_supersession_provenance.sql',
   '0017_memory_dates.sql',
   '0018_memory_deleted.sql',
+  '0019_message_source.sql',
 ];
 
 /**

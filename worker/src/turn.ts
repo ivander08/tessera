@@ -16,9 +16,10 @@ import { tailId } from './branch';
 import { parseSse } from '../../src/lib/sse';
 import type { Role } from '../../src/lib/prompt/types';
 import { estimateChatTokens } from '../../src/lib/tokenEstimate';
-import { maybeUpdateState } from './scene';
+import { loadSceneSetup, maybeUpdateState } from './scene';
 import { recordSpeakers } from './cast';
 import { scheduleMemory } from './memory/schedule';
+import { maybeGuardProse } from './prose/repair';
 import type { ChatRow } from './db';
 
 /**
@@ -398,9 +399,17 @@ async function runTurn(
       }
     }
 
+    // The guard's mode rides with `done` so the client knows whether one delayed refetch
+    // is worth scheduling. Reading it from the transcript's chat row instead would be one
+    // turn stale after the reader switches the mode in the panel.
+    const proseGuard = await loadSceneSetup(env, chat.id)
+      .then((setup) => setup.proseGuard)
+      .catch(() => 'button' as const);
+
     send(controller, {
       type: 'done',
       messageId,
+      proseGuard,
       usage: usage ?? {
         promptTokens: 0,
         completionTokens: 0,
@@ -417,6 +426,19 @@ async function runTurn(
     });
 
     if (usage) await calibrate(env, settings.model, usage.promptTokens, prompt.messages);
+
+    // The prose guard is not memory: it also runs on a regenerate, which writes a new
+    // assistant row. It is bookkeeping either way — the reply is already delivered — so it
+    // never delays the turn.
+    if (mode === 'send' || mode === 'regenerate' || answeringPendingUser) {
+      ctx.waitUntil(
+        maybeGuardProse(env, chat.id, messageId).catch((err: unknown) => {
+          console.warn(
+            `[prose] guard scheduling failed for chat=${chat.id}: ${messageOf(err)}`,
+          );
+        }),
+      );
+    }
 
     if (mode === 'send' || answeringPendingUser) {
       // Memory runs on the same trigger and for the same reason: the turn is already

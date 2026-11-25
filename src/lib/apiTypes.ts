@@ -49,6 +49,8 @@ export interface MessageRow {
    * speakers, and the content carries the attribution.
    */
   speaker?: string | null;
+  /** `'prose'` when the prose guard wrote this version; null for the model's own text. */
+  source?: string | null;
   /**
    * The world state as of this turn, when one was recorded.
    *
@@ -95,6 +97,11 @@ export interface ChatDetail {
   session_id: string;
   created_at: number;
   updated_at: number;
+  /**
+   * The chat's prose-guard mode, folded into the transcript so the client can decide
+   * whether a turn warrants one delayed refetch. The older rows omit it.
+   */
+  proseGuard?: 'off' | 'button' | 'auto';
 }
 
 /**

@@ -53,6 +53,7 @@ function row(
     speaker: null,
     state_json: null,
     deleted: 0,
+    source: null,
     created_at: 0,
   };
 }

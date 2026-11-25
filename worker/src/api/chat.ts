@@ -1,5 +1,6 @@
 import { json, notFound } from '../http';
 import { getChat, getCharacter, getPersona as loadPersonaRow } from '../db';
+import { loadSceneSetup } from '../scene';
 import { loadAlternatives, loadPathTail } from '../branch';
 import { getState, patchState, clearState, regenerateState } from '../state/api';
 import { chatAdvise } from '../chatAdvise';
@@ -77,6 +78,7 @@ export async function listMessages(env: Env, chatId: string, url: URL): Promise<
       active: row.active,
       created_at: row.created_at,
       speaker: row.speaker,
+      source: row.source,
       // The world state as of this turn, when one was recorded. Null for most rows: state
       // advances on any completed turn that writes the character's prose â€” a send, a
       // regenerate, a recovery continue â€” and only when the exchange changed something.
@@ -90,8 +92,13 @@ export async function listMessages(env: Env, chatId: string, url: URL): Promise<
     };
   });
 
+  const scene = await loadSceneSetup(env, chatId);
+
   return json({
-    chat,
+    // `proseGuard` rides with the chat because the client decides whether a turn is worth
+    // one delayed refetch: an auto correction is added after `done`, so the transcript the
+    // client just fetched is the one without it.
+    chat: { ...chat, proseGuard: scene.proseGuard },
     character: character
       ? {
           id: character.id,

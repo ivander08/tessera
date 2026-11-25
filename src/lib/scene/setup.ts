@@ -67,6 +67,31 @@ export interface SceneSetup {
   memoryBox: string;
   /** Generate time, place and weather from the greeting when the scene opens. */
   generateOpeningState: boolean;
+  /**
+   * How the prose guard runs.
+   *
+   * `button` is the default: a correction is a deliberate act, and until the repair model
+   * has proven itself, a silent second rewrite on every turn is a second failure mode.
+   * `auto` adds the corrected version as an inactive swipe and never activates it, so the
+   * reader compares instead of watching the text change under them. `off` stops the
+   * detector and the learning pass too.
+   */
+  proseGuard: 'off' | 'button' | 'auto';
+  /**
+   * Stock beats the reader has banned on top of the built-in list.
+   *
+   * Learned from hand edits and editable in the panel. Stored lowercase; the detector
+   * matches narration case-insensitively. Capped small because a long list is a list the
+   * repair prompt has to carry, and a phrase nobody can remember is a phrase that stops
+   * being a rule.
+   */
+  proseBans: string[];
+  /**
+   * A sample of the voice to repair toward, for this chat. Empty means the preset's
+   * `### VOICE SAMPLE` block is used; both empty means the repair prompt carries only the
+   * preset's prose rules.
+   */
+  proseSample: string;
   /** How the scene is written. */
   craft: Craft;
 }
@@ -259,6 +284,11 @@ export const DEFAULT_SCENE_SETUP: SceneSetup = {
   memoryMode: 'auto',
   memoryBox: '',
   generateOpeningState: true,
+  // The button is the honest default: the reader asks for a correction. Auto mode is the
+  // same code with one flag, once the reader has seen the repair hold.
+  proseGuard: 'button',
+  proseBans: [],
+  proseSample: '',
   craft: DEFAULT_CRAFT,
 };
 
@@ -285,6 +315,30 @@ export const TIME_PACE_OPTIONS: Array<{
   },
 ];
 
+export const PROSE_GUARD_OPTIONS: Array<{
+  value: SceneSetup['proseGuard'];
+  label: string;
+  description: string;
+}> = [
+  {
+    value: 'off',
+    label: 'Off',
+    description: 'No detection, no repair, and no learning from hand edits.',
+  },
+  {
+    value: 'button',
+    label: 'Fix prose button',
+    description:
+      'A Fix prose action on each reply. It rewrites only the narration and adds the result as a swipe.',
+  },
+  {
+    value: 'auto',
+    label: 'Automatic',
+    description:
+      'After each reply, a corrected version is added as a swipe. The original stays; nothing changes until you swipe to it.',
+  },
+];
+
 export const STATE_MODE_OPTIONS: Array<{
   value: SceneSetup['stateMode'];
   label: string;
@@ -308,6 +362,7 @@ export const STATE_MODE_OPTIONS: Array<{
 ];
 
 const TIME_PACES = new Set<string>(TIME_PACE_OPTIONS.map((option) => option.value));
+const PROSE_GUARDS = new Set<string>(PROSE_GUARD_OPTIONS.map((option) => option.value));
 const STATE_MODES = new Set<string>(STATE_MODE_OPTIONS.map((option) => option.value));
 
 /**
@@ -1310,6 +1365,9 @@ export function parseSceneSetup(
   const memoryBox = record.memoryBox;
   const generateOpeningState = record.generateOpeningState;
   const startDate = record.startDate;
+  const proseGuard = record.proseGuard;
+  const proseBans = record.proseBans;
+  const proseSample = record.proseSample;
 
   return {
     timePace:
@@ -1331,6 +1389,23 @@ export function parseSceneSetup(
       typeof generateOpeningState === 'boolean'
         ? generateOpeningState
         : fallback.generateOpeningState,
+    proseGuard:
+      typeof proseGuard === 'string' && PROSE_GUARDS.has(proseGuard)
+        ? (proseGuard as SceneSetup['proseGuard'])
+        : fallback.proseGuard,
+    // An empty array is a real value — "the reader cleared the list" — never a fallback.
+    proseBans: Array.isArray(proseBans)
+      ? [
+          ...new Set(
+            proseBans
+              .filter((entry): entry is string => typeof entry === 'string')
+              .map((entry) => entry.trim().toLowerCase())
+              .filter((entry) => entry.length >= 3 && entry.length <= 80),
+          ),
+        ].slice(0, 32)
+      : fallback.proseBans,
+    proseSample:
+      typeof proseSample === 'string' ? proseSample.slice(0, 4000) : fallback.proseSample,
     craft: parseCraft(record.craft, fallback.craft),
   };
 }

@@ -26,6 +26,9 @@ describe('parseSceneSetup', () => {
       memoryMode: 'box',
       memoryBox: 'Sydney is dying.\nShe has not said it yet.',
       generateOpeningState: false,
+      proseGuard: 'auto',
+      proseBans: ['jaw works'],
+      proseSample: 'She sets the mug down. "You asked."',
       craft: DEFAULT_CRAFT,
     };
     expect(parseSceneSetup(setup)).toEqual(setup);
@@ -79,6 +82,9 @@ describe('parseSceneSetup', () => {
       memoryMode: 'box',
       memoryBox: 'stored notes',
       generateOpeningState: false,
+      proseGuard: 'auto',
+      proseBans: ['jaw works'],
+      proseSample: 'She sets the mug down.',
       craft: DEFAULT_CRAFT,
     };
     expect(parseSceneSetup({ timePace: 'bogus' }, { ...stored }).timePace).toBe('manual');
@@ -125,6 +131,9 @@ describe('parseSceneSetup — craft', () => {
       memoryMode: 'box',
       memoryBox: '- Sydney is dying\n- She has not said it yet',
       generateOpeningState: false,
+      proseGuard: 'button',
+      proseBans: ['throat works'],
+      proseSample: '',
       craft: {
         contentPolicy: false,
         pov: 'third',
@@ -166,6 +175,21 @@ describe('parseSceneSetup — craft', () => {
       },
     };
     expect(parseSceneSetup(JSON.parse(JSON.stringify(setup)))).toEqual(setup);
+  });
+
+  test('the prose guard fields are parsed, not carried through raw', () => {
+    const parsed = parseSceneSetup({
+      proseGuard: 'nonsense',
+      proseBans: [' jaw works ', 'jaw works', 7, 'x'],
+      proseSample: 42,
+    });
+    expect(parsed.proseGuard).toBe(DEFAULT_SCENE_SETUP.proseGuard);
+    expect(parsed.proseBans).toEqual(['jaw works']);
+    expect(parsed.proseSample).toBe(DEFAULT_SCENE_SETUP.proseSample);
+  });
+
+  test('an empty prose ban list is a real value, not a fallback', () => {
+    expect(parseSceneSetup({ proseBans: [] }).proseBans).toEqual([]);
   });
 
   test('an unknown member of a new enum falls back per field', () => {

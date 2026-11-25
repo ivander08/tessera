@@ -84,6 +84,43 @@ export async function patchSceneSetup(env: Env, chatId: string, req: Request): P
 }
 
 /**
+ * Adds learned stock beats to a chat's prose ban list.
+ *
+ * A direct write, not a Request: the learning pass runs inside `editMessage`, where a
+ * `Response` would be a category error. The same upsert as `patchSceneSetup` keeps the row
+ * in the shape the parser expects, and `parseSceneSetup` is still the validator on the way
+ * out — the merge is built from an already-parsed document, so there is no path here that
+ * can store an unknown enum.
+ *
+ * Returns the merged list so the caller can report what changed.
+ */
+export async function addProseBans(
+  env: Env,
+  chatId: string,
+  candidates: string[],
+): Promise<string[]> {
+  const setup = await loadSceneSetup(env, chatId);
+  const merged = [
+    ...new Set([
+      ...setup.proseBans,
+      ...candidates
+        .map((candidate) => candidate.trim().toLowerCase())
+        .filter((candidate) => candidate.length >= 3 && candidate.length <= 80),
+    ]),
+  ].slice(0, 32);
+  if (merged.length === setup.proseBans.length) return setup.proseBans;
+
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT INTO chat_scene_setup (chat_id, json, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(chat_id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at`,
+  )
+    .bind(chatId, JSON.stringify({ ...setup, proseBans: merged }), now)
+    .run();
+  return merged;
+}
+
+/**
  * Runs the per-turn state update, unless the reader turned it off.
  *
  * The gate lives here rather than at the call site because it is policy about the setting,

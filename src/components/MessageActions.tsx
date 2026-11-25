@@ -24,6 +24,10 @@ export interface TurnActionsProps {
   onEdit: () => void;
   onDelete: () => void;
   onRegenerate?: () => void;
+  /** Present on an assistant reply when the chat's prose guard is on. */
+  onFixProse?: () => void;
+  /** True while this row's repair is in flight. */
+  fixing?: boolean;
   busy?: boolean;
 }
 
@@ -37,6 +41,8 @@ export function MessageActions({
   onEdit,
   onDelete,
   onRegenerate,
+  onFixProse,
+  fixing = false,
   busy = false,
 }: TurnActionsProps) {
   const [copied, setCopied] = useState(false);
@@ -74,6 +80,16 @@ export function MessageActions({
       {onRegenerate && (
         <Tool label="Regenerate" onClick={onRegenerate} disabled={busy}>
           <Redo />
+        </Tool>
+      )}
+
+      {onFixProse && (
+        <Tool
+          label={fixing ? 'Fixing prose…' : 'Fix prose'}
+          onClick={onFixProse}
+          disabled={busy || fixing}
+        >
+          <Sparkle />
         </Tool>
       )}
 
@@ -168,6 +184,20 @@ function Check() {
   return (
     <svg {...stroke}>
       <path d="M3.5 8.5L6.5 11.5l6-7" />
+    </svg>
+  );
+}
+
+/**
+ * Fix prose. A pen with a spark: the action edits the narration, and the spark is what
+ * separates it from the ordinary pencil next to it.
+ */
+function Sparkle() {
+  return (
+    <svg {...stroke}>
+      <path d="M11.4 2.9a1.6 1.6 0 0 1 2.3 2.3l-6.2 6.2-2.6.3.3-2.6z" />
+      <path d="M10.2 4.1l1.7 1.7" />
+      <path d="M3.2 12.8l.5-1.4 1.4-.5-1.4-.5-.5-1.4-.5 1.4-1.4.5 1.4.5z" />
     </svg>
   );
 }

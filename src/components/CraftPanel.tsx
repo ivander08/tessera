@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { apiJson } from '../lib/api';
 import { messageOf, useAsync } from '../lib/hooks';
 import {
   CRAFT_ENUMS,
   CRAFT_TOGGLES,
+  PROSE_GUARD_OPTIONS,
   TIME_PACE_OPTIONS,
   type Craft,
   type SceneSetup,
@@ -113,9 +114,15 @@ function sideOf(key: string): CostSide {
 export function CraftPanel({ chatId }: { chatId: string }) {
   const { data, error, loading, reload } = useAsync(
     () =>
-      apiJson<{ setup: { craft: Craft; timePace: SceneSetup['timePace'] } }>(
-        `/api/chats/${encodeURIComponent(chatId)}/scene`,
-      ),
+      apiJson<{
+        setup: {
+          craft: Craft;
+          timePace: SceneSetup['timePace'];
+          proseGuard: SceneSetup['proseGuard'];
+          proseBans: string[];
+          proseSample: string;
+        };
+      }>(`/api/chats/${encodeURIComponent(chatId)}/scene`),
     [chatId],
   );
 
@@ -132,6 +139,31 @@ export function CraftPanel({ chatId }: { chatId: string }) {
 
   const craft = data?.setup.craft;
   const timePace = data?.setup.timePace;
+  const proseGuard = data?.setup.proseGuard;
+  const proseBans = data?.setup.proseBans;
+  const proseSample = data?.setup.proseSample;
+
+  /**
+   * Top-level setup fields (the prose guard) are one PATCH with the field itself, not the
+   * `{ craft: ... }` wrapper: they are scene state, not craft, and the server merges them
+   * field by field.
+   */
+  async function patchSetup(
+    change: Partial<Pick<SceneSetup, 'proseGuard' | 'proseBans' | 'proseSample'>>,
+  ) {
+    setPendingKey(Object.keys(change)[0] ?? 'prose');
+    try {
+      await apiJson(`/api/chats/${encodeURIComponent(chatId)}/scene`, {
+        method: 'PATCH',
+        body: JSON.stringify(change),
+      });
+      reload();
+    } catch (cause) {
+      toast.failure(messageOf(cause));
+    } finally {
+      setPendingKey(null);
+    }
+  }
 
   async function patch(change: Partial<Craft> | { timePace: SceneSetup['timePace'] }) {
     if (!craft) return;
@@ -185,16 +217,158 @@ export function CraftPanel({ chatId }: { chatId: string }) {
           {view === 'prompt' ? (
             <CraftPreview craft={craft} />
           ) : (
-            <CraftControls
-              craft={craft}
-              timePace={timePace}
-              pendingKey={pendingKey}
-              onPatch={patch}
-            />
+            <>
+              {proseGuard && proseBans && proseSample !== undefined && (
+                <ProseGuardPanel
+                  mode={proseGuard}
+                  bans={proseBans}
+                  sample={proseSample}
+                  pendingKey={pendingKey}
+                  onPatch={patchSetup}
+                />
+              )}
+              <CraftControls
+                craft={craft}
+                timePace={timePace}
+                pendingKey={pendingKey}
+                onPatch={patch}
+              />
+            </>
           )}
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * The prose guard's controls.
+ *
+ * Above the craft list because it is the thing a reader reaches for after a bad reply,
+ * not a setting they browse. The textareas are full-width by the panel's own `.form-row`
+ * rule, which is what keeps them usable at 390px; the save button is separate from the
+ * mode select so typing a ban never fires a PATCH on every keystroke.
+ */
+function ProseGuardPanel({
+  mode,
+  bans,
+  sample,
+  pendingKey,
+  onPatch,
+}: {
+  mode: SceneSetup['proseGuard'];
+  bans: string[];
+  sample: string;
+  pendingKey: string | null;
+  onPatch: (
+    change: Partial<Pick<SceneSetup, 'proseGuard' | 'proseBans' | 'proseSample'>>,
+  ) => Promise<void>;
+}) {
+  const [banText, setBanText] = useState(bans.join('\n'));
+  const [sampleText, setSampleText] = useState(sample);
+
+  useEffect(() => setBanText(bans.join('\n')), [bans.join('\n')]);
+  useEffect(() => setSampleText(sample), [sample]);
+
+  const parsedBans = [
+    ...new Set(
+      banText
+        .split('\n')
+        .map((line) => line.trim().toLowerCase())
+        .filter((line) => line.length >= 3),
+    ),
+  ];
+
+  return (
+    <section className="section">
+      <span className="eyebrow">Prose guard</span>
+      <p className="form-hint" style={{ marginTop: 0 }}>
+        Corrects the narration of a bad reply and adds the result as a swipe. Dialogue is
+        preserved exactly; the original stays one swipe away.
+      </p>
+
+      <label className="form-row" aria-busy={pendingKey === 'proseGuard'}>
+        <span className="form-label">
+          <span>Mode</span>
+          <span className="form-hint">
+            {PROSE_GUARD_OPTIONS.find((option) => option.value === mode)?.description}
+          </span>
+        </span>
+        <select
+          className="field"
+          value={mode}
+          disabled={pendingKey === 'proseGuard'}
+          onChange={(event) =>
+            void onPatch({ proseGuard: event.target.value as SceneSetup['proseGuard'] })
+          }
+        >
+          {PROSE_GUARD_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="form-row">
+        <span className="form-label">
+          <span>Banned phrases</span>
+          <span className="form-hint">
+            One per line. Learned from your edits; add your own here too.
+          </span>
+        </span>
+        <textarea
+          className="field"
+          rows={4}
+          value={banText}
+          spellCheck={false}
+          placeholder={'jaw works\nvoice comes out'}
+          onChange={(event) => setBanText(event.target.value)}
+        />
+      </label>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+        <span className="form-hint" style={{ flex: 1, margin: 0 }}>
+          {parsedBans.length} phrase{parsedBans.length === 1 ? '' : 's'}
+        </span>
+        <button
+          type="button"
+          className="btn quiet"
+          disabled={pendingKey === 'proseBans' || banText === bans.join('\n')}
+          onClick={() => void onPatch({ proseBans: parsedBans })}
+        >
+          {pendingKey === 'proseBans' ? 'Saving…' : 'Save bans'}
+        </button>
+      </div>
+
+      <label className="form-row">
+        <span className="form-label">
+          <span>Voice sample</span>
+          <span className="form-hint">
+            A paragraph whose voice you want the repair to imitate. Empty uses the preset's
+            sample.
+          </span>
+        </span>
+        <textarea
+          className="field"
+          rows={5}
+          value={sampleText}
+          placeholder={
+            'She doesn\'t look up from the phone. "You\'re asking me that now."…'
+          }
+          onChange={(event) => setSampleText(event.target.value)}
+        />
+      </label>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+        <button
+          type="button"
+          className="btn quiet"
+          disabled={pendingKey === 'proseSample' || sampleText === sample}
+          onClick={() => void onPatch({ proseSample: sampleText })}
+        >
+          {pendingKey === 'proseSample' ? 'Saving…' : 'Save sample'}
+        </button>
+      </div>
+    </section>
   );
 }
 
