@@ -197,14 +197,15 @@ export interface Craft {
 }
 
 /**
- * The default is a novel voice, not a camera.
+ * The default is a chat partner with a novelist's narrator, not a story engine.
  *
  * These are opinionated on purpose, because every `'off'` enum emits nothing and leaves
  * the model to its own default — which is the clipped, reactive register that reads as a
- * narrator with no personality. `literary` + `fid` give the narration a temperament;
- * `full` density and `medium` length give it room to use one. The person stays `'off'`
- * because only the card knows whether the scene is second-person or a third-person novel;
- * pinning `'second'` made a third-person card address the reader as "you".
+ * narrator with no personality. `literary` + `close` give the narration a temperament
+ * without turning it into the character's interior monologue; `standard` density and
+ * `short` length keep a reply to one exchange rather than a chapter. `responsive`
+ * momentum is the chat contract: answer what was said, stop. The person stays `'off'`
+ * because only the card knows whether the scene is second-person or a third-person novel.
  *
  * `contentPolicy` and `vocalisation` stay on: they are content and sound rules rather than
  * prose style, and the app ships them on deliberately (see `craftBlock.ts` on position).
@@ -215,7 +216,7 @@ export const DEFAULT_CRAFT: Craft = {
   register: 'literary',
   antiSlop: true,
   interiority: true,
-  povInteriority: 'sometimes',
+  povInteriority: 'rare',
   earnedKnowledge: true,
   independentNpcs: true,
   vocalisation: true,
@@ -229,17 +230,17 @@ export const DEFAULT_CRAFT: Craft = {
   nomenclature: true,
   wordplay: false,
   dialects: false,
-  momentum: 'active',
+  momentum: 'responsive',
   tense: 'off',
   showTell: 'balanced',
-  narrativeDistance: 'fid',
-  responseLength: 'medium',
-  density: 'full',
+  narrativeDistance: 'close',
+  responseLength: 'short',
+  density: 'standard',
   rhythm: 'dynamic',
   figurative: 'moderate',
   vocabulary: 'literary',
   profanity: 'natural',
-  dialogueFrequency: 'balanced',
+  dialogueFrequency: 'often',
   dialogueNaturalism: 'casual',
   dialogueDepth: 'layered',
   changeResistance: 'adaptive',
