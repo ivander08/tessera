@@ -2,6 +2,7 @@ import { json, notFound } from '../http';
 import { getChat, getCharacter, getPersona as loadPersonaRow } from '../db';
 import { loadSceneSetup } from '../scene';
 import { loadAlternatives, loadPathTail } from '../branch';
+import { proseForMessages } from '../prose/state';
 import { getState, patchState, clearState, regenerateState } from '../state/api';
 import { chatAdvise } from '../chatAdvise';
 import type { WorldState } from '../../../src/lib/state/schema';
@@ -51,6 +52,11 @@ export async function listMessages(env: Env, chatId: string, url: URL): Promise<
     path.map((row) => row.parent_id),
   );
 
+  // The guard's state, for the rows in this window. A separate read rather than four more
+  // columns on the branch walk: the walk runs on every turn's prompt assembly, and most
+  // rows never have a status. Bounded by the window, like the alternatives above.
+  const prose = await proseForMessages(env, path.map((row) => row.id));
+
   // Only the active chain is returned as the transcript. An abandoned branch is still in
   // the table â€” that is what makes swiping back lossless â€” but it is not part of the
   // scene the reader is in.
@@ -65,6 +71,7 @@ export async function listMessages(env: Env, chatId: string, url: URL): Promise<
   // thing to the client, so the common case pays nothing.
   const messages = path.map((row) => {
     const alternatives = siblings.get(row.parent_id ?? '') ?? [];
+    const guard = prose.get(row.id);
     const base = {
       seq: row.seq,
       id: row.id,
@@ -83,6 +90,17 @@ export async function listMessages(env: Env, chatId: string, url: URL): Promise<
       // advances on any completed turn that writes the character's prose â€” a send, a
       // regenerate, a recovery continue â€” and only when the exchange changed something.
       state: parseSnapshot(row.state_json),
+      // Omitted entirely when the guard never inspected this row: an absent field is the
+      // honest representation of "no claim", and it keeps the common row small.
+      ...(guard
+        ? {
+            prose: {
+              status: guard.status,
+              count: guard.violations.length,
+              ...(guard.error ? { error: guard.error } : {}),
+            },
+          }
+        : {}),
     };
     if (alternatives.length <= 1) return base;
     return {
@@ -95,9 +113,8 @@ export async function listMessages(env: Env, chatId: string, url: URL): Promise<
   const scene = await loadSceneSetup(env, chatId);
 
   return json({
-    // `proseGuard` rides with the chat because the client decides whether a turn is worth
-    // one delayed refetch: an auto correction is added after `done`, so the transcript the
-    // client just fetched is the one without it.
+    // `proseGuard` rides with the chat so the transcript can hide the Fix control when the
+    // guard is off, without a second request on every row.
     chat: { ...chat, proseGuard: scene.proseGuard },
     character: character
       ? {

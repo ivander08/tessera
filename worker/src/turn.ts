@@ -16,10 +16,11 @@ import { tailId } from './branch';
 import { parseSse } from '../../src/lib/sse';
 import type { Role } from '../../src/lib/prompt/types';
 import { estimateChatTokens } from '../../src/lib/tokenEstimate';
-import { loadSceneSetup, maybeUpdateState } from './scene';
+import { maybeUpdateState } from './scene';
 import { recordSpeakers } from './cast';
 import { scheduleMemory } from './memory/schedule';
-import { maybeGuardProse } from './prose/repair';
+import { inspectReply, maybeGuardProse, type Inspection } from './prose/repair';
+import { setProseStatus } from './prose/state';
 import type { ChatRow } from './db';
 
 /**
@@ -399,17 +400,39 @@ async function runTurn(
       }
     }
 
-    // The guard's mode rides with `done` so the client knows whether one delayed refetch
-    // is worth scheduling. Reading it from the transcript's chat row instead would be one
-    // turn stale after the reader switches the mode in the panel.
-    const proseGuard = await loadSceneSetup(env, chat.id)
-      .then((setup) => setup.proseGuard)
-      .catch(() => 'button' as const);
+    // The prose guard is inspected BEFORE `done`, so the transcript the client fetches on
+    // the back of that frame already carries the outcome. Detection is local, deterministic
+    // and cheap; only a repair needs a model call, and that stays behind `waitUntil`.
+    //
+    // The status is the whole point of Phase 1: `clean` and `issues` are final answers,
+    // `queued` is a promise whose progress the client polls. Waiting until after `done`
+    // (the old shape) meant the transcript could only ever show the PREVIOUS state of the
+    // world, and a failed repair left no trace at all.
+    let prose: Inspection | null = null;
+    if (mode === 'send' || mode === 'regenerate' || answeringPendingUser) {
+      try {
+        prose = await inspectReply(env, chat.id, messageId);
+        const status =
+          prose.setup.proseGuard === 'off'
+            ? null
+            : prose.violations.length === 0
+              ? 'clean'
+              : prose.setup.proseGuard === 'auto'
+                ? 'queued'
+                : 'issues';
+        if (status) await setProseStatus(env, messageId, status, prose.violations);
+      } catch (err: unknown) {
+        // A failed inspection costs the status, never the turn.
+        console.warn(`[prose] inspection failed for chat=${chat.id}: ${messageOf(err)}`);
+      }
+    }
 
+    // The guard's state is folded into the transcript now, so the `done` frame carries
+    // nothing about it. Inspection above is where the status is decided and persisted; the
+    // client refetches on this frame and reads the row's own `prose` field.
     send(controller, {
       type: 'done',
       messageId,
-      proseGuard,
       usage: usage ?? {
         promptTokens: 0,
         completionTokens: 0,
@@ -430,9 +453,9 @@ async function runTurn(
     // The prose guard is not memory: it also runs on a regenerate, which writes a new
     // assistant row. It is bookkeeping either way — the reply is already delivered — so it
     // never delays the turn.
-    if (mode === 'send' || mode === 'regenerate' || answeringPendingUser) {
+    if (prose && (mode === 'send' || mode === 'regenerate' || answeringPendingUser)) {
       ctx.waitUntil(
-        maybeGuardProse(env, chat.id, messageId).catch((err: unknown) => {
+        maybeGuardProse(env, chat.id, messageId, prose).catch((err: unknown) => {
           console.warn(
             `[prose] guard scheduling failed for chat=${chat.id}: ${messageOf(err)}`,
           );

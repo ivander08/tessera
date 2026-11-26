@@ -6,6 +6,7 @@ import { MessageActions } from './MessageActions';
 import { SPEAKER_LINE, splitSpeakers } from '../lib/transcript/speakers';
 import { substituteHead, type MacroContext } from '../lib/prompt/macros';
 import type { WorldState } from '../lib/state/schema';
+import type { MessageProse } from '../lib/apiTypes';
 
 /**
  * One turn in the transcript.
@@ -35,6 +36,8 @@ export interface TurnView {
   speaker?: string | null;
   /** `'prose'` when the prose guard wrote this version; null for the model's own text. */
   source?: string | null;
+  /** The prose guard's verdict on this reply. Absent when it never inspected the row. */
+  prose?: MessageProse;
   /** The world state as of this turn, when one was recorded. */
   state?: WorldState | null;
 }
@@ -85,6 +88,10 @@ export interface TurnProps {
   truncated?: boolean;
   /** Appends another turn continuing this one. Omitted when the turn cannot be continued. */
   onContinue?: () => void;
+  /** Retry a failed prose repair. Omitted when the guard is off. */
+  onRetryProse?: () => void;
+  /** True while this row's repair is in flight, including a retry. */
+  fixingProse?: boolean;
   busy?: boolean;
   editing?: boolean;
   onEditStart?: () => void;
@@ -109,6 +116,8 @@ export function Turn({
   sceneState,
   truncated = false,
   onContinue,
+  onRetryProse,
+  fixingProse = false,
   editing = false,
   onEditStart,
   onEditCancel,
@@ -228,6 +237,13 @@ export function Turn({
                       header line rather than appearing again beside every speaker. */}
                   {index === 0 ? actions : null}
                 </div>
+                {index === 0 && (
+                  <ProseNote
+                    prose={message.prose}
+                    fixing={fixingProse}
+                    onRetry={onRetryProse}
+                  />
+                )}
                 {text.length > 0 && (
                   <div className={`prose${index === 0 ? cap : ''}`}>
                     <Markdown content={text} />
@@ -250,6 +266,11 @@ export function Turn({
               )}
               {actions}
             </div>
+            <ProseNote
+              prose={message.prose}
+              fixing={fixingProse}
+              onRetry={onRetryProse}
+            />
             {/* Double-click edits on a pointer device. There is deliberately no single-tap
                 handler: on a touch screen it fired on every tap, so reading a message meant
                 accidentally opening the editor for it. The pencil in `MessageActions` is the
@@ -277,6 +298,64 @@ export function Turn({
       </div>
     </article>
   );
+}
+
+/**
+ * The prose guard's line under a turn.
+ *
+ * Only the states the reader can act on are drawn. `clean` says nothing — a badge on every
+ * clean reply would make the quiet case loud — and `issues` in button mode is carried by
+ * the sparkle's count instead, so the reader sees which replies need attention without a
+ * second line under every turn.
+ */
+function ProseNote({
+  prose,
+  fixing,
+  onRetry,
+}: {
+  prose?: MessageProse;
+  fixing: boolean;
+  onRetry?: () => void;
+}) {
+  if (!prose) return null;
+
+  const issues = prose.count === 1 ? '1 issue' : `${prose.count} issues`;
+
+  if (fixing || prose.status === 'queued' || prose.status === 'repairing') {
+    return (
+      <p className="turn-prose" role="status">
+        <span className="turn-prose-dot" aria-hidden="true" />
+        Fixing prose…{prose.count > 0 ? ` (${issues})` : ''}
+      </p>
+    );
+  }
+
+  if (prose.status === 'done') {
+    return (
+      <p className="turn-prose">
+        Fixed{prose.count > 0 ? ` · ${issues}` : ''} · swipe to compare
+      </p>
+    );
+  }
+
+  if (prose.status === 'failed') {
+    const reason = prose.error ? ` — ${prose.error.replace(/\.$/, '')}` : '';
+    return (
+      <p className="turn-prose turn-prose-failed">
+        Couldn't fix prose{reason}.
+        {onRetry && (
+          <>
+            {' '}
+            <button type="button" className="app-link" onClick={onRetry}>
+              Retry
+            </button>
+          </>
+        )}
+      </p>
+    );
+  }
+
+  return null;
 }
 
 /**

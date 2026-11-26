@@ -24,6 +24,8 @@ export interface TurnActionsProps {
   onEdit: () => void;
   onDelete: () => void;
   onRegenerate?: () => void;
+  /** Count badge on the sparkle: how many issues the guard found (button mode). */
+  proseIssues?: number;
   /** Present on an assistant reply when the chat's prose guard is on. */
   onFixProse?: () => void;
   /** True while this row's repair is in flight. */
@@ -42,6 +44,7 @@ export function MessageActions({
   onDelete,
   onRegenerate,
   onFixProse,
+  proseIssues,
   fixing = false,
   busy = false,
 }: TurnActionsProps) {
@@ -88,6 +91,7 @@ export function MessageActions({
           label={fixing ? 'Fixing prose…' : 'Fix prose'}
           onClick={onFixProse}
           disabled={busy || fixing}
+          badge={!fixing && proseIssues ? proseIssues : undefined}
         >
           <Sparkle />
         </Tool>
@@ -112,11 +116,14 @@ function Tool({
   label,
   onClick,
   disabled,
+  badge,
   children,
 }: {
   label: string;
   onClick: () => void;
   disabled?: boolean;
+  /** A small count in the corner; present only when the action has something to report. */
+  badge?: number;
   children: ReactNode;
 }) {
   return (
@@ -129,6 +136,11 @@ function Tool({
       disabled={disabled}
     >
       {children}
+      {badge ? (
+        <span className="tool-badge" aria-hidden="true">
+          {badge}
+        </span>
+      ) : null}
     </button>
   );
 }

@@ -2,6 +2,7 @@ import type { Role } from '../../src/lib/prompt/types';
 import { badRequest, json, notFound, readJson } from './http';
 import { estimateTokens as estimate } from '../../src/lib/tokenEstimate';
 import { learnProseBans } from './prose/learn';
+import { clearProseStatus } from './prose/state';
 import { loadPath } from './branch';
 import type { BranchRow } from './branch';
 import { BRANCH_COLUMNS } from './branch';
@@ -228,6 +229,13 @@ export async function editMessage(env: Env, req: Request): Promise<Response> {
   )
     .bind(content, estimate(content), message.id, body.chatId)
     .run();
+
+  // An edit invalidates the guard's verdict: the text it judged is gone. Clear it rather
+  // than re-run detection on save — the reader can press Fix again if the new text still
+  // has problems, and a chip describing the old text would be a lie.
+  if (message.role === 'assistant') {
+    await clearProseStatus(env, message.id);
+  }
 
   // The edit is the strongest statement of taste the app gets. Feed it back, but only
   // from an assistant row: a reader correcting their own line is not teaching the narrator

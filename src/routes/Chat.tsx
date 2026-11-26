@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { useParams, useSearchParams } from 'react-router';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { apiFetch, apiJson, streamChat, type TurnMode } from '../lib/api';
-import type { MessageRow, Transcript } from '../lib/apiTypes';
+import type { MessageRow, ProseStatus, Transcript } from '../lib/apiTypes';
 import type { WorldState } from '../lib/state/schema';
 import { messageOf, useAsync } from '../lib/hooks';
 import { BUILTIN_STEERS, parseSteers } from '../lib/steers';
@@ -231,6 +231,8 @@ const TurnRow = memo(function TurnRow({
       dropCap={isOpening}
       editing={editing}
       busy={busy}
+      onRetryProse={!isUser && onFixProse ? () => onFixProse(message.id) : undefined}
+      fixingProse={fixing}
       onEditStart={() => onEditStart(message.id)}
       onEditCancel={onEditCancel}
       onEditSave={(content) => onEditSave(message.id, content)}
@@ -255,6 +257,9 @@ const TurnRow = memo(function TurnRow({
               !isUser ? () => onRegenerate(message.id) : undefined
             }
             onFixProse={!isUser && onFixProse ? () => onFixProse(message.id) : undefined}
+            proseIssues={
+              message.prose?.status === 'issues' ? message.prose.count : undefined
+            }
             fixing={fixing}
             busy={busy}
           />
@@ -487,14 +492,49 @@ export default function Chat() {
 
   const messages = useMemo(() => data?.messages ?? [], [data]);
 
-  // Auto mode's repair lands after `done`, so the transcript fetched at the end of the
-  // turn is the one WITHOUT it. One delayed refetch picks up the inactive alternative;
-  // the row keeps the model's text until the reader swipes, so this cannot change what
-  // they are reading.
-  const proseGuardRef = useRef<'off' | 'button' | 'auto'>('button');
+  // A repair can outlive the turn by several seconds — auto runs behind `waitUntil`, and
+  // the Fix button returns when its own call settles. While any visible row is still
+  // queued or repairing, poll the tiny status endpoint; on the first empty answer reload
+  // once so the chips and the repaired swipe arrive together.
+  //
+  // The caps are the client's half of the stale-claim rule: 1.2s while it is quick, 3s
+  // after 20s, and give up at 90s. The server stops trusting a `repairing` claim at 120s,
+  // so a dead worker leaves a retryable failure rather than a permanent spinner.
+  const waitingOnProse = messages.some(
+    (message) => message.prose?.status === 'queued' || message.prose?.status === 'repairing',
+  );
   useEffect(() => {
-    proseGuardRef.current = data?.chat?.proseGuard ?? 'button';
-  }, [data?.chat?.proseGuard]);
+    if (!waitingOnProse) return;
+    let stopped = false;
+    let timer: number | undefined;
+    const started = Date.now();
+
+    const poll = async () => {
+      if (stopped) return;
+      const elapsed = Date.now() - started;
+      if (elapsed > 90_000) return;
+      try {
+        const result = await apiJson<{ pending: unknown[] }>(
+          `/api/prose/status?chatId=${encodeURIComponent(id)}`,
+        );
+        if (stopped) return;
+        if (result.pending.length === 0) {
+          reload();
+          return;
+        }
+      } catch {
+        // A failed poll is not a failed repair. Keep trying until the cap; the next
+        // transcript fetch is the source of truth either way.
+      }
+      timer = window.setTimeout(() => void poll(), elapsed > 20_000 ? 3000 : 1200);
+    };
+
+    timer = window.setTimeout(() => void poll(), 1200);
+    return () => {
+      stopped = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [waitingOnProse, id, reload]);
 
   // Turns fetched from before the first window, oldest-first. The server serves the
   // transcript from the END of the visible path, so these are pages the reader explicitly
@@ -936,7 +976,6 @@ export default function Chat() {
               // clears `busy` and the refetch follows, and a frame still queued would land
               // after the overlay was already settled.
               flushDelta();
-              if (frame.proseGuard) proseGuardRef.current = frame.proseGuard;
               if (frame.truncated) setTruncatedId(frame.messageId);
               // The composer unlocks HERE, not when the stream closes. The server holds the
               // stream open a moment longer to write this turn's scene snapshot before
@@ -1003,9 +1042,6 @@ export default function Chat() {
           reload();
           // The reply may have introduced a speaker, so the cast is stale too.
           castReload.current();
-          if (proseGuardRef.current === 'auto') {
-            window.setTimeout(() => reload(), 7000);
-          }
           // A refetch that returns the same transcript never trips the settle check, so the
           // overlay would stay up forever. The timeout is the guarantee that it comes down.
           window.setTimeout(() => {
@@ -1224,10 +1260,27 @@ export default function Chat() {
         const result = await apiJson<{
           violations: Array<{ detail: string }>;
           id?: string;
+          already?: boolean;
+          status?: ProseStatus;
+          discarded?: boolean;
         }>('/api/prose/fix', {
           method: 'POST',
           body: JSON.stringify({ chatId: id, messageId }),
         });
+        // The reply changed under the repair, so there is no version to show. Not a
+        // failure of the reader's text; say what happened and re-read the truth.
+        if (result.discarded) {
+          toast.failure('The reply changed while it was being fixed.');
+          reload();
+          return;
+        }
+        // Someone else — auto, or a second click — holds the claim. There is nothing to
+        // add; the row's own chip and the status poll show that repair landing.
+        if (result.already) {
+          if (result.status === 'done') toast.success('Already fixed — swipe to compare.');
+          reload();
+          return;
+        }
         if (result.violations.length === 0) {
           toast.success('No prose issues found.');
         } else {
@@ -1238,6 +1291,9 @@ export default function Chat() {
         reload();
       } catch (cause) {
         toast.failure(messageOf(cause));
+        // The server records a failed repair before it answers, so the row can show the
+        // reason and a Retry instead of only a toast that disappears.
+        reload();
       } finally {
         setFixingId(null);
       }

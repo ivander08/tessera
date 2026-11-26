@@ -30,6 +30,23 @@ export interface ChatSummary {
   preview: string | null;
 }
 
+export type ProseStatus =
+  | 'clean'
+  | 'issues'
+  | 'queued'
+  | 'repairing'
+  | 'done'
+  | 'failed';
+
+/** The prose guard's state on the reply it inspected, as the transcript reports it. */
+export interface MessageProse {
+  status: ProseStatus;
+  /** How many problems the detector found at inspection time. */
+  count: number;
+  /** Why the last repair failed. Present only for `failed`. */
+  error?: string | null;
+}
+
 export interface MessageRow {
   seq: number;
   id: string;
@@ -51,6 +68,8 @@ export interface MessageRow {
   speaker?: string | null;
   /** `'prose'` when the prose guard wrote this version; null for the model's own text. */
   source?: string | null;
+  /** The prose guard's verdict on this reply. Absent when it never inspected the row. */
+  prose?: MessageProse;
   /**
    * The world state as of this turn, when one was recorded.
    *

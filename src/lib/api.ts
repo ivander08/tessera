@@ -81,7 +81,7 @@ export type ChatFrame =
   | { type: 'delta'; text: string }
   /** Pre-first-token status: what the wait is doing before any text exists to show. */
   | { type: 'phase'; phase: 'assembling' | 'waiting' }
-  | { type: 'done'; messageId: string; usage: NormalizedUsage; costUsd: number | null; truncated: boolean; proseGuard?: 'off' | 'button' | 'auto' }
+  | { type: 'done'; messageId: string; usage: NormalizedUsage; costUsd: number | null; truncated: boolean }
   | { type: 'error'; message: string; code: string };
 
 export interface NormalizedUsage {

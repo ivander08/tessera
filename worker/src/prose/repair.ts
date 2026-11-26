@@ -7,7 +7,8 @@ import {
   preservesDialogue,
   type GuardViolation,
 } from '../../../src/lib/prose/guard';
-import type { Craft } from '../../../src/lib/scene/setup';
+import type { Craft, SceneSetup } from '../../../src/lib/scene/setup';
+import { claimProse, clearProseStatus, setProseStatus } from './state';
 
 /**
  * The prose guard's repair pass.
@@ -46,12 +47,83 @@ export interface RepairResult {
   /** The new swipe row, when one was written. */
   id?: string;
   repaired?: string;
+  /**
+   * The reply changed while the repair was running, so the result was thrown away. Not a
+   * failure of the reader's text and not a fixed version: the status is cleared instead.
+   */
+  discarded?: boolean;
 }
 
 interface TargetRow {
+  id: string;
   seq: number;
   role: string;
   content: string;
+}
+
+/**
+ * Everything the repair needs to know about the reply before it writes a prompt.
+ *
+ * Split out of `repairReply` so the turn can inspect a reply ONCE — before `done`, to
+ * persist `clean`/`issues`/`queued` — and hand the same answer to the repair. Re-running
+ * detection inside the repair would read the same rows twice and could disagree with the
+ * status the reader was just shown.
+ */
+export interface Inspection {
+  setup: SceneSetup;
+  target: TargetRow;
+  previous: string[];
+  violations: GuardViolation[];
+}
+
+export async function inspectReply(
+  env: Env,
+  chatId: string,
+  messageId: string,
+): Promise<Inspection> {
+  const setup = await loadSceneSetup(env, chatId);
+
+  const target = await env.DB.prepare(
+    `SELECT id, seq, role, content FROM messages
+      WHERE id = ? AND chat_id = ? AND deleted = 0`,
+  )
+    .bind(messageId, chatId)
+    .first<TargetRow>();
+  if (!target) throw new Error('message not found');
+  if (target.role !== 'assistant') throw new Error('only an assistant reply can be corrected');
+  if (target.content.trim().length === 0) throw new Error('the reply is empty');
+
+  const { results: previousRows } = await env.DB.prepare(
+    `SELECT content FROM messages
+      WHERE chat_id = ? AND role = 'assistant' AND deleted = 0 AND active = 1 AND seq < ?
+      ORDER BY seq DESC LIMIT 3`,
+  )
+    .bind(chatId, target.seq)
+    .all<{ content: string }>();
+  const previous = previousRows.map((row) => row.content);
+
+  const violations = detectViolations(target.content, {
+    bans: setup.proseBans,
+    previous,
+    maxParagraphs: PARAGRAPH_CEILING[setup.craft.responseLength] ?? null,
+  });
+
+  return { setup, target, previous, violations };
+}
+
+/** Whether the reply still holds the text the inspection was made against. */
+async function stillHasContent(
+  env: Env,
+  chatId: string,
+  messageId: string,
+  content: string,
+): Promise<boolean> {
+  const row = await env.DB.prepare(
+    `SELECT content FROM messages WHERE id = ? AND chat_id = ? AND deleted = 0`,
+  )
+    .bind(messageId, chatId)
+    .first<{ content: string }>();
+  return row !== null && row.content.trim() === content.trim();
 }
 
 /**
@@ -101,43 +173,32 @@ Rules:
  * found" instead of failing silently. A repair that would change the dialogue, come back
  * empty, or fix nothing is rejected and reported as an error — the original is the only
  * thing on screen, and a second bad version is worse than the first.
+ *
+ * `inspection` is the caller's answer from `inspectReply`, when it has one. Passing it in
+ * is what lets a turn detect once, persist the status, and hand the same violations to the
+ * repair instead of reading the same rows twice.
  */
 export async function repairReply(
   env: Env,
   chatId: string,
   messageId: string,
   options: RepairOptions,
+  inspection?: Inspection,
 ): Promise<RepairResult> {
-  const setup = await loadSceneSetup(env, chatId);
+  const inspected = inspection ?? (await inspectReply(env, chatId, messageId));
+  const { setup, target, previous, violations } = inspected;
+
   if (setup.proseGuard === 'off') {
     throw new Error('prose guard is off for this chat');
   }
-
-  const target = await env.DB.prepare(
-    `SELECT seq, role, content FROM messages
-      WHERE id = ? AND chat_id = ? AND deleted = 0`,
-  )
-    .bind(messageId, chatId)
-    .first<TargetRow>();
-  if (!target) throw new Error('message not found');
-  if (target.role !== 'assistant') throw new Error('only an assistant reply can be corrected');
-  if (target.content.trim().length === 0) throw new Error('the reply is empty');
-
-  const { results: previousRows } = await env.DB.prepare(
-    `SELECT content FROM messages
-      WHERE chat_id = ? AND role = 'assistant' AND deleted = 0 AND active = 1 AND seq < ?
-      ORDER BY seq DESC LIMIT 3`,
-  )
-    .bind(chatId, target.seq)
-    .all<{ content: string }>();
-  const previous = previousRows.map((row) => row.content);
-
-  const violations = detectViolations(target.content, {
-    bans: setup.proseBans,
-    previous,
-    maxParagraphs: PARAGRAPH_CEILING[setup.craft.responseLength] ?? null,
-  });
   if (violations.length === 0) return { violations: [] };
+
+  // The reply may have been edited, regenerated, or swiped while this was queued. A
+  // correction of text that is no longer there belongs to no position on screen.
+  if (!(await stillHasContent(env, chatId, messageId, target.content))) {
+    await clearProseStatus(env, messageId);
+    return { violations, discarded: true };
+  }
 
   const chat = await env.DB.prepare('SELECT preset_id FROM chats WHERE id = ?')
     .bind(chatId)
@@ -186,6 +247,13 @@ export async function repairReply(
     );
   }
 
+  // Re-read immediately before writing. The model call above is the long part; an edit
+  // that landed during it must win, not the correction of the old text.
+  if (!(await stillHasContent(env, chatId, messageId, target.content))) {
+    await clearProseStatus(env, messageId);
+    return { violations, discarded: true };
+  }
+
   const id = await addProseAlternative(env, chatId, messageId, repaired, options.activate);
   return { violations, id, repaired };
 }
@@ -195,23 +263,36 @@ export async function repairReply(
  *
  * A correction that arrives after the reader has started replying is a version they did
  * not ask for; it is added inactive, so the transcript's swipe count changes and the text
- * on screen does not. The client schedules one delayed refetch for chats in this mode.
+ * on screen does not. The client polls the status endpoint while the row is on screen and
+ * reloads once when the claim settles, which is how it learns that `queued` became
+ * `done` or `failed` without a blind fixed delay.
  */
 export async function maybeGuardProse(
   env: Env,
   chatId: string,
   messageId: string,
+  inspection?: Inspection,
 ): Promise<void> {
-  const setup = await loadSceneSetup(env, chatId);
-  if (setup.proseGuard !== 'auto') return;
+  const inspected = inspection ?? (await inspectReply(env, chatId, messageId));
+  if (inspected.setup.proseGuard !== 'auto') return;
+  if (inspected.violations.length === 0) return;
+
+  // The claim is the lock. Auto and a Fix click can both arrive for the same reply; only
+  // the one that moves the row out of `queued` gets to spend a model call.
+  if (!(await claimProse(env, messageId, ['queued']))) return;
+
   try {
-    await repairReply(env, chatId, messageId, { activate: false });
+    const result = await repairReply(env, chatId, messageId, { activate: false }, inspected);
+    if (result.discarded) {
+      await clearProseStatus(env, messageId);
+    } else {
+      await setProseStatus(env, messageId, 'done', result.violations);
+    }
   } catch (error) {
-    // Auto is an enhancement. A failed repair must never look like a failed turn.
-    console.warn(
-      `[prose] auto repair failed for chat=${chatId}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
+    const reason = error instanceof Error ? error.message : String(error);
+    // The status is the reader's only evidence that a repair was attempted, so a write
+    // failure here must not mask the repair's own failure.
+    await setProseStatus(env, messageId, 'failed', inspected.violations, reason).catch(() => {});
+    console.warn(`[prose] auto repair failed for chat=${chatId}: ${reason}`);
   }
 }

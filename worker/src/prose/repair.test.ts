@@ -1,9 +1,11 @@
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 
-import { exec, makeTestEnv } from '../test/harness';
+import { exec, makeTestEnv, one } from '../test/harness';
 import { encryptKey } from '../../../src/lib/crypto';
-import { repairReply } from './repair';
+import { inspectReply, maybeGuardProse, repairReply } from './repair';
+import { claimProse, pendingProse, setProseStatus } from './state';
+import { listMessages } from '../api/chat';
 import { DEFAULT_CRAFT, DEFAULT_SCENE_SETUP } from '../../../src/lib/scene/setup';
 
 /**
@@ -93,6 +95,174 @@ async function withReply<T>(
     globalThis.fetch = original;
   }
 }
+
+function useSetup(db: Database, chatId: string, proseGuard: 'off' | 'button' | 'auto'): void {
+  exec(
+    db,
+    'INSERT INTO chat_scene_setup (chat_id, json, updated_at) VALUES (?, ?, ?)',
+    chatId,
+    JSON.stringify({
+      ...DEFAULT_SCENE_SETUP,
+      proseGuard,
+      craft: { ...DEFAULT_CRAFT, responseLength: 'short' },
+    }),
+    Date.now(),
+  );
+}
+
+function statusOf(db: Database, messageId: string): string | null {
+  const row = one<{ prose_status: string | null }>(
+    db,
+    'SELECT prose_status FROM messages WHERE id = ?',
+    messageId,
+  );
+  return row?.prose_status ?? null;
+}
+
+describe('inspectReply and the status lock', () => {
+  test('reports violations without writing a status or a version', async () => {
+    const { env, db } = await configured();
+    const chatId = seedChat(db);
+    useSetup(db, chatId, 'button');
+    const messageId = seedMessage(db, chatId, 'm5', 'Her jaw works. "You asked." She waits.');
+
+    const inspection = await inspectReply(env, chatId, messageId);
+
+    expect(inspection.violations.length).toBeGreaterThan(0);
+    expect(inspection.target.id).toBe(messageId);
+    // Inspection is a read. The status is written by the turn, not by the inspection, so a
+    // caller that only wants the violations cannot leave a claim behind.
+    expect(statusOf(db, messageId)).toBeNull();
+    const count = one<{ n: number }>(
+      db,
+      'SELECT COUNT(*) AS n FROM messages WHERE chat_id = ?',
+      chatId,
+    );
+    expect(count?.n).toBe(1);
+  });
+
+  test('claims once; a stale repairing claim is reclaimable', async () => {
+    const { env, db } = await configured();
+    const chatId = seedChat(db);
+    const messageId = seedMessage(db, chatId, 'm6', 'She sets the mug down. "You asked."');
+    await setProseStatus(env, messageId, 'queued', []);
+
+    expect(await claimProse(env, messageId, ['queued'])).toBe(true);
+    expect(statusOf(db, messageId)).toBe('repairing');
+    // Fresh claim: the second caller loses and spends nothing.
+    expect(await claimProse(env, messageId, ['queued'])).toBe(false);
+
+    // A worker that was evicted leaves the row `repairing`. After the stale window another
+    // caller must be able to take it, or the reader waits forever.
+    exec(
+      db,
+      'UPDATE messages SET prose_updated_at = ? WHERE id = ?',
+      Date.now() - 200_000,
+      messageId,
+    );
+    expect(await claimProse(env, messageId, ['queued'])).toBe(true);
+
+    expect(await pendingProse(env, chatId)).toHaveLength(1);
+    await setProseStatus(env, messageId, 'done', []);
+    expect(await pendingProse(env, chatId)).toHaveLength(0);
+
+    // An evicted auto worker can leave a `queued` row with nothing scheduled. After the
+    // stale window the button must be able to take it, or it waits on a job that is gone.
+    await setProseStatus(env, messageId, 'queued', []);
+    exec(
+      db,
+      'UPDATE messages SET prose_updated_at = ? WHERE id = ?',
+      Date.now() - 200_000,
+      messageId,
+    );
+    expect(await claimProse(env, messageId, ['issues', 'failed', null])).toBe(true);
+  });
+
+  test('auto claims queued, then records done and adds the version inactive', async () => {
+    const { env, db } = await configured();
+    const chatId = seedChat(db);
+    useSetup(db, chatId, 'auto');
+    const messageId = seedMessage(db, chatId, 'm7', 'Her jaw works. "You asked." She waits.');
+
+    const inspection = await inspectReply(env, chatId, messageId);
+    expect(inspection.violations.length).toBeGreaterThan(0);
+    await setProseStatus(env, messageId, 'queued', inspection.violations);
+
+    await withReply('She looks at the door. "You asked." The room is quiet.', async () => {
+      await maybeGuardProse(env, chatId, messageId, inspection);
+    });
+
+    expect(statusOf(db, messageId)).toBe('done');
+    const versions = db
+      .query('SELECT source, active FROM messages WHERE chat_id = ? AND id != ?')
+      .all(chatId, messageId) as Array<{ source: string | null; active: number }>;
+    expect(versions).toHaveLength(1);
+    expect(versions[0].source).toBe('prose');
+    expect(versions[0].active).toBe(0);
+  });
+
+  test('discards a repair when the reply changed during the model call', async () => {
+    const { env, db } = await configured();
+    const chatId = seedChat(db);
+    useSetup(db, chatId, 'button');
+    const messageId = seedMessage(db, chatId, 'm8', 'Her jaw works. "You asked." She waits.');
+    const inspection = await inspectReply(env, chatId, messageId);
+    await setProseStatus(env, messageId, 'issues', inspection.violations);
+
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      // The reader edits while the cheap model is working. The correction is now a
+      // correction of text that is no longer on screen.
+      exec(db, 'UPDATE messages SET content = ? WHERE id = ?', 'A different reply entirely.', messageId);
+      return new Response(
+        JSON.stringify({
+          choices: [
+            { message: { content: 'She looks at the door. "You asked." The room is quiet.' } },
+          ],
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      const result = await repairReply(env, chatId, messageId, { activate: false }, inspection);
+      expect(result.discarded).toBe(true);
+      expect(result.id).toBeUndefined();
+    } finally {
+      globalThis.fetch = original;
+    }
+
+    expect(statusOf(db, messageId)).toBeNull();
+    const count = one<{ n: number }>(
+      db,
+      'SELECT COUNT(*) AS n FROM messages WHERE chat_id = ?',
+      chatId,
+    );
+    expect(count?.n).toBe(1);
+  });
+
+  test('the transcript carries prose only for inspected rows', async () => {
+    const { env, db } = await configured();
+    const chatId = seedChat(db);
+    const messageId = seedMessage(db, chatId, 'm9', 'She sets the mug down. "You asked."');
+    const url = new URL(`http://local/api/chats/${chatId}/messages`);
+
+    const before = (await (await listMessages(env, chatId, url)).json()) as {
+      messages: Array<{ id: string; prose?: unknown }>;
+    };
+    expect(before.messages).toHaveLength(1);
+    expect('prose' in before.messages[0]).toBe(false);
+
+    await setProseStatus(env, messageId, 'issues', [
+      { kind: 'banned', detail: 'stocked beat: "jaw works"', snippet: 'jaw works' },
+    ]);
+
+    const after = (await (await listMessages(env, chatId, url)).json()) as {
+      messages: Array<{ id: string; prose?: { status: string; count: number } }>;
+    };
+    expect(after.messages[0].prose).toEqual({ status: 'issues', count: 1 });
+  });
+});
 
 describe('repairReply', () => {
   test('adds the corrected narration as an inactive version and leaves the dialogue alone', async () => {

@@ -1017,6 +1017,19 @@ html[data-layout="bubble"] .turn-segment:not(:first-child) {
   cursor: pointer;
 }
 
+/* The retry in a failed prose note is the same inline control: it sits inside a sentence
+   whose colour already carries the warning. */
+.turn-prose .app-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
 /* ---------------------------------------------------------------- transcript */
 
 /* The reading column. `--measure` is the measure in characters — the thing that keeps a
@@ -1278,6 +1291,46 @@ html[data-avatars="hidden"] .turn-avatar {
   text-transform: uppercase;
 }
 
+/* The prose guard's line under a turn. A record, not a voice: the same monospaced,
+   quiet treatment as the scene line, and it wraps rather than scrolling on a phone. */
+.turn-prose {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin: 2px 0 8px;
+  font-family: var(--font-data);
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+}
+
+.turn-prose-failed {
+  color: var(--warn);
+}
+
+/* The work is running, and that is the one thing worth a motion cue. Opacity only, so it
+   stays on the compositor; the reader asked for reduced motion gets a still dot. */
+.turn-prose-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+  animation: prose-pulse 1.3s ease-in-out infinite;
+}
+
+@keyframes prose-pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .turn-prose-dot {
+    animation: none;
+  }
+}
+
 .turn:hover .turn-tools,
 .turn:focus-within .turn-tools {
   opacity: 1;
@@ -1291,6 +1344,7 @@ html[data-avatars="hidden"] .turn-avatar {
 }
 
 .tool {
+  position: relative;
   display: grid;
   place-items: center;
   width: 27px;
@@ -1323,6 +1377,25 @@ html[data-avatars="hidden"] .turn-avatar {
   font-family: var(--font-data);
   font-size: var(--text-xs);
   color: var(--ink-faint);
+}
+
+/* A count in the corner of an icon: "these replies need attention" without a second line
+   under the turn. Small on purpose — it is a hint, not a label. */
+.tool-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--brass);
+  color: var(--ground);
+  font-family: var(--font-data);
+  font-size: 9px;
+  line-height: 13px;
+  text-align: center;
+  pointer-events: none;
 }
 
 /* The prose. Serif, a real measure, and a first-line treatment that marks where a

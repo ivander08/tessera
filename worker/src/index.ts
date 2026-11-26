@@ -31,7 +31,7 @@ import {
 } from './api/chat';
 import { chatsRoute } from './api/chats';
 import { evalJudgeRoute } from './api/eval';
-import { proseFixRoute } from './api/prose';
+import { proseFixRoute, proseStatusRoute } from './api/prose';
 import { exportRoute } from './api/export';
 import { forgeRoute } from './api/forge';
 import {
@@ -268,6 +268,7 @@ async function route(req: Request, env: Env, url: URL, ctx: ExecutionContext): P
   if (path === '/api/eval/judge' && method === 'POST') return evalJudgeRoute(req, env);
 
   if (path === '/api/prose/fix' && method === 'POST') return proseFixRoute(req, env);
+  if (path === '/api/prose/status' && method === 'GET') return proseStatusRoute(env, url);
 
   return notFound();
 }
