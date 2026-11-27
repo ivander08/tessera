@@ -21,25 +21,33 @@ import { claimProse, clearProseStatus, setProseStatus } from './state';
  */
 
 /**
- * Paragraph ceilings by length setting. Slack on purpose: a compliant five-paragraph
- * reply that runs to six is not the failure the reader is reporting; a twelve-paragraph
- * reply under a "three to five" setting is.
+ * Paragraph ceilings by length setting.
+ *
+ * This is the setting's own stated maximum, matching `LENGTH_LINE` in `craftBlock` and the
+ * panel's description — not a slackened one. The old table allowed three paragraphs under
+ * "at most two" and six under "three to five", so a reply could be visibly over the setting
+ * and still report clean. The adaptive modes use their climax maximum.
  */
 const PARAGRAPH_CEILING: Record<Craft['responseLength'], number | null> = {
   off: null,
-  reallyShort: 3,
-  short: 6,
-  medium: 10,
-  long: 16,
+  reallyShort: 2,
+  short: 5,
+  medium: 9,
+  long: 15,
   noLimit: null,
-  adaptiveShort: 7,
-  adaptiveMedium: 10,
-  adaptiveLong: 14,
+  adaptiveShort: 8,
+  adaptiveMedium: 12,
+  adaptiveLong: 18,
 };
 
 export interface RepairOptions {
   /** The button asks for the corrected version, so it becomes the visible one. */
   activate: boolean;
+  /**
+   * A manual rewrite of a reply the detector found nothing wrong with. The reader marked
+   * it flat; the repair aims at the voice instead of at a violation list.
+   */
+  polish?: boolean;
 }
 
 export interface RepairResult {
@@ -146,21 +154,28 @@ function voiceOf(postHistory: string, sample: string): string {
   return `${trimmed}\n\n<reader_sample>\n${readerSample}\n</reader_sample>`;
 }
 
-function systemPrompt(voice: string, violations: GuardViolation[]): string {
+function systemPrompt(voice: string, violations: GuardViolation[], polish: boolean): string {
   const list = violations.map((violation) => `- ${violation.detail}`).join('\n');
+  const problem = polish
+    ? `The reader marked this reply as flat. No specific tic was named: make the narration more concrete, more specific, and more clearly in this voice without changing what happens.`
+    : `The detector found these problems in the reply:\n${list}`;
   return `You are correcting the prose of one roleplay reply. Rewrite ONLY the narration.
 
 The voice this chat is written in:
 ${voice}
 
-The detector found these problems in the reply:
-${list}
+${problem}
 
 Rules:
 - Preserve every quoted line of dialogue exactly, in the same order. Preserve every phone message and every backticked line. They are not yours to edit.
 - Preserve every event, action, and fact. Do not add plot, do not remove plot, do not invent a new beat.
 - Change only the narration: the sentences between and around the dialogue.
-- Fix the listed problems. Do not replace one stock beat with another from the same family.
+- ${
+    polish
+      ? 'Do not add new events or description for its own sake. Replace generic summary and camera-report sentences with observed, specific detail.'
+      : 'Fix the listed problems. Do not replace one stock beat with another from the same family.'
+  }
+- Preserve every markdown emphasis span and every paragraph break. Do not flatten a styled paragraph into plain text.
 - Do not open on the previous reply's opening. Vary the first sentence.
 - Keep the paragraph count within one of the original unless a violation is the paragraph count itself.
 - Output only the corrected reply. No preamble, no notes, no code fence, no explanation.`;
@@ -187,11 +202,12 @@ export async function repairReply(
 ): Promise<RepairResult> {
   const inspected = inspection ?? (await inspectReply(env, chatId, messageId));
   const { setup, target, previous, violations } = inspected;
+  const polish = options.polish === true;
 
   if (setup.proseGuard === 'off') {
     throw new Error('prose guard is off for this chat');
   }
-  if (violations.length === 0) return { violations: [] };
+  if (violations.length === 0 && !polish) return { violations: [] };
 
   // The reply may have been edited, regenerated, or swiped while this was queued. A
   // correction of text that is no longer there belongs to no position on screen.
@@ -210,7 +226,7 @@ export async function repairReply(
   }\n\nReply to correct:\n${target.content}`;
 
   const result = await complete(env, {
-    system: systemPrompt(voice, violations),
+    system: systemPrompt(voice, violations, polish),
     user,
     // A reply is ~300-900 tokens; 3500 leaves room for the correction plus the
     // side-channel's own thinking without inviting a rewrite of the whole scene.
@@ -241,7 +257,15 @@ export async function repairReply(
     previous,
     maxParagraphs: PARAGRAPH_CEILING[setup.craft.responseLength] ?? null,
   });
-  if (after.length >= violations.length) {
+  if (polish) {
+    // There was nothing to fix, so there is no violation count to improve. The only
+    // failure mode a polish can introduce is a new tic of its own.
+    if (after.length > 0) {
+      throw new Error(
+        `the rewrite introduced ${after.length} problem${after.length === 1 ? '' : 's'}; it was not applied`,
+      );
+    }
+  } else if (after.length >= violations.length) {
     throw new Error(
       `the repair left ${after.length} of ${violations.length} problems; it was not applied`,
     );

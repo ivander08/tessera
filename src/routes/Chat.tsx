@@ -1281,13 +1281,19 @@ export default function Chat() {
           reload();
           return;
         }
-        if (result.violations.length === 0) {
-          toast.success('No prose issues found.');
-        } else {
+        if (result.id) {
           const count = result.violations.length;
-          toast.success(`Fixed version added (${count} issue${count === 1 ? '' : 's'}).`);
+          toast.success(
+            count === 0
+              ? 'Rewritten version added.'
+              : `Fixed version added (${count} issue${count === 1 ? '' : 's'}).`,
+          );
+          keepInView.current = result.id;
+        } else {
+          // No version was written. The guard is off, or the server had nothing to do —
+          // either way, do not claim a rewrite that did not happen.
+          toast.success('No prose issues found.');
         }
-        keepInView.current = result.id ?? messageId;
         reload();
       } catch (cause) {
         toast.failure(messageOf(cause));

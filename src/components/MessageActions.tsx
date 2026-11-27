@@ -88,7 +88,7 @@ export function MessageActions({
 
       {onFixProse && (
         <Tool
-          label={fixing ? 'Fixing prose…' : 'Fix prose'}
+          label={fixing ? 'Fixing prose…' : 'Fix or rewrite prose'}
           onClick={onFixProse}
           disabled={busy || fixing}
           badge={!fixing && proseIssues ? proseIssues : undefined}

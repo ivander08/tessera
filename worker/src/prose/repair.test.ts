@@ -6,7 +6,7 @@ import { encryptKey } from '../../../src/lib/crypto';
 import { inspectReply, maybeGuardProse, repairReply } from './repair';
 import { claimProse, pendingProse, setProseStatus } from './state';
 import { listMessages } from '../api/chat';
-import { DEFAULT_CRAFT, DEFAULT_SCENE_SETUP } from '../../../src/lib/scene/setup';
+import { DEFAULT_CRAFT, DEFAULT_SCENE_SETUP, type Craft } from '../../../src/lib/scene/setup';
 
 /**
  * The repair pass, end to end against the real migrations and a stubbed provider.
@@ -96,7 +96,12 @@ async function withReply<T>(
   }
 }
 
-function useSetup(db: Database, chatId: string, proseGuard: 'off' | 'button' | 'auto'): void {
+function useSetup(
+  db: Database,
+  chatId: string,
+  proseGuard: 'off' | 'button' | 'auto',
+  responseLength: Craft['responseLength'] = 'short',
+): void {
   exec(
     db,
     'INSERT INTO chat_scene_setup (chat_id, json, updated_at) VALUES (?, ?, ?)',
@@ -104,7 +109,7 @@ function useSetup(db: Database, chatId: string, proseGuard: 'off' | 'button' | '
     JSON.stringify({
       ...DEFAULT_SCENE_SETUP,
       proseGuard,
-      craft: { ...DEFAULT_CRAFT, responseLength: 'short' },
+      craft: { ...DEFAULT_CRAFT, responseLength },
     }),
     Date.now(),
   );
@@ -241,6 +246,49 @@ describe('inspectReply and the status lock', () => {
     expect(count?.n).toBe(1);
   });
 
+  test('the length setting flags the paragraph count, not the fill', async () => {
+    const { env, db } = await configured();
+    const chatId = seedChat(db);
+    useSetup(db, chatId, 'auto', 'reallyShort');
+    const messageId = seedMessage(db, chatId, 'm10', 'One beat.\n\nTwo beats.');
+
+    const two = await inspectReply(env, chatId, messageId);
+    expect(two.violations.some((violation) => violation.kind === 'length')).toBe(false);
+
+    // Three paragraphs under "at most two" is the exact case the old ceiling (3) let
+    // through. The reply can still be long; only the count is the setting's business.
+    exec(
+      db,
+      'UPDATE messages SET content = ? WHERE id = ?',
+      'One beat, with a longer paragraph that carries its own detail.\n\nTwo beats, also longer.\n\nThree beats.',
+      messageId,
+    );
+    const three = await inspectReply(env, chatId, messageId);
+    const length = three.violations.find((violation) => violation.kind === 'length');
+    expect(length?.detail).toContain('ceiling of 2');
+  });
+
+  test('short flags six paragraphs and accepts five', async () => {
+    const { env, db } = await configured();
+    const chatId = seedChat(db);
+    useSetup(db, chatId, 'auto', 'short');
+    const messageId = seedMessage(db, chatId, 'm12', 'One.\n\nTwo.\n\nThree.\n\nFour.\n\nFive.');
+    expect(
+      (await inspectReply(env, chatId, messageId)).violations.some(
+        (violation) => violation.kind === 'length',
+      ),
+    ).toBe(false);
+
+    exec(
+      db,
+      'UPDATE messages SET content = ? WHERE id = ?',
+      'One.\n\nTwo.\n\nThree.\n\nFour.\n\nFive.\n\nSix.',
+      messageId,
+    );
+    const six = await inspectReply(env, chatId, messageId);
+    expect(six.violations.some((violation) => violation.kind === 'length')).toBe(true);
+  });
+
   test('the transcript carries prose only for inspected rows', async () => {
     const { env, db } = await configured();
     const chatId = seedChat(db);
@@ -346,6 +394,45 @@ describe('repairReply', () => {
       .query('SELECT COUNT(*) AS n FROM messages WHERE chat_id = ?')
       .get(chatId) as { n: number };
     expect(count.n).toBe(1);
+  });
+
+  test('rewrites a clean reply when the reader asks for a polish', async () => {
+    const { env, db } = await configured();
+    const chatId = seedChat(db);
+    useSetup(db, chatId, 'button');
+    const messageId = seedMessage(
+      db,
+      chatId,
+      'm13',
+      'She sets the mug down. "You asked." The room is quiet.',
+    );
+    const inspection = await inspectReply(env, chatId, messageId);
+    expect(inspection.violations).toHaveLength(0);
+
+    await withReply(
+      'She sets the mug down, the handle turned toward him. "You asked." The room keeps its quiet.',
+      async (sent) => {
+        const result = await repairReply(
+          env,
+          chatId,
+          messageId,
+          { activate: true, polish: true },
+          inspection,
+        );
+        expect(result.id).toBeString();
+        expect(result.violations).toEqual([]);
+
+        const body = sent[0] as { messages: Array<{ role: string; content: string }> };
+        expect(body.messages[0].content).toContain('reader marked this reply as flat');
+      },
+    );
+
+    const versions = db
+      .query('SELECT source, active FROM messages WHERE chat_id = ? AND id != ?')
+      .all(chatId, messageId) as Array<{ source: string | null; active: number }>;
+    expect(versions).toHaveLength(1);
+    expect(versions[0].source).toBe('prose');
+    expect(versions[0].active).toBe(1);
   });
 
   test('does nothing when the reply has no violations', async () => {

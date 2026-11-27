@@ -265,13 +265,10 @@ async function runTurn(
         model: settings.model,
         messages: prompt.messages,
         stream: true,
-        // The craft length's ceiling, when it names one: the prompt asks for the length
-        // in words, this guarantees it in tokens. `min` so a smaller preset budget still
-        // wins — the cap only ever narrows, never widens.
-        maxTokens:
-          prompt.responseLengthCap != null
-            ? Math.min(settings.maxTokens, prompt.responseLengthCap)
-            : settings.maxTokens,
+        // The preset's own budget is the only output cap. The craft length controls the
+        // paragraph COUNT now, not how much each paragraph fills: a two-paragraph reply
+        // may run as long as the beat needs, and the guard checks the count afterwards.
+        maxTokens: settings.maxTokens,
         // Stop strings come from the preset; without them the model runs past where the
         // preset author intended the reply to end.
         knobs: settings.stopStrings.length > 0
@@ -409,7 +406,12 @@ async function runTurn(
     // (the old shape) meant the transcript could only ever show the PREVIOUS state of the
     // world, and a failed repair left no trace at all.
     let prose: Inspection | null = null;
-    if (mode === 'send' || mode === 'regenerate' || answeringPendingUser) {
+    // Every mode that writes an assistant row is guardable, `continue` included: a
+    // continuation is a new reply on screen, and skipping it meant an empty send's text
+    // was never checked, never got a status, and could not be fixed. `impersonate` writes
+    // the reader's own line, so there is no assistant text to inspect there.
+    const guardable = mode === 'send' || mode === 'regenerate' || mode === 'continue';
+    if (guardable) {
       try {
         prose = await inspectReply(env, chat.id, messageId);
         const status =
@@ -453,7 +455,7 @@ async function runTurn(
     // The prose guard is not memory: it also runs on a regenerate, which writes a new
     // assistant row. It is bookkeeping either way — the reply is already delivered — so it
     // never delays the turn.
-    if (prose && (mode === 'send' || mode === 'regenerate' || answeringPendingUser)) {
+    if (prose && guardable) {
       ctx.waitUntil(
         maybeGuardProse(env, chat.id, messageId, prose).catch((err: unknown) => {
           console.warn(

@@ -15,7 +15,6 @@ import {
   renderAntiRepetition,
   renderCraftBlock,
   renderCraftLength,
-  CRAFT_LENGTH_CAP,
   renderContentPolicy,
   renderVocalisation,
 } from '../../src/lib/prompt/craftBlock';
@@ -485,11 +484,6 @@ export async function buildPrompt(
     // `tailStart` is unchanged, so the prefill sits AFTER the cacheable prefix — it is
     // per-turn state and must never enter the head.
   }
-
-  // The craft length's token ceiling rides back with the prompt: `runTurn` is the only
-  // place `maxTokens` is chosen, and it already holds this object. See `CRAFT_LENGTH_CAP`.
-  const cap = CRAFT_LENGTH_CAP[setup.craft.responseLength];
-  if (cap != null) assembled.responseLengthCap = cap;
 
   return assembled;
 }

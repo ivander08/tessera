@@ -322,10 +322,11 @@ function ProseNote({
   const issues = prose.count === 1 ? '1 issue' : `${prose.count} issues`;
 
   if (fixing || prose.status === 'queued' || prose.status === 'repairing') {
+    const label = prose.count > 0 ? 'Fixing prose' : 'Rewriting prose';
     return (
       <p className="turn-prose" role="status">
         <span className="turn-prose-dot" aria-hidden="true" />
-        Fixing prose…{prose.count > 0 ? ` (${issues})` : ''}
+        {label}…{prose.count > 0 ? ` (${issues})` : ''}
       </p>
     );
   }
@@ -333,7 +334,7 @@ function ProseNote({
   if (prose.status === 'done') {
     return (
       <p className="turn-prose">
-        Fixed{prose.count > 0 ? ` · ${issues}` : ''} · swipe to compare
+        {prose.count > 0 ? `Fixed · ${issues}` : 'Rewritten'} · swipe to compare
       </p>
     );
   }

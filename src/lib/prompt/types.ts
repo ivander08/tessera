@@ -15,12 +15,4 @@ export interface AssembledPrompt {
   headTokens: number;
   bodyTokens: number;
   tailTokens: number;
-  /**
-   * Output-token ceiling for this reply, when the craft length names one.
-   *
-   * Set by `buildPrompt`, never by `assemble`: the cap comes from the scene's craft
-   * document, which only the worker loads. `undefined` means "the preset's own budget
-   * governs" — the field only ever narrows what the caller would have sent.
-   */
-  responseLengthCap?: number;
 }

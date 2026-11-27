@@ -510,7 +510,7 @@ const DISTANCE_LINE: Record<Craft['narrativeDistance'], string> = {
 const LENGTH_LINE: Record<Craft['responseLength'], string> = {
   off: '',
   reallyShort:
-    'The reply is at most two short paragraphs, and one is usually better. No preamble, no recap, no scene-setting: react to what was just said or done and stop. A line of dialogue on its own is a complete reply.',
+    'At most two paragraphs, and one is usually better. No preamble, no recap, no scene-setting: react to what was just said or done and stop. A line of dialogue on its own is a complete reply.',
   short:
     'Three to five paragraphs in total, dialogue included.',
   medium:
@@ -543,27 +543,6 @@ export function renderCraftLength(craft: Craft): string {
   if (line === '' || craft.responseLength === 'noLimit') return line;
   return `${line} Stop at that length; do not keep writing past it.`;
 }
-
-/**
- * Output-token ceiling per craft length; `null` for the two that have none.
- *
- * The prompt asks for the length in words; this guarantees it in tokens. The bounds
- * are deliberately generous — a compliant reply must never be the thing that gets
- * truncated — so they stop runaways rather than borderline replies. A genuine
- * overflow lands on the existing truncated/Continue flow, which is the honest
- * outcome for a model that blew past an explicit stop.
- */
-export const CRAFT_LENGTH_CAP: Record<Craft['responseLength'], number | null> = {
-  off: null,
-  reallyShort: 450,
-  short: 900,
-  medium: 1500,
-  long: 2600,
-  noLimit: null,
-  adaptiveShort: 1200,
-  adaptiveMedium: 1800,
-  adaptiveLong: 3000,
-};
 
 const DENSITY_LINE: Record<Craft['density'], string> = {
   off: '',

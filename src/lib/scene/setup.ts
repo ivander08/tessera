@@ -575,7 +575,7 @@ export const LENGTH_OPTIONS: Array<{
     value: 'reallyShort',
     label: 'Really short',
     description:
-      'At most two short paragraphs, and one is usually better. Reacts and stops — no preamble, no recap. A line of dialogue on its own is a complete reply.',
+      'At most two paragraphs, and one is usually better. Reacts and stops — no preamble, no recap. A line of dialogue on its own is a complete reply.',
   },
   {
     value: 'short',
