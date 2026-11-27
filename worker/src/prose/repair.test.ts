@@ -435,6 +435,43 @@ describe('repairReply', () => {
     expect(versions[0].active).toBe(1);
   });
 
+  test('a length-only repair merges paragraphs without a model call', async () => {
+    const { env, db } = await configured();
+    const chatId = seedChat(db);
+    useSetup(db, chatId, 'auto', 'reallyShort');
+    const messageId = seedMessage(
+      db,
+      chatId,
+      'm14',
+      'One beat here.\n\nTwo beats here.\n\nThree beats here.',
+    );
+
+    const original = globalThis.fetch;
+    globalThis.fetch = (() => {
+      throw new Error('a paragraph count must not need the model');
+    }) as unknown as typeof fetch;
+
+    try {
+      const result = await repairReply(env, chatId, messageId, { activate: false });
+      expect(result.id).toBeString();
+      expect(result.violations.some((violation) => violation.kind === 'length')).toBe(true);
+    } finally {
+      globalThis.fetch = original;
+    }
+
+    const repaired = one<{ content: string }>(
+      db,
+      'SELECT content FROM messages WHERE chat_id = ? AND source = ?',
+      chatId,
+      'prose',
+    );
+    expect(repaired).not.toBeNull();
+    const paragraphs = repaired!.content.split(/\n\s*\n/).filter((part) => part.trim().length > 0);
+    expect(paragraphs).toHaveLength(2);
+    // The words are unchanged; only the break between the last two paragraphs is gone.
+    expect(repaired!.content).toContain('Two beats here. Three beats here.');
+  });
+
   test('does nothing when the reply has no violations', async () => {
     const { env, db } = await configured();
     const chatId = seedChat(db);

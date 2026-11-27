@@ -182,6 +182,29 @@ Rules:
 }
 
 /**
+ * Drops excess paragraph breaks until the text has at most `max` paragraphs.
+ *
+ * Paragraph count is the one setting that can be satisfied without a model: joining two
+ * paragraphs with a space changes no word, no line of dialogue, and no event — only the
+ * break. Returns null when the text already fits.
+ */
+function mergeToCeiling(content: string, max: number): string | null {
+  const paragraphs = content
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter((paragraph) => paragraph.length > 0);
+  if (paragraphs.length <= max) return null;
+
+  while (paragraphs.length > max) {
+    const last = paragraphs.pop();
+    if (last === undefined) break;
+    const index = paragraphs.length - 1;
+    paragraphs[index] = `${paragraphs[index]} ${last}`;
+  }
+  return paragraphs.join('\n\n');
+}
+
+/**
  * Repairs one assistant reply.
  *
  * Returns the violations even when no repair was written, so the button can say "nothing
@@ -216,29 +239,50 @@ export async function repairReply(
     return { violations, discarded: true };
   }
 
-  const chat = await env.DB.prepare('SELECT preset_id FROM chats WHERE id = ?')
-    .bind(chatId)
-    .first<{ preset_id: string | null }>();
-  const settings = await loadEffectiveSettings(env, chat?.preset_id ?? null);
-  const voice = voiceOf(settings.presetPostHistory, setup.proseSample);
-  const user = `Previous reply, for voice and to avoid its opening:\n${
-    previous[0]?.trim().slice(0, 1600) ?? '(none)'
-  }\n\nReply to correct:\n${target.content}`;
+  const ceiling = PARAGRAPH_CEILING[setup.craft.responseLength] ?? null;
+  const lengthOnly =
+    violations.length > 0 && violations.every((violation) => violation.kind === 'length');
 
-  const result = await complete(env, {
-    system: systemPrompt(voice, violations, polish),
-    user,
-    // A reply is ~300-900 tokens; 3500 leaves room for the correction plus the
-    // side-channel's own thinking without inviting a rewrite of the whole scene.
-    maxTokens: 3500,
-    settings,
-  });
+  let repaired: string;
+  if (lengthOnly && ceiling != null) {
+    // The count is formatting, not prose. No model call: joining the surplus paragraphs
+    // preserves every word and always lands on the ceiling, where the cheap model kept
+    // coming back with the same number of paragraphs it was asked to remove.
+    const merged = mergeToCeiling(target.content, ceiling);
+    if (!merged) return { violations };
+    repaired = merged;
+  } else {
+    const chat = await env.DB.prepare('SELECT preset_id FROM chats WHERE id = ?')
+      .bind(chatId)
+      .first<{ preset_id: string | null }>();
+    const settings = await loadEffectiveSettings(env, chat?.preset_id ?? null);
+    const voice = voiceOf(settings.presetPostHistory, setup.proseSample);
+    const user = `Previous reply, for voice and to avoid its opening:\n${
+      previous[0]?.trim().slice(0, 1600) ?? '(none)'
+    }\n\nReply to correct:\n${target.content}`;
 
-  const repaired = result.text
-    .trim()
-    .replace(/^```[a-z]*\s*/i, '')
-    .replace(/\s*```$/, '')
-    .trim();
+    const result = await complete(env, {
+      system: systemPrompt(voice, violations, polish),
+      user,
+      // A reply is ~300-900 tokens; 3500 leaves room for the correction plus the
+      // side-channel's own thinking without inviting a rewrite of the whole scene.
+      maxTokens: 3500,
+      settings,
+    });
+
+    repaired = result.text
+      .trim()
+      .replace(/^```[a-z]*\s*/i, '')
+      .replace(/\s*```$/, '')
+      .trim();
+
+    // A rewrite that fixed everything except the count still gets the deterministic
+    // merge; its other fixes survive, and the count is guaranteed instead of rejected.
+    if (ceiling != null) {
+      const merged = mergeToCeiling(repaired, ceiling);
+      if (merged) repaired = merged;
+    }
+  }
 
   if (repaired.length === 0) throw new Error('the repair came back empty');
   if (repaired === target.content.trim()) throw new Error('the repair did not change anything');
