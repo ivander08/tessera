@@ -472,6 +472,40 @@ describe('repairReply', () => {
     expect(repaired!.content).toContain('Two beats here. Three beats here.');
   });
 
+  test('auto shows a length-only merge immediately and keeps the original as a swipe', async () => {
+    const { env, db } = await configured();
+    const chatId = seedChat(db);
+    useSetup(db, chatId, 'auto', 'reallyShort');
+    const messageId = seedMessage(
+      db,
+      chatId,
+      'm15',
+      'One beat here.\n\nTwo beats here.\n\nThree beats here.',
+    );
+    const inspection = await inspectReply(env, chatId, messageId);
+    expect(inspection.violations.map((violation) => violation.kind)).toEqual(['length']);
+    await setProseStatus(env, messageId, 'queued', inspection.violations);
+
+    const original = globalThis.fetch;
+    globalThis.fetch = (() => {
+      throw new Error('a paragraph count must not need the model');
+    }) as unknown as typeof fetch;
+    try {
+      await maybeGuardProse(env, chatId, messageId, inspection);
+    } finally {
+      globalThis.fetch = original;
+    }
+
+    expect(statusOf(db, messageId)).toBe('done');
+    const versions = db
+      .query('SELECT id, source, active FROM messages WHERE chat_id = ?')
+      .all(chatId) as Array<{ id: string; source: string | null; active: number }>;
+    const originalRow = versions.find((row) => row.id === messageId);
+    const repaired = versions.find((row) => row.source === 'prose');
+    expect(originalRow?.active).toBe(0);
+    expect(repaired?.active).toBe(1);
+  });
+
   test('does nothing when the reply has no violations', async () => {
     const { env, db } = await configured();
     const chatId = seedChat(db);

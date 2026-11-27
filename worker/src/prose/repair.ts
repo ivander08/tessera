@@ -349,8 +349,19 @@ export async function maybeGuardProse(
   // the one that moves the row out of `queued` gets to spend a model call.
   if (!(await claimProse(env, messageId, ['queued']))) return;
 
+  // A length-only repair removes paragraph breaks and changes no word. Showing it
+  // immediately is the point: the reader set a paragraph count and the reply broke it.
+  // Any prose rewrite stays inactive so the original can be compared.
+  const lengthOnly = inspected.violations.every((violation) => violation.kind === 'length');
+
   try {
-    const result = await repairReply(env, chatId, messageId, { activate: false }, inspected);
+    const result = await repairReply(
+      env,
+      chatId,
+      messageId,
+      { activate: lengthOnly },
+      inspected,
+    );
     if (result.discarded) {
       await clearProseStatus(env, messageId);
     } else {
