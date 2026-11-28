@@ -506,6 +506,42 @@ describe('repairReply', () => {
     expect(repaired?.active).toBe(1);
   });
 
+  test('a length-only merge that would build a wall falls back to the model', async () => {
+    const { env, db } = await configured();
+    const chatId = seedChat(db);
+    useSetup(db, chatId, 'auto', 'reallyShort');
+    // Three paragraphs where the last two are long: merging lands over the cap, so the
+    // merge refuses and the model call happens instead.
+    const longA = `${'narration beat. '.repeat(24)}\n\n`;
+    const longB = 'narration closer. '.repeat(30);
+    const messageId = seedMessage(
+      db,
+      chatId,
+      'm16',
+      `One beat here. "Line."\n\n${longA}${longB}`,
+    );
+
+    // The model keeps every word but re-breaks the text into two short paragraphs —
+    // what a correction that shortens looks like next to a refused merge.
+    await withReply(`One beat here. "Line."\n\n${'narration beat. '.repeat(20)}`, async () => {
+      const result = await repairReply(env, chatId, messageId, { activate: false });
+      expect(result.id).toBeString();
+    });
+
+    const repaired = one<{ content: string }>(
+      db,
+      'SELECT content FROM messages WHERE chat_id = ? AND source = ?',
+      chatId,
+      'prose',
+    );
+    expect(repaired).not.toBeNull();
+    const paragraphs = repaired!.content.split(/\n\s*\n/).filter((part) => part.trim().length > 0);
+    expect(paragraphs).toHaveLength(2);
+    for (const paragraph of paragraphs) {
+      expect(paragraph.length).toBeLessThanOrEqual(700);
+    }
+  });
+
   test('does nothing when the reply has no violations', async () => {
     const { env, db } = await configured();
     const chatId = seedChat(db);

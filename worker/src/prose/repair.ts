@@ -181,12 +181,17 @@ Rules:
 - Output only the corrected reply. No preamble, no notes, no code fence, no explanation.`;
 }
 
+/** A merged paragraph beyond this is a wall of text, not a correction. */
+const MERGED_PARAGRAPH_CAP = 700;
+
 /**
  * Drops excess paragraph breaks until the text has at most `max` paragraphs.
  *
  * Paragraph count is the one setting that can be satisfied without a model: joining two
  * paragraphs with a space changes no word, no line of dialogue, and no event — only the
- * break. Returns null when the text already fits.
+ * break. Returns null when the text already fits, or when a merge would weld paragraphs
+ * past `MERGED_PARAGRAPH_CAP`: enforcing the count by building a wall of text trades one
+ * failure for a worse one, and shortening is something only the model can do.
  */
 function mergeToCeiling(content: string, max: number): string | null {
   const paragraphs = content
@@ -201,6 +206,7 @@ function mergeToCeiling(content: string, max: number): string | null {
     const index = paragraphs.length - 1;
     paragraphs[index] = `${paragraphs[index]} ${last}`;
   }
+  if (paragraphs.some((paragraph) => paragraph.length > MERGED_PARAGRAPH_CAP)) return null;
   return paragraphs.join('\n\n');
 }
 
@@ -243,15 +249,17 @@ export async function repairReply(
   const lengthOnly =
     violations.length > 0 && violations.every((violation) => violation.kind === 'length');
 
-  let repaired: string;
+  let repaired: string | null = null;
   if (lengthOnly && ceiling != null) {
-    // The count is formatting, not prose. No model call: joining the surplus paragraphs
-    // preserves every word and always lands on the ceiling, where the cheap model kept
-    // coming back with the same number of paragraphs it was asked to remove.
-    const merged = mergeToCeiling(target.content, ceiling);
-    if (!merged) return { violations };
-    repaired = merged;
-  } else {
+    // The count is formatting, not prose. No model call when a plain join can do it:
+    // joining the surplus paragraphs preserves every word and always lands on the
+    // ceiling, where the cheap model kept coming back with the same number of paragraphs
+    // it was asked to remove. When the join would weld two long paragraphs into one
+    // wall, `mergeToCeiling` refuses and the model rewrite below handles it — shortening
+    // is something only it can do.
+    repaired = mergeToCeiling(target.content, ceiling);
+  }
+  if (repaired === null) {
     const chat = await env.DB.prepare('SELECT preset_id FROM chats WHERE id = ?')
       .bind(chatId)
       .first<{ preset_id: string | null }>();

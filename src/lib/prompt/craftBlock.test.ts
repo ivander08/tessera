@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import {
   renderAntiRepetition,
   renderCraftBlock,
+  renderCraftDensity,
+  renderCraftDialogue,
   renderContentPolicy,
   renderVocalisation,
 } from './craftBlock';
@@ -162,12 +164,10 @@ describe('renderCraftBlock', () => {
       '<craft_show_tell>',
       '<craft_distance>',
       '<craft_length>',
-      '<craft_density>',
       '<craft_rhythm>',
       '<craft_figurative>',
       '<craft_vocabulary>',
       '<craft_profanity>',
-      '<craft_dialogue_frequency>',
       '<craft_dialogue_naturalism>',
       '<craft_dialogue_depth>',
       '<craft_change_resistance>',
@@ -176,11 +176,24 @@ describe('renderCraftBlock', () => {
     ]) {
       expect(block).toContain(tag);
     }
-    // Anti-parrot and stagnation are TAIL blocks now, not prefix blocks — see
-    // `renderAntiRepetition`. Pinning their absence here is what stops them being moved
-    // back by accident, the same way the vocalisation test below does.
+    // Density and dialogue frequency are TAIL blocks now, beside the length line — see
+    // `renderCraftDensity` and `renderCraftDialogue`. Anti-parrot and stagnation are tail
+    // blocks too — see `renderAntiRepetition`. Pinning their absence here is what stops
+    // them being moved back by accident, the same way the vocalisation test below does.
     expect(block).not.toContain('<craft_no_echo>');
     expect(block).not.toContain('<craft_motion>');
+    expect(block).not.toContain('<craft_density>');
+    expect(block).not.toContain('<craft_dialogue_frequency>');
+  });
+
+  test('density and dialogue frequency render into the tail from the same settings', () => {
+    expect(renderCraftDensity(DEFAULT_CRAFT)).toContain('<craft_density>');
+    expect(renderCraftDensity({ ...DEFAULT_CRAFT, density: 'off' })).toBe('');
+    expect(renderCraftDialogue(DEFAULT_CRAFT)).toContain('<craft_dialogue_frequency>');
+    expect(renderCraftDialogue({ ...DEFAULT_CRAFT, dialogueFrequency: 'off' })).toBe('');
+    // Both ride in the tail and must not wobble per turn.
+    expect(renderCraftDensity(DEFAULT_CRAFT)).toBe(renderCraftDensity(DEFAULT_CRAFT));
+    expect(renderCraftDialogue(DEFAULT_CRAFT)).toBe(renderCraftDialogue(DEFAULT_CRAFT));
   });
 
   test('the anti-repetition rules render into the tail from the same toggles', () => {
@@ -230,12 +243,12 @@ describe('renderCraftBlock', () => {
   test('the dialogue-frequency line carries the silence allowance', () => {
     // The allowance is the point of the block: without it a percentage target reads as a
     // prohibition on silence.
-    expect(renderCraftBlock(DEFAULT_CRAFT)).toContain(
+    expect(renderCraftDialogue(DEFAULT_CRAFT)).toContain(
       'A silent scene is allowed when silence is right.',
     );
-    expect(renderCraftBlock({ ...DEFAULT_CRAFT, dialogueFrequency: 'off' })).not.toContain(
-      'A silent scene is allowed',
-    );
+    expect(renderCraftDialogue({ ...DEFAULT_CRAFT, dialogueFrequency: 'off' })).toBe('');
+    // And it is gone from the prefix block, which no longer renders this line at all.
+    expect(renderCraftBlock(DEFAULT_CRAFT)).not.toContain('A silent scene is allowed');
   });
 
   test("profanity 'heavy' is load-bearing, not advisory", () => {

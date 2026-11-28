@@ -619,6 +619,37 @@ const DIALOGUE_FREQUENCY_LINE: Record<Craft['dialogueFrequency'], string> = {
   talkative: 'Dialogue dominates: extended turns, minimal staging. Aim for 80-90% dialogue.',
 };
 
+/**
+ * The density line, for the prompt TAIL. `''` when off.
+ *
+ * Moved out of the prefix for the same measured reason as the length line. A reader set
+ * "light" — one to three narration sentences per paragraph — and got 900-character
+ * paragraphs, because the line rode in the head, where this codebase has three times
+ * measured that instructions stop being obeyed. Paragraph length is formatting, and
+ * formatting is what the tail holds.
+ */
+export function renderCraftDensity(craft: Craft): string {
+  return wrapped('craft_density', DENSITY_LINE[craft.density]);
+}
+
+/**
+ * The dialogue-frequency line, for the prompt TAIL. `''` when off.
+ *
+ * The case that forced the move: a chat with `silent` (0-10% dialogue) ran a 58% median
+ * dialogue share across its recent replies, because the frequency line rode in the head
+ * while the preset's own post-history sat in the tail calling dialogue "the body". The
+ * frequency rule lands here, after the post-history and beside the length line, so the
+ * last word on how much speech a reply carries is the reader's setting.
+ */
+export function renderCraftDialogue(craft: Craft): string {
+  const line = DIALOGUE_FREQUENCY_LINE[craft.dialogueFrequency];
+  if (line === '') return '';
+  return wrapped(
+    'craft_dialogue_frequency',
+    `${line}\nA silent scene is allowed when silence is right.`,
+  );
+}
+
 const DIALOGUE_NATURALISM_LINE: Record<Craft['dialogueNaturalism'], string> = {
   off: '',
   literary:
@@ -703,19 +734,10 @@ export function renderCraftBlock(craft: Craft): string {
         : `${LENGTH_LINE[craft.responseLength]}\nDo not repeat the previous reply's paragraph count two turns running: move within the range.`,
     ),
   );
-  parts.push(wrapped('craft_density', DENSITY_LINE[craft.density]));
   parts.push(wrapped('craft_rhythm', RHYTHM_LINE[craft.rhythm]));
   parts.push(wrapped('craft_figurative', FIGURATIVE_LINE[craft.figurative]));
   parts.push(wrapped('craft_vocabulary', VOCABULARY_LINE[craft.vocabulary]));
   parts.push(wrapped('craft_profanity', PROFANITY_LINE[craft.profanity]));
-  parts.push(
-    wrapped(
-      'craft_dialogue_frequency',
-      DIALOGUE_FREQUENCY_LINE[craft.dialogueFrequency] === ''
-        ? ''
-        : `${DIALOGUE_FREQUENCY_LINE[craft.dialogueFrequency]}\nA silent scene is allowed when silence is right.`,
-    ),
-  );
   parts.push(
     wrapped('craft_dialogue_naturalism', DIALOGUE_NATURALISM_LINE[craft.dialogueNaturalism]),
   );
@@ -728,10 +750,12 @@ export function renderCraftBlock(craft: Craft): string {
   if (craft.povInteriority !== 'off') parts.push(thoughtsBlock(craft.povInteriority));
   if (craft.earnedKnowledge) parts.push(EARNED_KNOWLEDGE);
   if (craft.independentNpcs) parts.push(INDEPENDENT_NPCS);
-  // Anti-parrot and stagnation are NOT here. They are emitted separately into the tail —
-  // see `renderAntiRepetition` — for the same measured reason as the content policy and
-  // the vocalisation block: position decides whether the model obeys them, and these are
-  // the two the transcript shows being broken hardest from the prefix.
+  // Anti-parrot and stagnation are NOT here. Neither are density and dialogue frequency:
+  // all four are emitted separately into the tail — see `renderAntiRepetition`,
+  // `renderCraftDensity` and `renderCraftDialogue` — for the same measured reason as the
+  // content policy and the vocalisation block: position decides whether the model obeys
+  // them, and these are the rules the transcripts show being broken hardest from the
+  // prefix.
   if (craft.impulseFirst) parts.push(IMPULSE);
   if (craft.subtext) parts.push(SUBTEXT);
   if (craft.dialogueState) parts.push(DIALOGUE_STATE);

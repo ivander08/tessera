@@ -14,6 +14,8 @@ import { renderStateBlock } from '../../src/lib/prompt/stateBlock';
 import {
   renderAntiRepetition,
   renderCraftBlock,
+  renderCraftDensity,
+  renderCraftDialogue,
   renderCraftLength,
   renderContentPolicy,
   renderVocalisation,
@@ -210,6 +212,8 @@ export async function buildPrompt(
       settings.authorsNote,
       settings.responseLengthRule,
       renderCraftLength(setup.craft),
+      renderCraftDensity(setup.craft),
+      renderCraftDialogue(setup.craft),
       options.tailExtra,
       options.steer ?? '',
       options.userContent,
@@ -452,15 +456,18 @@ export async function buildPrompt(
       // were sending nothing that told the model what they were asking for.
       //
       // Order in this slot IS precedence: the preset's reply-length rule first, then the
-      // craft length (the per-chat setting wins by being read later when both speak),
-      // then the mode's instruction — a mode more specific about what to write still has
-      // the last word over length — and the reader's one-shot steer dead last, the
-      // freshest thing said before their own message. All per-turn state, so none of it
-      // can disturb the cached prefix.
+      // per-chat craft rules — length, paragraph density, dialogue frequency, each the
+      // per-chat setting winning by being read later when both speak — then the mode's
+      // instruction, a mode more specific about what to write still having the last word
+      // over all of them, and the reader's one-shot steer dead last, the freshest thing
+      // said before their own message. All per-turn state, so none of it can disturb the
+      // cached prefix.
       instruction: substituteTail(
         [
           settings.responseLengthRule,
           renderCraftLength(setup.craft),
+          renderCraftDensity(setup.craft),
+          renderCraftDialogue(setup.craft),
           options.tailExtra,
           options.steer ?? '',
         ]
